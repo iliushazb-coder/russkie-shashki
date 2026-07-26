@@ -11,11 +11,28 @@
 <body>
     <h1>Русские Шашки 🎮</h1>
 
+    <!-- Главное меню -->
     <div id="menu-screen">
+        <div id="active-rooms-section" class="hidden">
+            <p class="section-title">Активные игры</p>
+            <div id="active-rooms-list"></div>
+        </div>
         <button id="btn-play-friend" class="menu-button">👥 Играть с другом</button>
         <button id="btn-play-bot" class="menu-button">🤖 Играть с ботом</button>
     </div>
 
+    <!-- Выбор контроля времени -->
+    <div id="time-control-screen" class="hidden">
+        <p>Выбери контроль времени на ход:</p>
+        <button class="menu-button time-option" data-seconds="0">Без ограничения</button>
+        <button class="menu-button time-option" data-seconds="30">30 секунд на ход</button>
+        <button class="menu-button time-option" data-seconds="60">1 минута на ход</button>
+        <button class="menu-button time-option" data-seconds="120">2 минуты на ход</button>
+        <button class="menu-button time-option" data-seconds="180">3 минуты на ход</button>
+        <button class="menu-button time-option" data-seconds="300">5 минут на ход</button>
+    </div>
+
+    <!-- Ожидание друга -->
     <div id="waiting-screen" class="hidden">
         <p>Отправь эту ссылку другу:</p>
         <div id="invite-link-box"></div>
@@ -23,14 +40,47 @@
         <p id="waiting-text">Ожидание подключения друга...</p>
     </div>
 
+    <!-- Сама игра -->
     <div id="game-screen" class="hidden">
-        <div id="captured-dark" class="captured-counter">Белые: Съедено: 0</div>
+        <div class="player-panel" id="player-top">
+            <div class="player-name" id="player-top-name"></div>
+            <div class="captured-icons" id="player-top-captured"></div>
+        </div>
+
+        <div id="turn-timer"></div>
 
         <div id="board-wrapper">
             <div id="board"></div>
         </div>
 
-        <div id="captured-light" class="captured-counter">Чёрные: Съедено: 0</div>
+        <div class="player-panel" id="player-bottom">
+            <div class="player-name" id="player-bottom-name"></div>
+            <div class="captured-icons" id="player-bottom-captured"></div>
+        </div>
+
+        <button id="btn-resign" class="menu-button danger-button">🏳 Сдаться</button>
+    </div>
+
+    <!-- Подтверждение сдачи -->
+    <div id="resign-confirm-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p>Вы уверены, что хотите сдаться?</p>
+            <div class="modal-buttons">
+                <button id="btn-resign-yes" class="menu-button danger-button">Да</button>
+                <button id="btn-resign-no" class="menu-button">Нет</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Экран победы -->
+    <div id="end-game-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p id="end-game-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-new-game" class="menu-button">Новая игра</button>
+                <button id="btn-close-game" class="menu-button">Закрыть</button>
+            </div>
+        </div>
     </div>
 
     <script src="script.js"></script>
