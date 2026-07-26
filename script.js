@@ -38,17 +38,17 @@ function playTone(frequency, duration, volume) {
 function playMoveSound() { playTone(440, 0.15, 0.3); }
 function playCaptureSound() {
     playTone(200, 0.12, 0.4);
-    setTimeout(() => playTone(150, 0.15, 0.4), 100);
+    setTimeout(function () { playTone(150, 0.15, 0.4); }, 100);
 }
 function playKingSound() {
     playTone(523, 0.12, 0.3);
-    setTimeout(() => playTone(659, 0.12, 0.3), 120);
-    setTimeout(() => playTone(784, 0.25, 0.3), 240);
+    setTimeout(function () { playTone(659, 0.12, 0.3); }, 120);
+    setTimeout(function () { playTone(784, 0.25, 0.3); }, 240);
 }
 function playWinSound() {
     playTone(392, 0.15, 0.3);
-    setTimeout(() => playTone(523, 0.15, 0.3), 150);
-    setTimeout(() => playTone(659, 0.3, 0.3), 300);
+    setTimeout(function () { playTone(523, 0.15, 0.3); }, 150);
+    setTimeout(function () { playTone(659, 0.3, 0.3); }, 300);
 }
 
 function playSoundForMoveType(type) {
@@ -130,8 +130,11 @@ function createInitialPieces() {
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             if ((row + col) % 2 !== 0) {
-                if (row < 3) pieces[row + "_" + col] = { color: "dark", king: false };
-                else if (row > 4) pieces[row + "_" + col] = { color: "light", king: false };
+                if (row < 3) {
+                    pieces[row + "_" + col] = { color: "dark", king: false };
+                } else if (row > 4) {
+                    pieces[row + "_" + col] = { color: "light", king: false };
+                }
             }
         }
     }
@@ -155,7 +158,9 @@ function canCaptureAt(pieces, row, col, color, king) {
     const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
     const maxDistance = king ? 7 : 2;
 
-    for (const [dRow, dCol] of directions) {
+    for (let d = 0; d < directions.length; d++) {
+        const dRow = directions[d][0];
+        const dCol = directions[d][1];
         let foundOpponent = false;
         for (let dist = 1; dist <= maxDistance; dist++) {
             const r = row + dRow * dist;
@@ -163,11 +168,17 @@ function canCaptureAt(pieces, row, col, color, king) {
             if (r < 0 || r > 7 || c < 0 || c > 7) break;
             const p = pieceAt(pieces, r, c);
             if (!foundOpponent) {
-                if (p && p.color === opponent) foundOpponent = true;
-                else if (p) break;
+                if (p && p.color === opponent) {
+                    foundOpponent = true;
+                } else if (p) {
+                    break;
+                }
             } else {
-                if (!p) return true;
-                else break;
+                if (!p) {
+                    return true;
+                } else {
+                    break;
+                }
             }
         }
     }
@@ -176,9 +187,14 @@ function canCaptureAt(pieces, row, col, color, king) {
 
 function canMoveNormally(pieces, row, col, color, king) {
     const forwardDirection = color === "light" ? -1 : 1;
-    const directions = king ? [[-1, -1], [-1, 1], [1, -1], [1, 1]] : [[forwardDirection, -1], [forwardDirection, 1]];
-    for (const [dRow, dCol] of directions) {
-        const maxDistance = king ? 7 : 1;
+    const directions = king
+        ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
+        : [[forwardDirection, -1], [forwardDirection, 1]];
+    const maxDistance = king ? 7 : 1;
+
+    for (let d = 0; d < directions.length; d++) {
+        const dRow = directions[d][0];
+        const dCol = directions[d][1];
         for (let dist = 1; dist <= maxDistance; dist++) {
             const r = row + dRow * dist;
             const c = col + dCol * dist;
@@ -221,7 +237,6 @@ function hasAnyLegalMove(pieces, color) {
     return false;
 }
 
-// Проверяет условия победы после того, как ход официально завершён (turn передан сопернику)
 function checkWinCondition(pieces, opponentColor) {
     if (countPiecesOfColor(pieces, opponentColor) === 0) {
         return { winner: opponentColor === "light" ? "dark" : "light", reason: "no_pieces" };
@@ -234,7 +249,9 @@ function checkWinCondition(pieces, opponentColor) {
 
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
-    for (const k in state.pieces) pieces[k] = { color: state.pieces[k].color, king: !!state.pieces[k].king };
+    for (const k in state.pieces) {
+        pieces[k] = { color: state.pieces[k].color, king: !!state.pieces[k].king };
+    }
 
     let turn = state.turn;
     let mustContinueFrom = state.mustContinueFrom || null;
@@ -304,8 +321,11 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         delete pieces[capturedKey];
         delete pieces[fromKey];
 
-        if (capturedPiece.color === "dark") capturedDark++;
-        else capturedLight++;
+        if (capturedPiece.color === "dark") {
+            capturedDark++;
+        } else {
+            capturedLight++;
+        }
 
         if (!king) {
             if (actingColor === "light" && toRow === 0) { moving.king = true; becameKing = true; }
@@ -314,7 +334,9 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         pieces[toKey] = moving;
 
         let canContinue = false;
-        if (!becameKing) canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
+        if (!becameKing) {
+            canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
+        }
 
         if (canContinue) {
             mustContinueFrom = { row: toRow, col: toCol };
@@ -360,7 +382,9 @@ let lastSeenMoveCount = -1;
 let endGameShownForRoom = null;
 
 function getLabels() {
-    if (!flipped) return { letters: ["a", "b", "c", "d", "e", "f", "g", "h"], numbers: [8, 7, 6, 5, 4, 3, 2, 1] };
+    if (!flipped) {
+        return { letters: ["a", "b", "c", "d", "e", "f", "g", "h"], numbers: [8, 7, 6, 5, 4, 3, 2, 1] };
+    }
     return { letters: ["h", "g", "f", "e", "d", "c", "b", "a"], numbers: [1, 2, 3, 4, 5, 6, 7, 8] };
 }
 
@@ -403,7 +427,7 @@ function renderBoard() {
 
     const topLabels = document.createElement("div");
     topLabels.classList.add("labels", "labels-top");
-    labels.letters.forEach(letter => {
+    labels.letters.forEach(function (letter) {
         const label = document.createElement("div");
         label.classList.add("label");
         label.textContent = letter;
@@ -412,7 +436,7 @@ function renderBoard() {
 
     const leftLabels = document.createElement("div");
     leftLabels.classList.add("labels", "labels-left");
-    labels.numbers.forEach(number => {
+    labels.numbers.forEach(function (number) {
         const label = document.createElement("div");
         label.classList.add("label");
         label.textContent = number;
@@ -429,8 +453,13 @@ function renderBoard() {
     for (let dispRow = 0; dispRow < 8; dispRow++) {
         for (let dispCol = 0; dispCol < 8; dispCol++) {
             let row, col;
-            if (flipped) { row = 7 - dispRow; col = 7 - dispCol; }
-            else { row = dispRow; col = dispCol; }
+            if (flipped) {
+                row = 7 - dispRow;
+                col = 7 - dispCol;
+            } else {
+                row = dispRow;
+                col = dispCol;
+            }
 
             const square = document.createElement("div");
             square.classList.add("square");
@@ -455,7 +484,7 @@ function renderBoard() {
                 square.appendChild(piece);
             }
 
-            square.addEventListener("click", () => handleClick(row, col));
+            square.addEventListener("click", function () { handleClick(row, col); });
             boardDiv.appendChild(square);
         }
     }
@@ -496,9 +525,10 @@ function renderEndGameModal() {
         else if (currentState.winReason === "timeout") reasonText = "Закончилось время на ход";
         endGameText.textContent = "🏆 " + winnerText + (reasonText ? " (" + reasonText + ")" : "");
         endGameModal.classList.remove("hidden");
-        if (endGameShownForRoom !== (roomCode || "offline") + "_" + currentState.moveCount) {
+        const marker = (roomCode || "offline") + "_" + currentState.moveCount;
+        if (endGameShownForRoom !== marker) {
             playWinSound();
-            endGameShownForRoom = (roomCode || "offline") + "_" + currentState.moveCount;
+            endGameShownForRoom = marker;
         }
     } else {
         endGameModal.classList.add("hidden");
@@ -518,13 +548,18 @@ function handleClick(row, col) {
         if (state.mustContinueFrom) return;
         if (hasMandatoryCapture(state.pieces, state.turn) && !canCaptureAt(state.pieces, row, col, state.turn, !!pieceHere.king)) return;
 
-        if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) selectedFrom = null;
-        else selectedFrom = { row: row, col: col };
+        if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) {
+            selectedFrom = null;
+        } else {
+            selectedFrom = { row: row, col: col };
+        }
         renderBoard();
         return;
     }
 
-    if (selectedFrom) performMove(selectedFrom.row, selectedFrom.col, row, col);
+    if (selectedFrom) {
+        performMove(selectedFrom.row, selectedFrom.col, row, col);
+    }
 }
 
 function performMove(fromRow, fromCol, toRow, toCol) {
@@ -595,7 +630,7 @@ function startOnlineGame() {
 
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
-    roomListenerRef.on("value", (snapshot) => {
+    roomListenerRef.on("value", function (snapshot) {
         const room = snapshot.val();
         if (!room || !room.pieces) return;
 
@@ -659,7 +694,7 @@ function startOfflineGame() {
 function loadActiveRooms() {
     const sectionEl = document.getElementById("active-rooms-section");
     const listEl = document.getElementById("active-rooms-list");
-    database.ref("users/" + myTelegramId + "/rooms").once("value").then(snapshot => {
+    database.ref("users/" + myTelegramId + "/rooms").once("value").then(function (snapshot) {
         const data = snapshot.val();
         if (!data) { sectionEl.classList.add("hidden"); return; }
         const codes = Object.keys(data);
@@ -667,8 +702,8 @@ function loadActiveRooms() {
 
         let pending = codes.length;
         const items = [];
-        codes.forEach(code => {
-            database.ref("rooms/" + code).once("value").then(roomSnap => {
+        codes.forEach(function (code) {
+            database.ref("rooms/" + code).once("value").then(function (roomSnap) {
                 pending--;
                 const room = roomSnap.val();
                 if (room && room.status !== "finished" && !room.winner) {
@@ -678,11 +713,11 @@ function loadActiveRooms() {
                     listEl.innerHTML = "";
                     if (items.length === 0) { sectionEl.classList.add("hidden"); return; }
                     sectionEl.classList.remove("hidden");
-                    items.forEach(item => {
+                    items.forEach(function (item) {
                         const btn = document.createElement("button");
                         btn.className = "menu-button room-item-button";
                         btn.textContent = "Игра против " + item.opponent;
-                        btn.addEventListener("click", () => {
+                        btn.addEventListener("click", function () {
                             roomCode = item.code;
                             myColor = item.color;
                             isOnlineGame = true;
@@ -699,12 +734,13 @@ function loadActiveRooms() {
 
 // ===== КНОПКИ МЕНЮ =====
 
-btnPlayFriend.addEventListener("click", () => {
+btnPlayFriend.addEventListener("click", function () {
     showScreen(timeControlScreen);
 });
 
-document.querySelectorAll(".time-option").forEach(btn => {
-    btn.addEventListener("click", () => {
+const timeOptionButtons = document.querySelectorAll(".time-option");
+timeOptionButtons.forEach(function (btn) {
+    btn.addEventListener("click", function () {
         pendingTimeControlSeconds = parseInt(btn.dataset.seconds);
         createRoomAndShowWaiting();
     });
@@ -732,7 +768,7 @@ function createRoomAndShowWaiting() {
         winReason: null
     };
 
-    database.ref("rooms/" + roomCode).set(initialState).then(() => {
+    database.ref("rooms/" + roomCode).set(initialState).then(function () {
         database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
             opponentName: "Ожидание подключения...",
             myColor: "light"
@@ -744,11 +780,11 @@ function createRoomAndShowWaiting() {
 
     showScreen(waitingScreen);
 
-    database.ref("rooms/" + roomCode + "/status").on("value", (snapshot) => {
+    database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
         if (snapshot.val() === "active") {
             database.ref("rooms/" + roomCode + "/status").off();
             waitingText.textContent = "Друг подключился! Начинаем игру.";
-            setTimeout(() => {
+            setTimeout(function () {
                 showScreen(gameScreen);
                 startOnlineGame();
             }, 1000);
@@ -756,29 +792,32 @@ function createRoomAndShowWaiting() {
     });
 }
 
-btnShareLink.addEventListener("click", () => {
+btnShareLink.addEventListener("click", function () {
     const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
     const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
-    if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.openTelegramLink(shareUrl);
-    else window.open(shareUrl, "_blank");
+    if (window.Telegram && window.Telegram.WebApp) {
+        Telegram.WebApp.openTelegramLink(shareUrl);
+    } else {
+        window.open(shareUrl, "_blank");
+    }
 });
 
-btnPlayBot.addEventListener("click", () => {
+btnPlayBot.addEventListener("click", function () {
     showScreen(gameScreen);
     startOfflineGame();
 });
 
 // ===== СДАТЬСЯ =====
 
-btnResign.addEventListener("click", () => {
+btnResign.addEventListener("click", function () {
     resignConfirmModal.classList.remove("hidden");
 });
 
-btnResignNo.addEventListener("click", () => {
+btnResignNo.addEventListener("click", function () {
     resignConfirmModal.classList.add("hidden");
 });
 
-btnResignYes.addEventListener("click", () => {
+btnResignYes.addEventListener("click", function () {
     resignConfirmModal.classList.add("hidden");
     if (!currentState) return;
 
@@ -801,12 +840,12 @@ btnResignYes.addEventListener("click", () => {
 
 // ===== НОВАЯ ИГРА / ЗАКРЫТЬ =====
 
-btnCloseGame.addEventListener("click", () => {
+btnCloseGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
 });
 
-btnNewGame.addEventListener("click", () => {
+btnNewGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
 
     if (isOnlineGame) {
@@ -835,7 +874,7 @@ btnNewGame.addEventListener("click", () => {
 
 // ===== ТАЙМЕР ХОДА =====
 
-setInterval(() => {
+setInterval(function () {
     if (!gameScreen.classList.contains("hidden")) {
         updateTimerDisplay();
         checkTimeout();
@@ -866,4 +905,58 @@ function checkTimeout() {
 
 function checkForInviteLink() {
     let startParam = null;
-    if (window.Telegram &&
+    if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
+        startParam = Telegram.WebApp.initDataUnsafe.start_param;
+    }
+
+    if (startParam) {
+        roomCode = startParam;
+        myColor = "dark";
+        isOnlineGame = true;
+
+        showScreen(waitingScreen);
+        waitingText.textContent = "Подключаемся к другу...";
+        inviteLinkBox.classList.add("hidden");
+        btnShareLink.classList.add("hidden");
+
+        database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
+            const room = snapshot.val();
+            const creatorId = (room && room.players && room.players.light) ? room.players.light.id : null;
+            const creatorName = (room && room.players && room.players.light) ? room.players.light.name : "Соперник";
+
+            database.ref("rooms/" + roomCode).update({
+                status: "active",
+                "players/dark": { id: myTelegramId, name: myTelegramName },
+                turnStartedAt: Date.now()
+            }).then(function () {
+                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                    opponentName: creatorName,
+                    myColor: "dark"
+                });
+                if (creatorId) {
+                    database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
+                        opponentName: myTelegramName
+                    });
+                }
+                setTimeout(function () {
+                    showScreen(gameScreen);
+                    startOnlineGame();
+                }, 1000);
+            });
+        });
+
+        return true;
+    }
+    return false;
+}
+
+// ===== СТАРТ ПРИЛОЖЕНИЯ =====
+
+const me = getMyTelegramUser();
+myTelegramId = me.id;
+myTelegramName = me.name;
+
+const joinedViaLink = checkForInviteLink();
+if (!joinedViaLink) {
+    loadActiveRooms();
+}
