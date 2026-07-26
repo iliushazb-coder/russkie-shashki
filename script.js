@@ -100,12 +100,24 @@ const playerTopName = document.getElementById("player-top-name");
 const playerBottomName = document.getElementById("player-bottom-name");
 const playerTopCaptured = document.getElementById("player-top-captured");
 const playerBottomCaptured = document.getElementById("player-bottom-captured");
+const playerTopStatus = document.getElementById("player-top-status");
+const playerBottomStatus = document.getElementById("player-bottom-status");
+const playerTopPanel = document.getElementById("player-top");
+const playerBottomPanel = document.getElementById("player-bottom");
+const opponentLeftModal = document.getElementById("opponent-left-modal");
+const opponentLeftText = document.getElementById("opponent-left-text");
+const btnNewGameAfterLeave = document.getElementById("btn-new-game-after-leave");
+const btnCloseAfterLeave = document.getElementById("btn-close-after-leave");
 
 let roomCode = null;
 let myColor = "light";
 let isOnlineGame = false;
 let pendingTimeControlSeconds = 0;
 let roomListenerRef = null;
+let myPresenceRef = null;
+let presenceHeartbeatInterval = null;
+let opponentAbsenceHandled = false;
+const STALE_MS = 10000;
 const BOT_USERNAME = "russkie_shashki_bot/play";
 
 function generateRoomCode() {
@@ -397,6 +409,37 @@ function renderCapturedIcons(container, count, iconClass) {
     }
 }
 
+function statusForColor(color) {
+    if (!currentState) return { text: "", cls: "" };
+    const name = (currentState.players && currentState.players[color] && currentState.players[color].name) || (color === "light" ? "Белые" : "Чёрные");
+    if (!isOnlineGame) {
+        return { text: "", cls: "" };
+    }
+    const presence = (currentState.presence && currentState.presence[color]) || null;
+    if (!presence) {
+        return { text: name + " • подключение...", cls: "status-neutral" };
+    }
+    if (presence.online === false) {
+        return { text: name + " покинул игру 👋", cls: "status-left" };
+    }
+    const age = Date.now() - (presence.lastSeen || 0);
+    if (age > STALE_MS) {
+        return { text: name + " потерял соединение", cls: "status-left" };
+    }
+    return { text: name + " • В игре", cls: "status-online" };
+}
+
+function applyStatusToElement(el, panelEl, statusInfo) {
+    el.className = "player-status";
+    if (statusInfo.cls) el.classList.add(statusInfo.cls);
+    el.textContent = statusInfo.text;
+    if (statusInfo.cls === "status-left") {
+        panelEl.classList.add("player-faded");
+    } else {
+        panelEl.classList.remove("player-faded");
+    }
+}
+
 function renderPlayerPanels() {
     if (!currentState) return;
     const lightName = (currentState.players && currentState.players.light && currentState.players.light.name) || "Белые";
@@ -415,6 +458,73 @@ function renderPlayerPanels() {
         renderCapturedIcons(playerTopCaptured, currentState.capturedLight, "light-icon");
         renderCapturedIcons(playerBottomCaptured, currentState.capturedDark, "dark-icon");
     }
+
+    applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
+    applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
+
+    checkOpponentAbsence();
+}
+
+function checkOpponentAbsence() {
+    if (!isOnlineGame || !currentState || currentState.winner) return;
+    if (opponentAbsenceHandled) return;
+
+    const oppColor = myColor === "light" ? "dark" : "light";
+    const info = statusForColor(oppColor);
+    if (info.cls === "status-left") {
+        opponentAbsenceHandled = true;
+        const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || "Соперник";
+        const reasonText = info.text.indexOf("потерял соединение") !== -1
+            ? (oppName + " потерял соединение 📡")
+            : (oppName + " покинул игру 👋");
+        opponentLeftText.textContent = reasonText + "\nПартия завершена.";
+        opponentLeftModal.classList.remove("hidden");
+        cleanupAbandonedRoom();
+    }
+}
+
+function cleanupAbandonedRoom() {
+    if (!roomCode) return;
+    const codeToClean = roomCode;
+    if (myTelegramId) {
+        database.ref("users/" + myTelegramId + "/rooms/" + codeToClean).remove();
+    }
+    const oppColor = myColor === "light" ? "dark" : "light";
+    if (currentState && currentState.players && currentState.players[oppColor] && currentState.players[oppColor].id) {
+        database.ref("users/" + currentState.players[oppColor].id + "/rooms/" + codeToClean).remove();
+    }
+    database.ref("rooms/" + codeToClean).remove();
+}
+
+// ===== СИСТЕМА ПРИСУТСТВИЯ (ONLINE / OFFLINE) =====
+
+function setupPresence() {
+    if (!myTelegramId || !roomCode) return;
+    stopPresenceHeartbeat();
+
+    const presenceRef = database.ref("rooms/" + roomCode + "/presence/" + myColor);
+    myPresenceRef = presenceRef;
+
+    presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    presenceRef.onDisconnect().update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+
+    presenceHeartbeatInterval = setInterval(function () {
+        presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    }, 4000);
+}
+
+function stopPresenceHeartbeat() {
+    if (presenceHeartbeatInterval) {
+        clearInterval(presenceHeartbeatInterval);
+        presenceHeartbeatInterval = null;
+    }
+}
+
+function markMyselfLeftExplicitly() {
+    if (myPresenceRef) {
+        myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    }
+    stopPresenceHeartbeat();
 }
 
 function renderBoard() {
@@ -647,6 +757,9 @@ function startOnlineGame() {
     lastSeenMoveCount = -1;
     selectedFrom = null;
     endGameShownForRoom = null;
+    opponentAbsenceHandled = false;
+
+    setupPresence();
 
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
@@ -664,6 +777,7 @@ function startOnlineGame() {
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             players: room.players || null,
+            presence: room.presence || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
@@ -691,6 +805,9 @@ function startOfflineGame() {
     flipped = false;
     selectedFrom = null;
     endGameShownForRoom = null;
+    opponentAbsenceHandled = false;
+    stopPresenceHeartbeat();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     currentState = {
         pieces: createInitialPieces(),
         turn: "light",
@@ -767,6 +884,8 @@ timeOptionButtons.forEach(function (btn) {
 });
 
 function createRoomAndShowWaiting() {
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    stopPresenceHeartbeat();
     roomCode = generateRoomCode();
     myColor = "light";
     isOnlineGame = true;
@@ -862,6 +981,7 @@ btnResignYes.addEventListener("click", function () {
 
 btnCloseGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
+    markMyselfLeftExplicitly();
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
 });
 
@@ -898,8 +1018,18 @@ setInterval(function () {
     if (!gameScreen.classList.contains("hidden")) {
         updateTimerDisplay();
         checkTimeout();
+        updatePresenceOnly();
     }
 }, 1000);
+
+function updatePresenceOnly() {
+    if (!isOnlineGame || !currentState) return;
+    const topColor = flipped ? "light" : "dark";
+    const bottomColor = flipped ? "dark" : "light";
+    applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
+    applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
+    checkOpponentAbsence();
+}
 
 function checkTimeout() {
     if (!isOnlineGame || !currentState || currentState.winner) return;
@@ -969,6 +1099,32 @@ function checkForInviteLink() {
     }
     return false;
 }
+
+// ===== МОДАЛКА "СОПЕРНИК ПОКИНУЛ ИГРУ" =====
+
+btnNewGameAfterLeave.addEventListener("click", function () {
+    opponentLeftModal.classList.add("hidden");
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    stopPresenceHeartbeat();
+    roomCode = null;
+    currentState = null;
+    isOnlineGame = true;
+    showScreen(timeControlScreen);
+});
+
+btnCloseAfterLeave.addEventListener("click", function () {
+    opponentLeftModal.classList.add("hidden");
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    stopPresenceHeartbeat();
+    if (window.Telegram && window.Telegram.WebApp) {
+        Telegram.WebApp.close();
+    } else {
+        roomCode = null;
+        currentState = null;
+        showScreen(menuScreen);
+        loadActiveRooms();
+    }
+});
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
 

@@ -40,6 +40,7 @@
     <div id="game-screen" class="hidden">
         <div class="player-panel" id="player-top">
             <div class="player-name" id="player-top-name"></div>
+            <div class="player-status" id="player-top-status"></div>
             <div class="captured-icons" id="player-top-captured"></div>
         </div>
 
@@ -51,6 +52,7 @@
 
         <div class="player-panel" id="player-bottom">
             <div class="player-name" id="player-bottom-name"></div>
+            <div class="player-status" id="player-bottom-status"></div>
             <div class="captured-icons" id="player-bottom-captured"></div>
         </div>
 
@@ -77,7 +79,17 @@
         </div>
     </div>
 
-    <div id="credit-footer">🎮 Разработчик: @yliusha</div>
+    <div id="opponent-left-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p id="opponent-left-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-new-game-after-leave" class="menu-button">Новая игра</button>
+                <button id="btn-close-after-leave" class="menu-button">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="credit-footer">Разработчик: Илюша</div>
 
     <script src="script.js"></script>
 </body>
