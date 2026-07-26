@@ -130,6 +130,17 @@ btnPlayBot.addEventListener("click", () => {
 
 // --- Проверяем, открыта ли игра по ссылке-приглашению (присоединение к другу) ---
 function checkForInviteLink() {
+    let debugInfo = "Telegram: " + (window.Telegram ? "есть" : "нет");
+    if (window.Telegram && window.Telegram.WebApp) {
+        debugInfo += " | start_param: " + JSON.stringify(Telegram.WebApp.initDataUnsafe.start_param);
+    }
+    const debugDiv = document.createElement("div");
+    debugDiv.style.color = "yellow";
+    debugDiv.style.fontSize = "12px";
+    debugDiv.style.padding = "10px";
+    debugDiv.style.wordBreak = "break-all";
+    debugDiv.textContent = debugInfo;
+    document.body.insertBefore(debugDiv, document.body.firstChild);
     let startParam = null;
 
     if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
