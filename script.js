@@ -262,6 +262,7 @@ function checkWinCondition(pieces, opponentColor) {
     }
     return null;
 }
+
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
     for (const k in state.pieces) {
@@ -396,6 +397,7 @@ let flipped = false;
 let lastSeenMoveCount = -1;
 let endGameShownForRoom = null;
 let pieceElements = {};
+let lastRenderedSignature = null;
 
 function getLabels() {
     if (!flipped) {
@@ -721,6 +723,7 @@ function handleClick(row, col) {
         performMove(selectedFrom.row, selectedFrom.col, row, col);
     }
 }
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode).transaction(function (room) {
@@ -780,6 +783,13 @@ function performMove(fromRow, fromCol, toRow, toCol) {
 
 // ===== ЗАПУСК / ПЕРЕЗАПУСК ИГРЫ =====
 
+function computeGameSignature(state) {
+    const winnerPart = state.winner || "";
+    const winReasonPart = state.winReason || "";
+    const playersPart = JSON.stringify(state.players || null);
+    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart;
+}
+
 function startOnlineGame() {
     isOnlineGame = true;
     flipped = (myColor === "dark");
@@ -787,6 +797,7 @@ function startOnlineGame() {
     selectedFrom = null;
     endGameShownForRoom = null;
     opponentAbsenceHandled = false;
+    lastRenderedSignature = null;
 
     setupPresence();
 
@@ -819,12 +830,21 @@ function startOnlineGame() {
             selectedFrom = null;
         }
 
-        if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
-            playSoundForMoveType(currentState.moveType);
-        }
-        lastSeenMoveCount = currentState.moveCount;
+        const newSignature = computeGameSignature(currentState);
 
-        renderBoard();
+        if (newSignature !== lastRenderedSignature) {
+            // Реальное изменение партии (ход, победа, новый игрок) — перерисовываем доску целиком
+            if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
+                playSoundForMoveType(currentState.moveType);
+            }
+            lastSeenMoveCount = currentState.moveCount;
+            lastRenderedSignature = newSignature;
+            renderBoard();
+        } else {
+            // Изменился только онлайн-статус (presence/heartbeat) — доску НЕ трогаем,
+            // обновляем только текст статуса игроков, без мигания
+            updatePresenceOnly();
+        }
     });
 }
 
@@ -835,6 +855,7 @@ function startOfflineGame() {
     selectedFrom = null;
     endGameShownForRoom = null;
     opponentAbsenceHandled = false;
+    lastRenderedSignature = null;
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     currentState = {
@@ -903,8 +924,12 @@ function loadActiveRooms() {
                         listEl.appendChild(btn);
                     });
                 }
+            }).catch(function () {
+                pending--;
             });
         });
+    }).catch(function () {
+        sectionEl.classList.add("hidden");
     });
 }
 
@@ -951,6 +976,8 @@ function createRoomAndShowWaiting() {
             opponentName: "Ожидание подключения...",
             myColor: "light"
         });
+    }).catch(function () {
+        showInfoModal("Не удалось создать игру. Проверьте интернет-соединение и попробуйте снова.", true);
     });
 
     const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
@@ -1117,10 +1144,26 @@ function checkForInviteLink() {
     inviteLinkBox.classList.add("hidden");
     btnShareLink.classList.add("hidden");
 
+    // Если проверка займёт слишком долго (например, проблема с сетью) — не оставляем
+    // пользователя навсегда на экране "Проверяем игру...", а показываем понятную ошибку
+    let settled = false;
+    const timeoutId = setTimeout(function () {
+        if (!settled) {
+            settled = true;
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", true);
+        }
+    }, 10000);
+
     database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
+        if (settled) return;
         const room = snapshot.val();
 
         if (!room || room.status === "finished" || room.winner) {
+            settled = true;
+            clearTimeout(timeoutId);
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
@@ -1132,6 +1175,8 @@ function checkForInviteLink() {
         const creatorName = (room.players && room.players.light) ? room.players.light.name : "Соперник";
 
         if (creatorId && creatorId === myTelegramId) {
+            settled = true;
+            clearTimeout(timeoutId);
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
@@ -1140,6 +1185,8 @@ function checkForInviteLink() {
         }
 
         if (room.players && room.players.dark && room.players.dark.id && room.players.dark.id !== myTelegramId) {
+            settled = true;
+            clearTimeout(timeoutId);
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
@@ -1156,6 +1203,8 @@ function checkForInviteLink() {
             "players/dark": { id: myTelegramId, name: myTelegramName },
             turnStartedAt: Date.now()
         }).then(function () {
+            settled = true;
+            clearTimeout(timeoutId);
             database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
                 opponentName: creatorName,
                 myColor: "dark"
@@ -1169,7 +1218,23 @@ function checkForInviteLink() {
                 showScreen(gameScreen);
                 startOnlineGame();
             }, 800);
+        }).catch(function () {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", true);
         });
+    }).catch(function () {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        roomCode = null;
+        showScreen(menuScreen);
+        loadActiveRooms();
+        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", true);
     });
 
     return true;
