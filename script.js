@@ -434,6 +434,15 @@ function renderBoard() {
         topLabels.appendChild(label);
     });
 
+    const bottomLabels = document.createElement("div");
+    bottomLabels.classList.add("labels", "labels-bottom");
+    labels.letters.forEach(function (letter) {
+        const label = document.createElement("div");
+        label.classList.add("label");
+        label.textContent = letter;
+        bottomLabels.appendChild(label);
+    });
+
     const leftLabels = document.createElement("div");
     leftLabels.classList.add("labels", "labels-left");
     labels.numbers.forEach(function (number) {
@@ -443,8 +452,19 @@ function renderBoard() {
         leftLabels.appendChild(label);
     });
 
+    const rightLabels = document.createElement("div");
+    rightLabels.classList.add("labels", "labels-right");
+    labels.numbers.forEach(function (number) {
+        const label = document.createElement("div");
+        label.classList.add("label");
+        label.textContent = number;
+        rightLabels.appendChild(label);
+    });
+
     wrapper.appendChild(topLabels);
+    wrapper.appendChild(bottomLabels);
     wrapper.appendChild(leftLabels);
+    wrapper.appendChild(rightLabels);
     wrapper.appendChild(boardDiv);
 
     if (!currentState) return;
