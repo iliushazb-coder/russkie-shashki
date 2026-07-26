@@ -11,13 +11,11 @@
 <body>
     <h1>Русские Шашки 🎮</h1>
 
-    <!-- Главное меню (показывается первым) -->
     <div id="menu-screen">
         <button id="btn-play-friend" class="menu-button">👥 Играть с другом</button>
         <button id="btn-play-bot" class="menu-button">🤖 Играть с ботом</button>
     </div>
 
-    <!-- Экран ожидания друга со ссылкой (пока скрыт) -->
     <div id="waiting-screen" class="hidden">
         <p>Отправь эту ссылку другу:</p>
         <div id="invite-link-box"></div>
@@ -25,15 +23,14 @@
         <p id="waiting-text">Ожидание подключения друга...</p>
     </div>
 
-    <!-- Сама игра (пока скрыта) -->
     <div id="game-screen" class="hidden">
-        <div id="captured-dark" class="captured-counter">Съедено чёрных: 0</div>
+        <div id="captured-dark" class="captured-counter">Белые: Съедено: 0</div>
 
         <div id="board-wrapper">
             <div id="board"></div>
         </div>
 
-        <div id="captured-light" class="captured-counter">Съедено белых: 0</div>
+        <div id="captured-light" class="captured-counter">Чёрные: Съедено: 0</div>
     </div>
 
     <script src="script.js"></script>

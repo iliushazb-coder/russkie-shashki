@@ -35,15 +35,29 @@ function playTone(frequency, duration, volume) {
     oscillator.stop(audioContext.currentTime + duration);
 }
 
-function playMoveSound() { playTone(440, 0.15, 0.3); }
+function playMoveSound() {
+    playTone(440, 0.15, 0.3);
+}
+
 function playCaptureSound() {
     playTone(200, 0.12, 0.4);
     setTimeout(() => playTone(150, 0.15, 0.4), 100);
 }
+
 function playKingSound() {
     playTone(523, 0.12, 0.3);
     setTimeout(() => playTone(659, 0.12, 0.3), 120);
     setTimeout(() => playTone(784, 0.25, 0.3), 240);
+}
+
+function playSoundForMoveType(type) {
+    if (type === "king") {
+        playKingSound();
+    } else if (type === "capture") {
+        playCaptureSound();
+    } else {
+        playMoveSound();
+    }
 }
 
 // ===== ЭКРАНЫ И МЕНЮ =====
@@ -78,99 +92,263 @@ function showScreen(screen) {
     screen.classList.remove("hidden");
 }
 
-btnPlayFriend.addEventListener("click", () => {
-    roomCode = generateRoomCode();
-    myColor = "light";
-    isOnlineGame = true;
+// ===== ИГРОВОЙ ДВИЖОК (чистые функции, без обращения к DOM) =====
 
-    database.ref("rooms/" + roomCode).set({
-        status: "waiting",
-        board: null,
-        turn: "light"
-    });
-
-    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
-    inviteLinkBox.textContent = link;
-
-    showScreen(waitingScreen);
-
-    database.ref("rooms/" + roomCode + "/status").on("value", (snapshot) => {
-        if (snapshot.val() === "active") {
-            database.ref("rooms/" + roomCode + "/status").off();
-            waitingText.textContent = "Друг подключился! Начинаем игру.";
-            setTimeout(() => {
-                showScreen(gameScreen);
-                initBoard();
-            }, 1000);
+// Создаёт начальную расстановку шашек.
+// Ключ объекта — "строка_столбец", значение — {color, king}
+function createInitialPieces() {
+    const pieces = {};
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if ((row + col) % 2 !== 0) {
+                if (row < 3) {
+                    pieces[row + "_" + col] = { color: "dark", king: false };
+                } else if (row > 4) {
+                    pieces[row + "_" + col] = { color: "light", king: false };
+                }
+            }
         }
-    });
-});
+    }
+    return pieces;
+}
 
-btnShareLink.addEventListener("click", () => {
-    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
-    const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link) + "&text=" + encodeURIComponent("Давай сыграем в русские шашки! 🎮");
+function pieceAt(pieces, row, col) {
+    return pieces[row + "_" + col] || null;
+}
 
-    if (window.Telegram && window.Telegram.WebApp) {
-        Telegram.WebApp.openTelegramLink(shareUrl);
+// Может ли шашка, стоящая в (row, col), кого-то побить прямо сейчас (в любую из 4 сторон)
+function canCaptureAt(pieces, row, col, color, king) {
+    const opponent = color === "light" ? "dark" : "light";
+    const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+    const maxDistance = king ? 7 : 2;
+
+    for (const [dRow, dCol] of directions) {
+        let foundOpponent = false;
+        for (let dist = 1; dist <= maxDistance; dist++) {
+            const r = row + dRow * dist;
+            const c = col + dCol * dist;
+            if (r < 0 || r > 7 || c < 0 || c > 7) break;
+
+            const p = pieceAt(pieces, r, c);
+
+            if (!foundOpponent) {
+                if (p && p.color === opponent) {
+                    foundOpponent = true;
+                } else if (p) {
+                    break;
+                }
+            } else {
+                if (!p) {
+                    return true;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+// Есть ли у игрока данного цвета хотя бы одна шашка, способная побить (обязательное взятие)
+function hasMandatoryCapture(pieces, color) {
+    for (const key in pieces) {
+        const p = pieces[key];
+        if (p.color === color) {
+            const parts = key.split("_");
+            const r = parseInt(parts[0]);
+            const c = parseInt(parts[1]);
+            if (canCaptureAt(pieces, r, c, color, !!p.king)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Главная функция движка: пробует применить ход к состоянию state.
+// Возвращает НОВОЕ состояние, если ход разрешён правилами, или null, если ход невозможен.
+// ВАЖНО: эта функция ничего не знает про DOM, Firebase или экраны — только про правила игры.
+// Именно поэтому она одинаково используется и для онлайн-игры (внутри транзакции Firebase),
+// и для локальной игры "с ботом" (хотсит на одном экране).
+function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
+    const pieces = {};
+    for (const k in state.pieces) {
+        pieces[k] = { color: state.pieces[k].color, king: !!state.pieces[k].king };
+    }
+    let turn = state.turn;
+    let mustContinueFrom = state.mustContinueFrom || null;
+    let capturedDark = state.capturedDark || 0;
+    let capturedLight = state.capturedLight || 0;
+    let moveCount = state.moveCount || 0;
+
+    if (turn !== actingColor) return null;
+
+    const fromKey = fromRow + "_" + fromCol;
+    const toKey = toRow + "_" + toCol;
+    const moving = pieces[fromKey];
+    if (!moving) return null;
+    if (moving.color !== actingColor) return null;
+
+    // Если идёт обязательная серия взятий — ходить можно только той же самой шашкой
+    if (mustContinueFrom && (mustContinueFrom.row !== fromRow || mustContinueFrom.col !== fromCol)) {
+        return null;
+    }
+
+    if (toRow < 0 || toRow > 7 || toCol < 0 || toCol > 7) return null;
+    if (pieces[toKey]) return null;
+
+    const rowDiff = Math.abs(toRow - fromRow);
+    const colDiff = Math.abs(toCol - fromCol);
+    if (rowDiff !== colDiff || rowDiff === 0) return null;
+
+    const dRow = (toRow - fromRow) / rowDiff;
+    const dCol = (toCol - fromCol) / colDiff;
+    const king = !!moving.king;
+
+    if (!king && rowDiff > 2) return null;
+
+    let opponentsOnPath = 0;
+    let capturedKey = null;
+    for (let dist = 1; dist < rowDiff; dist++) {
+        const r = fromRow + dRow * dist;
+        const c = fromCol + dCol * dist;
+        const key = r + "_" + c;
+        if (pieces[key]) {
+            opponentsOnPath++;
+            capturedKey = key;
+            if (pieces[key].color === actingColor) return null;
+        }
+    }
+    if (opponentsOnPath > 1) return null;
+
+    const forwardDirection = actingColor === "light" ? -1 : 1;
+    const actualDirection = toRow - fromRow > 0 ? 1 : -1;
+
+    if (opponentsOnPath === 0) {
+        // Обычный ход без боя
+        if (mustContinueFrom) return null;
+        if (hasMandatoryCapture(pieces, actingColor)) return null;
+        if (!king && rowDiff !== 1) return null;
+        if (!king && actualDirection !== forwardDirection) return null;
+
+        delete pieces[fromKey];
+        let becameKing = false;
+        if (!king) {
+            if (actingColor === "light" && toRow === 0) {
+                moving.king = true;
+                becameKing = true;
+            }
+            if (actingColor === "dark" && toRow === 7) {
+                moving.king = true;
+                becameKing = true;
+            }
+        }
+        pieces[toKey] = moving;
+
+        turn = actingColor === "light" ? "dark" : "light";
+        mustContinueFrom = null;
+        moveCount++;
+
+        return {
+            pieces: pieces,
+            turn: turn,
+            mustContinueFrom: mustContinueFrom,
+            capturedDark: capturedDark,
+            capturedLight: capturedLight,
+            moveCount: moveCount,
+            moveType: becameKing ? "king" : "move",
+            lastMove: { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } }
+        };
     } else {
-        window.open(shareUrl, "_blank");
-    }
-});
+        // Ход со взятием
+        if (!king && rowDiff !== 2) return null;
 
-btnPlayBot.addEventListener("click", () => {
-    isOnlineGame = false;
-    myColor = "light";
-    showScreen(gameScreen);
-    initBoard();
-});
+        const capturedPiece = pieces[capturedKey];
+        delete pieces[capturedKey];
+        delete pieces[fromKey];
 
-function checkForInviteLink() {
-    let startParam = null;
+        if (capturedPiece.color === "dark") {
+            capturedDark++;
+        } else {
+            capturedLight++;
+        }
 
-    if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
-        startParam = Telegram.WebApp.initDataUnsafe.start_param;
-    }
+        let becameKing = false;
+        if (!king) {
+            if (actingColor === "light" && toRow === 0) {
+                moving.king = true;
+                becameKing = true;
+            }
+            if (actingColor === "dark" && toRow === 7) {
+                moving.king = true;
+                becameKing = true;
+            }
+        }
+        pieces[toKey] = moving;
 
-    if (startParam) {
-        roomCode = startParam;
-        myColor = "dark";
-        isOnlineGame = true;
+        // Проверяем возможность продолжить серию взятий той же шашкой.
+        // Правило: если шашка стала дамкой именно этим ходом — серия на этом заканчивается.
+        let canContinue = false;
+        if (!becameKing) {
+            canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
+        }
 
-        showScreen(waitingScreen);
-        waitingText.textContent = "Подключаемся к другу...";
-        inviteLinkBox.classList.add("hidden");
-        btnShareLink.classList.add("hidden");
+        if (canContinue) {
+            mustContinueFrom = { row: toRow, col: toCol };
+            // ход НЕ передаётся сопернику — turn остаётся прежним
+        } else {
+            mustContinueFrom = null;
+            turn = actingColor === "light" ? "dark" : "light";
+        }
 
-        database.ref("rooms/" + roomCode + "/status").set("active").then(() => {
-            setTimeout(() => {
-                showScreen(gameScreen);
-                initBoard();
-            }, 1000);
-        });
+        moveCount++;
+
+        return {
+            pieces: pieces,
+            turn: turn,
+            mustContinueFrom: mustContinueFrom,
+            capturedDark: capturedDark,
+            capturedLight: capturedLight,
+            moveCount: moveCount,
+            moveType: becameKing ? "king" : "capture",
+            lastMove: { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } }
+        };
     }
 }
 
-checkForInviteLink();
+// ===== СОСТОЯНИЕ ИГРЫ НА ЭКРАНЕ =====
 
-// ===== ЛОГИКА ИГРЫ =====
+let currentState = null;
+let selectedFrom = null;
+let flipped = false;
+let lastSeenMoveCount = -1;
 
-function initBoard() {
-    const board = document.getElementById("board");
-    board.innerHTML = "";
-    const letters = ["a", "b", "c", "d", "e", "f", "g", "h"];
-    const numbers = [8, 7, 6, 5, 4, 3, 2, 1];
+function getLabels() {
+    if (!flipped) {
+        return { letters: ["a", "b", "c", "d", "e", "f", "g", "h"], numbers: [8, 7, 6, 5, 4, 3, 2, 1] };
+    } else {
+        return { letters: ["h", "g", "f", "e", "d", "c", "b", "a"], numbers: [1, 2, 3, 4, 5, 6, 7, 8] };
+    }
+}
 
-    const wrapper = document.getElementById("board-wrapper");
-
-    let capturedDarkCount = 0;
-    let capturedLightCount = 0;
+function updateCapturedDisplay() {
     const capturedDarkDisplay = document.getElementById("captured-dark");
     const capturedLightDisplay = document.getElementById("captured-light");
+    if (!currentState) return;
+    capturedDarkDisplay.textContent = "Белые: Съедено: " + currentState.capturedDark;
+    capturedLightDisplay.textContent = "Чёрные: Съедено: " + currentState.capturedLight;
+}
 
-    function updateCapturedDisplay() {
-        capturedDarkDisplay.textContent = "Съедено чёрных: " + capturedDarkCount;
-        capturedLightDisplay.textContent = "Съедено белых: " + capturedLightCount;
-    }
+function renderBoard() {
+    const wrapper = document.getElementById("board-wrapper");
+    wrapper.innerHTML = "";
+
+    const labels = getLabels();
+    const letters = labels.letters;
+    const numbers = labels.numbers;
+
+    const boardDiv = document.createElement("div");
+    boardDiv.id = "board";
 
     const topLabels = document.createElement("div");
     topLabels.classList.add("labels", "labels-top");
@@ -192,258 +370,285 @@ function initBoard() {
 
     wrapper.appendChild(topLabels);
     wrapper.appendChild(leftLabels);
+    wrapper.appendChild(boardDiv);
 
-    const squares = [];
-    let currentTurn = "light";
-    let mustContinueWith = null;
+    if (!currentState) {
+        return;
+    }
 
-    for (let row = 0; row < 8; row++) {
-        for (let col = 0; col < 8; col++) {
+    const lastMove = currentState.lastMove;
+
+    for (let dispRow = 0; dispRow < 8; dispRow++) {
+        for (let dispCol = 0; dispCol < 8; dispCol++) {
+            let row, col;
+            if (flipped) {
+                row = 7 - dispRow;
+                col = 7 - dispCol;
+            } else {
+                row = dispRow;
+                col = dispCol;
+            }
+
             const square = document.createElement("div");
             square.classList.add("square");
             square.dataset.row = row;
             square.dataset.col = col;
 
             const isDark = (row + col) % 2 !== 0;
-            if (isDark) {
-                square.classList.add("dark");
-            } else {
-                square.classList.add("light");
-            }
+            square.classList.add(isDark ? "dark" : "light");
 
-            if (isDark) {
-                if (row < 3) {
-                    const piece = document.createElement("div");
-                    piece.classList.add("piece", "piece-dark");
-                    piece.addEventListener("click", () => selectPiece(piece));
-                    square.appendChild(piece);
-                } else if (row > 4) {
-                    const piece = document.createElement("div");
-                    piece.classList.add("piece", "piece-light");
-                    piece.addEventListener("click", () => selectPiece(piece));
-                    square.appendChild(piece);
+            if (lastMove) {
+                const isFrom = lastMove.from.row === row && lastMove.from.col === col;
+                const isTo = lastMove.to.row === row && lastMove.to.col === col;
+                if (isFrom || isTo) {
+                    square.classList.add("last-move");
                 }
             }
 
-            board.appendChild(square);
-            squares.push(square);
-        }
-    }
-
-    let selectedPiece = null;
-    let lastMoveSquares = [];
-
-    function findSquare(row, col) {
-        for (let i = 0; i < squares.length; i++) {
-            const sq = squares[i];
-            if (parseInt(sq.dataset.row) === row && parseInt(sq.dataset.col) === col) {
-                return sq;
-            }
-        }
-        return null;
-    }
-
-    function isKing(piece) {
-        return piece.classList.contains("king");
-    }
-
-    function canPieceCapture(piece) {
-        const square = piece.parentElement;
-        const row = parseInt(square.dataset.row);
-        const col = parseInt(square.dataset.col);
-        const pieceColor = piece.classList.contains("piece-light") ? "light" : "dark";
-        const opponentClass = pieceColor === "light" ? "piece-dark" : "piece-light";
-        const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
-        const king = isKing(piece);
-        const maxDistance = king ? 7 : 2;
-
-        for (const [dRow, dCol] of directions) {
-            let foundOpponent = false;
-            for (let dist = 1; dist <= maxDistance; dist++) {
-                const checkRow = row + dRow * dist;
-                const checkCol = col + dCol * dist;
-                const checkSquare = findSquare(checkRow, checkCol);
-                if (!checkSquare) break;
-
-                const checkPiece = checkSquare.querySelector(".piece");
-
-                if (!foundOpponent) {
-                    if (checkPiece && checkPiece.classList.contains(opponentClass)) {
-                        foundOpponent = true;
-                    } else if (checkPiece) {
-                        break;
-                    }
-                } else {
-                    if (!checkPiece) {
-                        return true;
-                    } else {
-                        break;
-                    }
+            const pieceData = pieceAt(currentState.pieces, row, col);
+            if (pieceData) {
+                const piece = document.createElement("div");
+                piece.classList.add("piece", pieceData.color === "light" ? "piece-light" : "piece-dark");
+                if (pieceData.king) {
+                    piece.classList.add("king");
                 }
+                if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) {
+                    piece.classList.add("selected");
+                }
+                square.appendChild(piece);
             }
+
+            square.addEventListener("click", () => handleClick(row, col));
+            boardDiv.appendChild(square);
         }
-        return false;
+    }
+}
+
+// Обрабатывает клик по клетке с канонической координатой (row, col) —
+// то есть координатой в системе правил игры, а не в системе того, что видно на экране.
+function handleClick(row, col) {
+    if (!currentState) return;
+    const state = currentState;
+
+    // В онлайн-игре можно ходить только в свой ход и только своим цветом
+    if (isOnlineGame && state.turn !== myColor) {
+        return;
     }
 
-    function playerHasCapture(color) {
-        const cssClass = color === "light" ? "piece-light" : "piece-dark";
-        const pieces = document.querySelectorAll("." + cssClass);
-        for (const piece of pieces) {
-            if (canPieceCapture(piece)) {
-                return true;
-            }
+    const selectableColor = isOnlineGame ? myColor : state.turn;
+    const pieceHere = pieceAt(state.pieces, row, col);
+
+    if (pieceHere && pieceHere.color === state.turn && pieceHere.color === selectableColor) {
+        // Если идёт обязательная серия взятий — выбор шашки заблокирован на ней же
+        if (state.mustContinueFrom) {
+            return;
         }
-        return false;
-    }
-
-    function selectPiece(piece) {
-        const pieceColor = piece.classList.contains("piece-light") ? "light" : "dark";
-
-        if (pieceColor !== currentTurn) {
+        // Если есть обязательное взятие — выбирать можно только бьющую шашку
+        if (hasMandatoryCapture(state.pieces, state.turn) && !canCaptureAt(state.pieces, row, col, state.turn, !!pieceHere.king)) {
             return;
         }
 
-        if (isOnlineGame && pieceColor !== myColor) {
-            return;
-        }
-
-        if (mustContinueWith && piece !== mustContinueWith) {
-            return;
-        }
-
-        if (!mustContinueWith && playerHasCapture(currentTurn) && !canPieceCapture(piece)) {
-            return;
-        }
-
-        if (selectedPiece && selectedPiece !== mustContinueWith) {
-            selectedPiece.classList.remove("selected");
-        }
-
-        if (selectedPiece === piece && !mustContinueWith) {
-            selectedPiece = null;
-            return;
-        }
-
-        selectedPiece = piece;
-        piece.classList.add("selected");
-    }
-
-    function checkPromotion(piece, toSquare) {
-        if (isKing(piece)) {
-            return false;
-        }
-
-        const pieceColor = piece.classList.contains("piece-light") ? "light" : "dark";
-        const row = parseInt(toSquare.dataset.row);
-
-        if (pieceColor === "light" && row === 0) {
-            piece.classList.add("king");
-            return true;
-        } else if (pieceColor === "dark" && row === 7) {
-            piece.classList.add("king");
-            return true;
-        }
-        return false;
-    }
-
-    function completeMove(fromSquare, toSquare, wasCapture) {
-        lastMoveSquares.forEach(sq => sq.classList.remove("last-move"));
-        lastMoveSquares = [];
-
-        fromSquare.classList.add("last-move");
-        lastMoveSquares.push(fromSquare);
-
-        const movedPiece = selectedPiece;
-        toSquare.appendChild(movedPiece);
-        const becameKing = checkPromotion(movedPiece, toSquare);
-        movedPiece.classList.remove("selected");
-
-        toSquare.classList.add("last-move");
-        lastMoveSquares.push(toSquare);
-
-        if (becameKing) {
-            playKingSound();
-        } else if (wasCapture) {
-            playCaptureSound();
+        if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) {
+            selectedFrom = null;
         } else {
-            playMoveSound();
+            selectedFrom = { row: row, col: col };
         }
-
-        if (wasCapture && canPieceCapture(movedPiece)) {
-            selectedPiece = movedPiece;
-            mustContinueWith = movedPiece;
-            movedPiece.classList.add("selected");
-        } else {
-            selectedPiece = null;
-            mustContinueWith = null;
-            currentTurn = currentTurn === "light" ? "dark" : "light";
-        }
+        renderBoard();
+        return;
     }
 
-    squares.forEach(square => {
-        square.addEventListener("click", () => {
-            if (!selectedPiece) return;
-            if (square.querySelector(".piece")) return;
+    if (selectedFrom) {
+        performMove(selectedFrom.row, selectedFrom.col, row, col);
+    }
+}
 
-            const fromSquare = selectedPiece.parentElement;
-            const fromRow = parseInt(fromSquare.dataset.row);
-            const fromCol = parseInt(fromSquare.dataset.col);
-            const toRow = parseInt(square.dataset.row);
-            const toCol = parseInt(square.dataset.col);
-
-            const rowDiff = Math.abs(toRow - fromRow);
-            const colDiff = Math.abs(toCol - fromCol);
-            const king = isKing(selectedPiece);
-
-            if (rowDiff !== colDiff || rowDiff === 0) {
-                return;
+function performMove(fromRow, fromCol, toRow, toCol) {
+    if (isOnlineGame) {
+        const roomRef = database.ref("rooms/" + roomCode);
+        roomRef.transaction(function (room) {
+            if (!room || !room.pieces) {
+                return; // abort — комнаты ещё нет или она пуста
             }
 
-            const dRow = (toRow - fromRow) / rowDiff;
-            const dCol = (toCol - fromCol) / colDiff;
+            const state = {
+                pieces: room.pieces,
+                turn: room.turn,
+                mustContinueFrom: room.mustContinueFrom || null,
+                capturedDark: room.capturedDark || 0,
+                capturedLight: room.capturedLight || 0,
+                moveCount: room.moveCount || 0
+            };
 
-            let opponentsOnPath = 0;
-            let lastOpponentSquare = null;
-            const opponentClass = currentTurn === "light" ? "piece-dark" : "piece-light";
-
-            for (let dist = 1; dist < rowDiff; dist++) {
-                const checkSquare = findSquare(fromRow + dRow * dist, fromCol + dCol * dist);
-                const checkPiece = checkSquare.querySelector(".piece");
-                if (checkPiece) {
-                    opponentsOnPath++;
-                    lastOpponentSquare = checkSquare;
-                    if (!checkPiece.classList.contains(opponentClass)) {
-                        return;
-                    }
-                }
+            const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
+            if (!result) {
+                return; // abort — ход недопустим
             }
 
-            const forwardDirection = currentTurn === "light" ? -1 : 1;
-            const actualDirection = toRow - fromRow > 0 ? 1 : -1;
-
-            if (opponentsOnPath === 0) {
-                if (mustContinueWith) return;
-                if (playerHasCapture(currentTurn)) return;
-                if (!king && rowDiff !== 1) return;
-                if (!king && actualDirection !== forwardDirection) return;
-
-                completeMove(fromSquare, square, false);
-            } else if (opponentsOnPath === 1) {
-                if (!king && rowDiff !== 2) return;
-
-                const middlePiece = lastOpponentSquare.querySelector(".piece");
-                const capturedColor = middlePiece.classList.contains("piece-light") ? "light" : "dark";
-                middlePiece.remove();
-
-                if (capturedColor === "dark") {
-                    capturedDarkCount++;
-                } else {
-                    capturedLightCount++;
-                }
-                updateCapturedDisplay();
-
-                completeMove(fromSquare, square, true);
+            const newRoom = {};
+            for (const key in room) {
+                newRoom[key] = room[key];
             }
+            newRoom.pieces = result.pieces;
+            newRoom.turn = result.turn;
+            newRoom.mustContinueFrom = result.mustContinueFrom;
+            newRoom.capturedDark = result.capturedDark;
+            newRoom.capturedLight = result.capturedLight;
+            newRoom.moveCount = result.moveCount;
+            newRoom.moveType = result.moveType;
+            newRoom.lastMove = result.lastMove;
+
+            return newRoom;
         });
+    } else {
+        const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
+        if (result) {
+            currentState = result;
+            selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
+            playSoundForMoveType(result.moveType);
+            updateCapturedDisplay();
+            renderBoard();
+        }
+    }
+}
+
+// ===== ЗАПУСК ИГРЫ =====
+
+function startOnlineGame() {
+    isOnlineGame = true;
+    flipped = (myColor === "dark");
+    lastSeenMoveCount = -1;
+    selectedFrom = null;
+
+    database.ref("rooms/" + roomCode).on("value", (snapshot) => {
+        const room = snapshot.val();
+        if (!room || !room.pieces) return;
+
+        currentState = {
+            pieces: room.pieces,
+            turn: room.turn,
+            mustContinueFrom: room.mustContinueFrom || null,
+            capturedDark: room.capturedDark || 0,
+            capturedLight: room.capturedLight || 0,
+            moveCount: room.moveCount || 0,
+            lastMove: room.lastMove || null,
+            moveType: room.moveType || null
+        };
+
+        if (currentState.turn === myColor && currentState.mustContinueFrom) {
+            selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
+        } else {
+            selectedFrom = null;
+        }
+
+        if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
+            playSoundForMoveType(currentState.moveType);
+        }
+        lastSeenMoveCount = currentState.moveCount;
+
+        updateCapturedDisplay();
+        renderBoard();
     });
 }
+
+function startOfflineGame() {
+    isOnlineGame = false;
+    myColor = "light";
+    flipped = false;
+    selectedFrom = null;
+    currentState = {
+        pieces: createInitialPieces(),
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        moveType: null
+    };
+    updateCapturedDisplay();
+    renderBoard();
+}
+
+// --- Кнопка "Играть с другом" ---
+btnPlayFriend.addEventListener("click", () => {
+    roomCode = generateRoomCode();
+    myColor = "light";
+    isOnlineGame = true;
+
+    const initialState = {
+        status: "waiting",
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        moveType: null,
+        pieces: createInitialPieces()
+    };
+
+    database.ref("rooms/" + roomCode).set(initialState);
+
+    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+    inviteLinkBox.textContent = link;
+
+    showScreen(waitingScreen);
+
+    database.ref("rooms/" + roomCode + "/status").on("value", (snapshot) => {
+        if (snapshot.val() === "active") {
+            database.ref("rooms/" + roomCode + "/status").off();
+            waitingText.textContent = "Друг подключился! Начинаем игру.";
+            setTimeout(() => {
+                showScreen(gameScreen);
+                startOnlineGame();
+            }, 1000);
+        }
+    });
+});
+
+// --- Кнопка "Отправить другу" ---
+btnShareLink.addEventListener("click", () => {
+    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+    const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
+
+    if (window.Telegram && window.Telegram.WebApp) {
+        Telegram.WebApp.openTelegramLink(shareUrl);
+    } else {
+        window.open(shareUrl, "_blank");
+    }
+});
+
+// --- Кнопка "Играть с ботом" (локальная игра вдвоём на одном экране) ---
+btnPlayBot.addEventListener("click", () => {
+    showScreen(gameScreen);
+    startOfflineGame();
+});
+
+// --- Проверяем, открыта ли игра по ссылке-приглашению ---
+function checkForInviteLink() {
+    let startParam = null;
+
+    if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
+        startParam = Telegram.WebApp.initDataUnsafe.start_param;
+    }
+
+    if (startParam) {
+        roomCode = startParam;
+        myColor = "dark";
+        isOnlineGame = true;
+
+        showScreen(waitingScreen);
+        waitingText.textContent = "Подключаемся к другу...";
+        inviteLinkBox.classList.add("hidden");
+        btnShareLink.classList.add("hidden");
+
+        database.ref("rooms/" + roomCode + "/status").set("active").then(() => {
+            setTimeout(() => {
+                showScreen(gameScreen);
+                startOnlineGame();
+            }, 1000);
+        });
+    }
+}
+
+checkForInviteLink();
