@@ -262,7 +262,6 @@ function checkWinCondition(pieces, opponentColor) {
     }
     return null;
 }
-
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
     for (const k in state.pieces) {
@@ -723,7 +722,6 @@ function handleClick(row, col) {
         performMove(selectedFrom.row, selectedFrom.col, row, col);
     }
 }
-
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode).transaction(function (room) {
@@ -833,7 +831,6 @@ function startOnlineGame() {
         const newSignature = computeGameSignature(currentState);
 
         if (newSignature !== lastRenderedSignature) {
-            // Реальное изменение партии (ход, победа, новый игрок) — перерисовываем доску целиком
             if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
                 playSoundForMoveType(currentState.moveType);
             }
@@ -841,8 +838,6 @@ function startOnlineGame() {
             lastRenderedSignature = newSignature;
             renderBoard();
         } else {
-            // Изменился только онлайн-статус (presence/heartbeat) — доску НЕ трогаем,
-            // обновляем только текст статуса игроков, без мигания
             updatePresenceOnly();
         }
     });
@@ -881,11 +876,20 @@ function startOfflineGame() {
 function loadActiveRooms() {
     const sectionEl = document.getElementById("active-rooms-section");
     const listEl = document.getElementById("active-rooms-list");
+    const noGameText = document.getElementById("no-active-game-text");
     database.ref("users/" + myTelegramId + "/rooms").once("value").then(function (snapshot) {
         const data = snapshot.val();
-        if (!data) { sectionEl.classList.add("hidden"); return; }
+        if (!data) {
+            sectionEl.classList.add("hidden");
+            noGameText.classList.remove("hidden");
+            return;
+        }
         const codes = Object.keys(data);
-        if (codes.length === 0) { sectionEl.classList.add("hidden"); return; }
+        if (codes.length === 0) {
+            sectionEl.classList.add("hidden");
+            noGameText.classList.remove("hidden");
+            return;
+        }
 
         let pending = codes.length;
         const items = [];
@@ -908,8 +912,13 @@ function loadActiveRooms() {
 
                 if (pending === 0) {
                     listEl.innerHTML = "";
-                    if (items.length === 0) { sectionEl.classList.add("hidden"); return; }
+                    if (items.length === 0) {
+                        sectionEl.classList.add("hidden");
+                        noGameText.classList.remove("hidden");
+                        return;
+                    }
                     sectionEl.classList.remove("hidden");
+                    noGameText.classList.add("hidden");
                     items.forEach(function (item) {
                         const btn = document.createElement("button");
                         btn.className = "menu-button room-item-button";
@@ -930,6 +939,7 @@ function loadActiveRooms() {
         });
     }).catch(function () {
         sectionEl.classList.add("hidden");
+        noGameText.classList.remove("hidden");
     });
 }
 
@@ -1116,7 +1126,6 @@ function checkTimeout() {
         return newRoom;
     });
 }
-
 // ===== ПРИСОЕДИНЕНИЕ ПО ССЫЛКЕ =====
 
 function showInfoModal(text, offerNewGame) {
@@ -1144,8 +1153,6 @@ function checkForInviteLink() {
     inviteLinkBox.classList.add("hidden");
     btnShareLink.classList.add("hidden");
 
-    // Если проверка займёт слишком долго (например, проблема с сетью) — не оставляем
-    // пользователя навсегда на экране "Проверяем игру...", а показываем понятную ошибку
     let settled = false;
     const timeoutId = setTimeout(function () {
         if (!settled) {
