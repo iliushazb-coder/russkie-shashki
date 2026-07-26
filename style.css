@@ -525,6 +525,7 @@ h1 {
     font-weight: 700;
     margin-bottom: 6px;
     color: #fbeed8;
+    white-space: pre-line;
 }
 
 #credit-footer {

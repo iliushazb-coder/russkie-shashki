@@ -108,6 +108,10 @@ const opponentLeftModal = document.getElementById("opponent-left-modal");
 const opponentLeftText = document.getElementById("opponent-left-text");
 const btnNewGameAfterLeave = document.getElementById("btn-new-game-after-leave");
 const btnCloseAfterLeave = document.getElementById("btn-close-after-leave");
+const infoModal = document.getElementById("info-modal");
+const infoModalText = document.getElementById("info-modal-text");
+const btnInfoNewGame = document.getElementById("btn-info-new-game");
+const btnInfoClose = document.getElementById("btn-info-close");
 
 let roomCode = null;
 let myColor = "light";
@@ -258,7 +262,6 @@ function checkWinCondition(pieces, opponentColor) {
     }
     return null;
 }
-
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
     for (const k in state.pieces) {
@@ -392,6 +395,7 @@ let selectedFrom = null;
 let flipped = false;
 let lastSeenMoveCount = -1;
 let endGameShownForRoom = null;
+let pieceElements = {};
 
 function getLabels() {
     if (!flipped) {
@@ -530,6 +534,7 @@ function markMyselfLeftExplicitly() {
 function renderBoard() {
     const wrapper = document.getElementById("board-wrapper");
     wrapper.innerHTML = "";
+    pieceElements = {};
 
     const labels = getLabels();
     const boardDiv = document.createElement("div");
@@ -612,6 +617,7 @@ function renderBoard() {
                 if (pieceData.king) piece.classList.add("king");
                 if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) piece.classList.add("selected");
                 square.appendChild(piece);
+                pieceElements[row + "_" + col] = piece;
             }
 
             square.addEventListener("click", function () { handleClick(row, col); });
@@ -647,13 +653,23 @@ function updateTimerDisplay() {
 
 function renderEndGameModal() {
     if (currentState && currentState.winner) {
-        const winnerText = currentState.winner === "light" ? "⚪ Победили белые" : "⚫ Победили чёрные";
+        const winnerColor = currentState.winner;
+        const loserColor = winnerColor === "light" ? "dark" : "light";
+        const winnerName = (currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].name) || (winnerColor === "light" ? "Белые" : "Чёрные");
+        const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? "Белые" : "Чёрные");
+        const winnerIcon = winnerColor === "light" ? "⚪" : "⚫";
+        const loserIcon = loserColor === "light" ? "⚪" : "⚫";
+
         let reasonText = "";
-        if (currentState.winReason === "no_pieces") reasonText = "У соперника закончились шашки";
-        else if (currentState.winReason === "no_moves") reasonText = "У соперника нет допустимых ходов";
-        else if (currentState.winReason === "resign") reasonText = "Соперник сдался";
-        else if (currentState.winReason === "timeout") reasonText = "Закончилось время на ход";
-        endGameText.textContent = "🏆 " + winnerText + (reasonText ? " (" + reasonText + ")" : "");
+        if (currentState.winReason === "no_pieces") reasonText = "у соперника закончились шашки";
+        else if (currentState.winReason === "no_moves") reasonText = "у соперника нет допустимых ходов";
+        else if (currentState.winReason === "resign") reasonText = "соперник сдался";
+        else if (currentState.winReason === "timeout") reasonText = "закончилось время на ход";
+
+        let text = "🏆 Победитель: " + winnerName + " " + winnerIcon + "\nПроиграл: " + loserName + " " + loserIcon;
+        if (reasonText) text += "\n(" + reasonText + ")";
+
+        endGameText.textContent = text;
         endGameModal.classList.remove("hidden");
         const marker = (roomCode || "offline") + "_" + currentState.moveCount;
         if (endGameShownForRoom !== marker) {
@@ -662,6 +678,17 @@ function renderEndGameModal() {
         }
     } else {
         endGameModal.classList.add("hidden");
+    }
+}
+
+function updateSelectionDom(oldSel, newSel) {
+    if (oldSel) {
+        const oldEl = pieceElements[oldSel.row + "_" + oldSel.col];
+        if (oldEl) oldEl.classList.remove("selected");
+    }
+    if (newSel) {
+        const newEl = pieceElements[newSel.row + "_" + newSel.col];
+        if (newEl) newEl.classList.add("selected");
     }
 }
 
@@ -678,12 +705,15 @@ function handleClick(row, col) {
         if (state.mustContinueFrom) return;
         if (hasMandatoryCapture(state.pieces, state.turn) && !canCaptureAt(state.pieces, row, col, state.turn, !!pieceHere.king)) return;
 
+        const oldSel = selectedFrom;
+        let newSel;
         if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) {
-            selectedFrom = null;
+            newSel = null;
         } else {
-            selectedFrom = { row: row, col: col };
+            newSel = { row: row, col: col };
         }
-        renderBoard();
+        updateSelectionDom(oldSel, newSel);
+        selectedFrom = newSel;
         return;
     }
 
@@ -691,7 +721,6 @@ function handleClick(row, col) {
         performMove(selectedFrom.row, selectedFrom.col, row, col);
     }
 }
-
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode).transaction(function (room) {
@@ -843,9 +872,19 @@ function loadActiveRooms() {
             database.ref("rooms/" + code).once("value").then(function (roomSnap) {
                 pending--;
                 const room = roomSnap.val();
-                if (room && room.status !== "finished" && !room.winner) {
+
+                const lightP = room && room.players && room.players.light;
+                const darkP = room && room.players && room.players.dark;
+                const bothPlayersExist = !!(lightP && darkP && lightP.id && darkP.id);
+                const differentPlayers = bothPlayersExist && lightP.id !== darkP.id;
+                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner;
+
+                if (isValidActiveGame) {
                     items.push({ code: code, opponent: data[code].opponentName || "Соперник", color: data[code].myColor });
+                } else {
+                    database.ref("users/" + myTelegramId + "/rooms/" + code).remove();
                 }
+
                 if (pending === 0) {
                     listEl.innerHTML = "";
                     if (items.length === 0) { sectionEl.classList.add("hidden"); return; }
@@ -1053,51 +1092,87 @@ function checkTimeout() {
 
 // ===== ПРИСОЕДИНЕНИЕ ПО ССЫЛКЕ =====
 
+function showInfoModal(text, offerNewGame) {
+    infoModalText.textContent = text;
+    if (offerNewGame) {
+        btnInfoNewGame.classList.remove("hidden");
+    } else {
+        btnInfoNewGame.classList.add("hidden");
+    }
+    infoModal.classList.remove("hidden");
+}
+
 function checkForInviteLink() {
     let startParam = null;
     if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
         startParam = Telegram.WebApp.initDataUnsafe.start_param;
     }
 
-    if (startParam) {
-        roomCode = startParam;
+    if (!startParam) return false;
+
+    roomCode = startParam;
+
+    showScreen(waitingScreen);
+    waitingText.textContent = "Проверяем игру...";
+    inviteLinkBox.classList.add("hidden");
+    btnShareLink.classList.add("hidden");
+
+    database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
+        const room = snapshot.val();
+
+        if (!room || room.status === "finished" || room.winner) {
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal("Нет активной игры", true);
+            return;
+        }
+
+        const creatorId = (room.players && room.players.light) ? room.players.light.id : null;
+        const creatorName = (room.players && room.players.light) ? room.players.light.name : "Соперник";
+
+        if (creatorId && creatorId === myTelegramId) {
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal("Нельзя играть против самого себя", false);
+            return;
+        }
+
+        if (room.players && room.players.dark && room.players.dark.id && room.players.dark.id !== myTelegramId) {
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal("Нет активной игры", true);
+            return;
+        }
+
         myColor = "dark";
         isOnlineGame = true;
-
-        showScreen(waitingScreen);
         waitingText.textContent = "Подключаемся к другу...";
-        inviteLinkBox.classList.add("hidden");
-        btnShareLink.classList.add("hidden");
 
-        database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
-            const room = snapshot.val();
-            const creatorId = (room && room.players && room.players.light) ? room.players.light.id : null;
-            const creatorName = (room && room.players && room.players.light) ? room.players.light.name : "Соперник";
-
-            database.ref("rooms/" + roomCode).update({
-                status: "active",
-                "players/dark": { id: myTelegramId, name: myTelegramName },
-                turnStartedAt: Date.now()
-            }).then(function () {
-                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-                    opponentName: creatorName,
-                    myColor: "dark"
-                });
-                if (creatorId) {
-                    database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
-                        opponentName: myTelegramName
-                    });
-                }
-                setTimeout(function () {
-                    showScreen(gameScreen);
-                    startOnlineGame();
-                }, 1000);
+        database.ref("rooms/" + roomCode).update({
+            status: "active",
+            "players/dark": { id: myTelegramId, name: myTelegramName },
+            turnStartedAt: Date.now()
+        }).then(function () {
+            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                opponentName: creatorName,
+                myColor: "dark"
             });
+            if (creatorId) {
+                database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
+                    opponentName: myTelegramName
+                });
+            }
+            setTimeout(function () {
+                showScreen(gameScreen);
+                startOnlineGame();
+            }, 800);
         });
+    });
 
-        return true;
-    }
-    return false;
+    return true;
 }
 
 // ===== МОДАЛКА "СОПЕРНИК ПОКИНУЛ ИГРУ" =====
@@ -1124,6 +1199,24 @@ btnCloseAfterLeave.addEventListener("click", function () {
         showScreen(menuScreen);
         loadActiveRooms();
     }
+});
+
+// ===== МОДАЛКА "НЕТ ИГРЫ / НЕЛЬЗЯ ИГРАТЬ С СОБОЙ" =====
+
+btnInfoNewGame.addEventListener("click", function () {
+    infoModal.classList.add("hidden");
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    stopPresenceHeartbeat();
+    roomCode = null;
+    currentState = null;
+    isOnlineGame = true;
+    showScreen(timeControlScreen);
+});
+
+btnInfoClose.addEventListener("click", function () {
+    infoModal.classList.add("hidden");
+    showScreen(menuScreen);
+    loadActiveRooms();
 });
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
