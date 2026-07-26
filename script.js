@@ -58,9 +58,9 @@ const btnShareLink = document.getElementById("btn-share-link");
 const waitingText = document.getElementById("waiting-text");
 
 let roomCode = null;
-let myColor = "light"; // каким цветом играет ЭТОТ телефон/устройство
+let myColor = "light";
 let isOnlineGame = false;
-const BOT_USERNAME = "russkie_shashki_bot"; // юзернейм нашего бота
+const BOT_USERNAME = "russkie_shashki_bot/play";
 
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -78,7 +78,6 @@ function showScreen(screen) {
     screen.classList.remove("hidden");
 }
 
-// --- Кнопка "Играть с другом" ---
 btnPlayFriend.addEventListener("click", () => {
     roomCode = generateRoomCode();
     myColor = "light";
@@ -95,7 +94,6 @@ btnPlayFriend.addEventListener("click", () => {
 
     showScreen(waitingScreen);
 
-    // Слушаем, когда друг присоединится
     database.ref("rooms/" + roomCode + "/status").on("value", (snapshot) => {
         if (snapshot.val() === "active") {
             database.ref("rooms/" + roomCode + "/status").off();
@@ -108,7 +106,6 @@ btnPlayFriend.addEventListener("click", () => {
     });
 });
 
-// --- Кнопка "Отправить другу" ---
 btnShareLink.addEventListener("click", () => {
     const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
     const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link) + "&text=" + encodeURIComponent("Давай сыграем в русские шашки! 🎮");
@@ -120,7 +117,6 @@ btnShareLink.addEventListener("click", () => {
     }
 });
 
-// --- Кнопка "Играть с ботом" (пока: игра вдвоём на одном экране) ---
 btnPlayBot.addEventListener("click", () => {
     isOnlineGame = false;
     myColor = "light";
@@ -128,19 +124,7 @@ btnPlayBot.addEventListener("click", () => {
     initBoard();
 });
 
-// --- Проверяем, открыта ли игра по ссылке-приглашению (присоединение к другу) ---
 function checkForInviteLink() {
-    let debugInfo = "Telegram: " + (window.Telegram ? "есть" : "нет");
-    if (window.Telegram && window.Telegram.WebApp) {
-        debugInfo += " | start_param: " + JSON.stringify(Telegram.WebApp.initDataUnsafe.start_param);
-    }
-    const debugDiv = document.createElement("div");
-    debugDiv.style.color = "yellow";
-    debugDiv.style.fontSize = "12px";
-    debugDiv.style.padding = "10px";
-    debugDiv.style.wordBreak = "break-all";
-    debugDiv.textContent = debugInfo;
-    document.body.insertBefore(debugDiv, document.body.firstChild);
     let startParam = null;
 
     if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
@@ -168,7 +152,7 @@ function checkForInviteLink() {
 
 checkForInviteLink();
 
-// ===== ЛОГИКА ИГРЫ (запускается функцией initBoard) =====
+// ===== ЛОГИКА ИГРЫ =====
 
 function initBoard() {
     const board = document.getElementById("board");
@@ -319,7 +303,6 @@ function initBoard() {
             return;
         }
 
-        // В онлайн-игре можно выбирать только свой цвет
         if (isOnlineGame && pieceColor !== myColor) {
             return;
         }
