@@ -262,6 +262,7 @@ function checkWinCondition(pieces, opponentColor) {
     }
     return null;
 }
+
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
     for (const k in state.pieces) {
@@ -531,14 +532,14 @@ function markMyselfLeftExplicitly() {
     }
     stopPresenceHeartbeat();
 }
+
 let squareElements = {};
 let boardBuilt = false;
 let builtFlipped = null;
 
 // Строит сетку доски (клетки + подписи) ОДИН РАЗ. Повторно вызывается только
 // при смене ориентации доски (переворот под другого игрока) или при первом запуске —
-// НЕ при каждом ходе. Именно многократное пересоздание этой сетки было причиной
-// того, что все шашки на мгновение "испарялись" при каждом ходе.
+// НЕ при каждом ходе.
 function ensureBoardBuilt() {
     if (boardBuilt && builtFlipped === flipped) return;
 
@@ -546,6 +547,7 @@ function ensureBoardBuilt() {
     wrapper.innerHTML = "";
     pieceElements = {};
     squareElements = {};
+    hintedSquares = [];
 
     const labels = getLabels();
     const boardDiv = document.createElement("div");
@@ -622,8 +624,7 @@ function ensureBoardBuilt() {
     builtFlipped = flipped;
 }
 
-// Обновляет ТОЛЬКО те клетки, где реально изменилась шашка (ход, взятие, превращение
-// в дамку), плюс подсветку последнего хода и выбранной шашки. Остальные ~28 шашек
+// Обновляет ТОЛЬКО те клетки, где реально изменилась шашка. Остальные ~28 шашек
 // на доске вообще не трогаются — поэтому они больше не "мигают".
 function updateBoardPieces() {
     if (!currentState) return;
@@ -658,12 +659,10 @@ function updateBoardPieces() {
             const existingColor = existingPieceEl ? existingPieceEl.dataset.pieceColor : null;
 
             if (existingPieceEl && existingColor === pieceData.color && existingIsKing === desiredIsKing) {
-                // Эта же шашка уже правильно отображена в этой клетке — просто обновляем выделение
                 existingPieceEl.classList.toggle("selected", isSelected);
                 continue;
             }
 
-            // Шашки здесь не было, либо она изменилась (например, стала дамкой) — создаём заново
             if (existingPieceEl) {
                 existingPieceEl.remove();
             }
@@ -683,6 +682,86 @@ function renderBoard() {
     updateBoardPieces();
     renderPlayerPanels();
     renderEndGameModal();
+    showMoveHints(selectedFrom);
+}
+
+let hintedSquares = [];
+
+function clearMoveHints() {
+    hintedSquares.forEach(function (sq) { sq.classList.remove("move-hint"); });
+    hintedSquares = [];
+}
+
+// Возвращает список клеток, куда выбранная шашка может сходить прямо сейчас
+// (учитывает обязательное взятие: если бой возможен — возвращаются только клетки боя)
+function getLegalDestinations(pieces, row, col, color, king) {
+    const opponent = color === "light" ? "dark" : "light";
+    const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+    const destinations = [];
+
+    const maxCaptureDist = king ? 7 : 2;
+    for (let d = 0; d < directions.length; d++) {
+        const dRow = directions[d][0];
+        const dCol = directions[d][1];
+        let foundOpponent = false;
+        for (let dist = 1; dist <= maxCaptureDist; dist++) {
+            const r = row + dRow * dist;
+            const c = col + dCol * dist;
+            if (r < 0 || r > 7 || c < 0 || c > 7) break;
+            const p = pieceAt(pieces, r, c);
+            if (!foundOpponent) {
+                if (p && p.color === opponent) {
+                    foundOpponent = true;
+                } else if (p) {
+                    break;
+                }
+            } else {
+                if (!p) {
+                    destinations.push({ row: r, col: c });
+                    if (!king) break;
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (destinations.length > 0) return destinations;
+
+    const forwardDirection = color === "light" ? -1 : 1;
+    const moveDirections = king ? directions : [[forwardDirection, -1], [forwardDirection, 1]];
+    const maxMoveDist = king ? 7 : 1;
+    for (let d = 0; d < moveDirections.length; d++) {
+        const dRow = moveDirections[d][0];
+        const dCol = moveDirections[d][1];
+        for (let dist = 1; dist <= maxMoveDist; dist++) {
+            const r = row + dRow * dist;
+            const c = col + dCol * dist;
+            if (r < 0 || r > 7 || c < 0 || c > 7) break;
+            const p = pieceAt(pieces, r, c);
+            if (!p) {
+                destinations.push({ row: r, col: c });
+            } else {
+                break;
+            }
+        }
+    }
+    return destinations;
+}
+
+function showMoveHints(sel) {
+    clearMoveHints();
+    if (!sel || !currentState) return;
+    const pieceData = pieceAt(currentState.pieces, sel.row, sel.col);
+    if (!pieceData) return;
+    const destinations = getLegalDestinations(currentState.pieces, sel.row, sel.col, pieceData.color, !!pieceData.king);
+    destinations.forEach(function (d) {
+        const sq = squareElements[d.row + "_" + d.col];
+        if (sq) {
+            sq.classList.add("move-hint");
+            hintedSquares.push(sq);
+        }
+    });
 }
 
 function formatTime(seconds) {
@@ -746,6 +825,7 @@ function updateSelectionDom(oldSel, newSel) {
         const newEl = pieceElements[newSel.row + "_" + newSel.col];
         if (newEl) newEl.classList.add("selected");
     }
+    showMoveHints(newSel);
 }
 
 function handleClick(row, col) {
@@ -777,14 +857,14 @@ function handleClick(row, col) {
         performMove(selectedFrom.row, selectedFrom.col, row, col);
     }
 }
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         // Сначала проверяем ход локально по тем же правилам, что и сервер
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
 
-        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
-        // это устраняет ощутимую задержку в 3-5 секунд на нажатие
+        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase
         currentState.pieces = optimisticResult.pieces;
         currentState.turn = optimisticResult.turn;
         currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
@@ -807,8 +887,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         playSoundForMoveType(optimisticResult.moveType);
         renderBoard();
 
-        // Затем синхронизируем этот же ход с сервером в фоне — Firebase остаётся
-        // единственным источником истины и сам исправит состояние, если что-то разойдётся
+        // Затем синхронизируем этот же ход с сервером в фоне
         database.ref("rooms/" + roomCode).transaction(function (room) {
             if (!room || !room.pieces || room.winner) return;
 
@@ -891,7 +970,7 @@ function startOnlineGame() {
         const room = snapshot.val();
         if (!room || !room.pieces) return;
 
-        currentState = {
+        const newState = {
             pieces: room.pieces,
             turn: room.turn,
             mustContinueFrom: room.mustContinueFrom || null,
@@ -908,22 +987,31 @@ function startOnlineGame() {
             winReason: room.winReason || null
         };
 
-        if (currentState.turn === myColor && currentState.mustContinueFrom) {
-            selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
-        } else {
-            selectedFrom = null;
-        }
-
-        const newSignature = computeGameSignature(currentState);
+        const newSignature = computeGameSignature(newState);
 
         if (newSignature !== lastRenderedSignature) {
+            // Партия реально изменилась (ход, взятие, победа, подключение игрока) —
+            // применяем новое состояние полностью, включая пересчёт выбранной шашки
+            currentState = newState;
+
+            if (currentState.turn === myColor && currentState.mustContinueFrom) {
+                selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
+            } else {
+                selectedFrom = null;
+            }
+
             if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
                 playSoundForMoveType(currentState.moveType);
             }
             lastSeenMoveCount = currentState.moveCount;
             lastRenderedSignature = newSignature;
             renderBoard();
-        } else {
+        } else if (currentState) {
+            // Ничего в самой партии не изменилось — это просто heartbeat статуса "в сети".
+            // ВАЖНО: не трогаем currentState.pieces/turn и НЕ сбрасываем selectedFrom —
+            // именно этот сброс раньше "съедал" выбор шашки игрока в середине хода
+            // и вызывал ощущение задержки в 3-5 секунд или необходимость нажать дважды.
+            currentState.presence = newState.presence;
             updatePresenceOnly();
         }
     });
@@ -1029,6 +1117,7 @@ function loadActiveRooms() {
         noGameText.classList.remove("hidden");
     });
 }
+
 // ===== КНОПКИ МЕНЮ =====
 
 btnPlayFriend.addEventListener("click", function () {
