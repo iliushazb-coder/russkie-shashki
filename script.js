@@ -469,21 +469,43 @@ function renderPlayerPanels() {
     checkOpponentAbsence();
 }
 
+let opponentGraceTimer = null;
+const RECONNECT_GRACE_MS = 60000; // 60 секунд на восстановление соединения
+
 function checkOpponentAbsence() {
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (opponentAbsenceHandled) return;
 
     const oppColor = myColor === "light" ? "dark" : "light";
     const info = statusForColor(oppColor);
+
     if (info.cls === "status-left") {
-        opponentAbsenceHandled = true;
-        const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || "Соперник";
-        const reasonText = info.text.indexOf("потерял соединение") !== -1
-            ? (oppName + " потерял соединение 📡")
-            : (oppName + " покинул игру 👋");
-        opponentLeftText.textContent = reasonText + "\nПартия завершена.";
-        opponentLeftModal.classList.remove("hidden");
-        cleanupAbandonedRoom();
+        // Соперник пропал (потерял соединение / закрыл приложение) — не завершаем
+        // партию сразу, а даём 60 секунд на то, чтобы он мог вернуться
+        if (!opponentGraceTimer) {
+            opponentGraceTimer = setTimeout(function () {
+                opponentGraceTimer = null;
+                if (!isOnlineGame || !currentState || currentState.winner || opponentAbsenceHandled) return;
+
+                const stillInfo = statusForColor(oppColor);
+                if (stillInfo.cls === "status-left") {
+                    opponentAbsenceHandled = true;
+                    const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || "Соперник";
+                    const reasonText = stillInfo.text.indexOf("потерял соединение") !== -1
+                        ? (oppName + " потерял соединение 📡")
+                        : (oppName + " покинул игру 👋");
+                    opponentLeftText.textContent = reasonText + "\nПартия завершена.";
+                    opponentLeftModal.classList.remove("hidden");
+                    cleanupAbandonedRoom();
+                }
+            }, RECONNECT_GRACE_MS);
+        }
+    } else {
+        // Соперник снова в сети — отменяем отсчёт, если он был запущен
+        if (opponentGraceTimer) {
+            clearTimeout(opponentGraceTimer);
+            opponentGraceTimer = null;
+        }
     }
 }
 
@@ -812,11 +834,6 @@ function renderEndGameModal() {
     }
 }
 
-// ИСПРАВЛЕНО: снимаем "selected" со ВСЕХ шашек на доске (а не только с одной,
-// формально считавшейся "старой"). Это устраняет рассинхронизацию, из-за которой
-// подсветка на предыдущей шашке иногда "залипала", а игра внутри уже переключалась
-// на другую шашку, из-за чего клик по пустой клетке не двигал видимую подсвеченную
-// фигуру.
 function updateSelectionDom(oldSel, newSel) {
     for (const key in pieceElements) {
         pieceElements[key].classList.remove("selected");
@@ -858,13 +875,16 @@ function handleClick(row, col) {
     }
 }
 
+let pendingSyncChain = Promise.resolve();
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         // Сначала проверяем ход локально по тем же правилам, что и сервер
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
 
-        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase
+        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
+        // это устраняет ощутимую задержку в 3-5 секунд на нажатие
         currentState.pieces = optimisticResult.pieces;
         currentState.turn = optimisticResult.turn;
         currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
@@ -887,39 +907,52 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         playSoundForMoveType(optimisticResult.moveType);
         renderBoard();
 
-        // Затем синхронизируем этот же ход с сервером в фоне
-        database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room || !room.pieces || room.winner) return;
+        // Затем синхронизируем этот же ход с сервером в фоне. ВАЖНО: отправляем
+        // запросы к Firebase СТРОГО по очереди (через pendingSyncChain), а не
+        // параллельно. Если во время серии ударов кликать быстро, несколько
+        // запросов могли уйти почти одновременно — и следующий иногда "видел"
+        // на сервере ещё не зафиксированный предыдущий ход, из-за чего сам
+        // отклонялся как невозможный, а финальный шаг серии терялся. Теперь
+        // каждый следующий запрос ждёт завершения предыдущего, прежде чем уйти
+        // на сервер — на скорость отклика для игрока это не влияет (локально
+        // всё по-прежнему происходит мгновенно).
+        pendingSyncChain = pendingSyncChain.then(function () {
+            return database.ref("rooms/" + roomCode).transaction(function (room) {
+                if (!room || !room.pieces || room.winner) return;
 
-            const state = {
-                pieces: room.pieces,
-                turn: room.turn,
-                mustContinueFrom: room.mustContinueFrom || null,
-                capturedDark: room.capturedDark || 0,
-                capturedLight: room.capturedLight || 0,
-                moveCount: room.moveCount || 0
-            };
+                const state = {
+                    pieces: room.pieces,
+                    turn: room.turn,
+                    mustContinueFrom: room.mustContinueFrom || null,
+                    capturedDark: room.capturedDark || 0,
+                    capturedLight: room.capturedLight || 0,
+                    moveCount: room.moveCount || 0
+                };
 
-            const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
-            if (!result) return;
+                const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
+                if (!result) return;
 
-            const newRoom = {};
-            for (const key in room) newRoom[key] = room[key];
-            newRoom.pieces = result.pieces;
-            newRoom.turn = result.turn;
-            newRoom.mustContinueFrom = result.mustContinueFrom;
-            newRoom.capturedDark = result.capturedDark;
-            newRoom.capturedLight = result.capturedLight;
-            newRoom.moveCount = result.moveCount;
-            newRoom.moveType = result.moveType;
-            newRoom.lastMove = result.lastMove;
-            if (result.mustContinueFrom === null) newRoom.turnStartedAt = Date.now();
-            if (result.winner) {
-                newRoom.winner = result.winner;
-                newRoom.winReason = result.winReason;
-                newRoom.status = "finished";
-            }
-            return newRoom;
+                const newRoom = {};
+                for (const key in room) newRoom[key] = room[key];
+                newRoom.pieces = result.pieces;
+                newRoom.turn = result.turn;
+                newRoom.mustContinueFrom = result.mustContinueFrom;
+                newRoom.capturedDark = result.capturedDark;
+                newRoom.capturedLight = result.capturedLight;
+                newRoom.moveCount = result.moveCount;
+                newRoom.moveType = result.moveType;
+                newRoom.lastMove = result.lastMove;
+                if (result.mustContinueFrom === null) newRoom.turnStartedAt = Date.now();
+                if (result.winner) {
+                    newRoom.winner = result.winner;
+                    newRoom.winReason = result.winReason;
+                    newRoom.status = "finished";
+                }
+                return newRoom;
+            });
+        }).catch(function () {
+            // Если этот шаг по какой-то причине не прошёл — не роняем всю цепочку,
+            // следующий ход всё равно попробует синхронизироваться самостоятельно
         });
     } else {
         const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
@@ -960,6 +993,11 @@ function startOnlineGame() {
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
     boardBuilt = false;
+    pendingSyncChain = Promise.resolve();
+    if (opponentGraceTimer) {
+        clearTimeout(opponentGraceTimer);
+        opponentGraceTimer = null;
+    }
 
     setupPresence();
 
@@ -1019,6 +1057,11 @@ function startOfflineGame() {
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
     boardBuilt = false;
+    pendingSyncChain = Promise.resolve();
+    if (opponentGraceTimer) {
+        clearTimeout(opponentGraceTimer);
+        opponentGraceTimer = null;
+    }
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     currentState = {
