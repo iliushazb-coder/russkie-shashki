@@ -116,6 +116,7 @@ const btnInfoClose = document.getElementById("btn-info-close");
 let roomCode = null;
 let myColor = "light";
 let isOnlineGame = false;
+let isBotGame = false;
 let pendingTimeControlSeconds = 0;
 let roomListenerRef = null;
 let myPresenceRef = null;
@@ -349,9 +350,6 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         }
         pieces[toKey] = moving;
 
-        // ВАЖНО: даже если шашка только что стала дамкой (becameKing), она обязана
-        // продолжить серию взятий, если такая возможность есть — по официальным
-        // правилам русских шашек превращение в дамку не прерывает серию боя.
         const canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
 
         if (canContinue) {
@@ -397,7 +395,10 @@ let flipped = false;
 let lastSeenMoveCount = -1;
 let endGameShownForRoom = null;
 let pieceElements = {};
-let lastRenderedSignature = null;
+let squareElements = {};
+let boardBuilt = false;
+let builtFlipped = null;
+let hintedSquares = [];
 
 function getLabels() {
     if (!flipped) {
@@ -533,13 +534,6 @@ function markMyselfLeftExplicitly() {
     stopPresenceHeartbeat();
 }
 
-let squareElements = {};
-let boardBuilt = false;
-let builtFlipped = null;
-
-// Строит сетку доски (клетки + подписи) ОДИН РАЗ. Повторно вызывается только
-// при смене ориентации доски (переворот под другого игрока) или при первом запуске —
-// НЕ при каждом ходе.
 function ensureBoardBuilt() {
     if (boardBuilt && builtFlipped === flipped) return;
 
@@ -624,8 +618,6 @@ function ensureBoardBuilt() {
     builtFlipped = flipped;
 }
 
-// Обновляет ТОЛЬКО те клетки, где реально изменилась шашка. Остальные ~28 шашек
-// на доске вообще не трогаются — поэтому они больше не "мигают".
 function updateBoardPieces() {
     if (!currentState) return;
     const lastMove = currentState.lastMove;
@@ -685,15 +677,11 @@ function renderBoard() {
     showMoveHints(selectedFrom);
 }
 
-let hintedSquares = [];
-
 function clearMoveHints() {
     hintedSquares.forEach(function (sq) { sq.classList.remove("move-hint"); });
     hintedSquares = [];
 }
 
-// Возвращает список клеток, куда выбранная шашка может сходить прямо сейчас
-// (учитывает обязательное взятие: если бой возможен — возвращаются только клетки боя)
 function getLegalDestinations(pieces, row, col, color, king) {
     const opponent = color === "light" ? "dark" : "light";
     const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
@@ -861,175 +849,119 @@ function handleClick(row, col) {
 }
 
 function performMove(fromRow, fromCol, toRow, toCol) {
-    if (isOnlineGame) {
-        // Сначала проверяем ход локально по тем же правилам, что и сервер
-        const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
-        if (!optimisticResult) return;
+    if (!currentState || currentState.winner) return;
 
-        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase
-        currentState.pieces = optimisticResult.pieces;
-        currentState.turn = optimisticResult.turn;
-        currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
-        currentState.capturedDark = optimisticResult.capturedDark;
-        currentState.capturedLight = optimisticResult.capturedLight;
-        currentState.moveCount = optimisticResult.moveCount;
-        currentState.moveType = optimisticResult.moveType;
-        currentState.lastMove = optimisticResult.lastMove;
-        if (optimisticResult.winner) {
-            currentState.winner = optimisticResult.winner;
-            currentState.winReason = optimisticResult.winReason;
-        }
-        selectedFrom = optimisticResult.mustContinueFrom
-            ? { row: optimisticResult.mustContinueFrom.row, col: optimisticResult.mustContinueFrom.col }
-            : null;
+    const actingColor = isOnlineGame ? myColor : currentState.turn;
+    const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, actingColor);
+    if (!result) return;
 
-        lastSeenMoveCount = currentState.moveCount;
-        lastRenderedSignature = computeGameSignature(currentState);
+    currentState.pieces = result.pieces;
+    currentState.turn = result.turn;
+    currentState.mustContinueFrom = result.mustContinueFrom;
+    currentState.capturedDark = result.capturedDark;
+    currentState.capturedLight = result.capturedLight;
+    currentState.moveCount = result.moveCount;
+    currentState.lastMove = result.lastMove;
+    currentState.winner = result.winner;
+    currentState.winReason = result.winReason;
+    if (currentState.timeControlSeconds) {
+        currentState.turnStartedAt = Date.now();
+    }
 
-        playSoundForMoveType(optimisticResult.moveType);
-        renderBoard();
-
-        // Затем синхронизируем этот же ход с сервером в фоне
-        database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room || !room.pieces || room.winner) return;
-
-            const state = {
-                pieces: room.pieces,
-                turn: room.turn,
-                mustContinueFrom: room.mustContinueFrom || null,
-                capturedDark: room.capturedDark || 0,
-                capturedLight: room.capturedLight || 0,
-                moveCount: room.moveCount || 0
-            };
-
-            const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
-            if (!result) return;
-
-            const newRoom = {};
-            for (const key in room) newRoom[key] = room[key];
-            newRoom.pieces = result.pieces;
-            newRoom.turn = result.turn;
-            newRoom.mustContinueFrom = result.mustContinueFrom;
-            newRoom.capturedDark = result.capturedDark;
-            newRoom.capturedLight = result.capturedLight;
-            newRoom.moveCount = result.moveCount;
-            newRoom.moveType = result.moveType;
-            newRoom.lastMove = result.lastMove;
-            if (result.mustContinueFrom === null) newRoom.turnStartedAt = Date.now();
-            if (result.winner) {
-                newRoom.winner = result.winner;
-                newRoom.winReason = result.winReason;
-                newRoom.status = "finished";
-            }
-            return newRoom;
-        });
+    if (result.mustContinueFrom) {
+        selectedFrom = { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col };
     } else {
-        const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
-        if (result) {
-            currentState.pieces = result.pieces;
-            currentState.turn = result.turn;
-            currentState.mustContinueFrom = result.mustContinueFrom;
-            currentState.capturedDark = result.capturedDark;
-            currentState.capturedLight = result.capturedLight;
-            currentState.moveCount = result.moveCount;
-            currentState.moveType = result.moveType;
-            currentState.lastMove = result.lastMove;
-            if (result.winner) {
-                currentState.winner = result.winner;
-                currentState.winReason = result.winReason;
-            }
-            selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
-            playSoundForMoveType(result.moveType);
-            renderBoard();
-        }
+        selectedFrom = null;
+    }
+
+    playSoundForMoveType(result.moveType);
+    renderBoard();
+
+    if (isOnlineGame && roomCode) {
+        database.ref("rooms/" + roomCode).update({
+            pieces: currentState.pieces,
+            turn: currentState.turn,
+            mustContinueFrom: currentState.mustContinueFrom || null,
+            capturedDark: currentState.capturedDark,
+            capturedLight: currentState.capturedLight,
+            moveCount: currentState.moveCount,
+            lastMove: currentState.lastMove,
+            winner: currentState.winner || null,
+            winReason: currentState.winReason || null,
+            turnStartedAt: currentState.turnStartedAt || null
+        });
+    } else if (isBotGame && !currentState.winner && currentState.turn === "dark") {
+        setTimeout(makeBotMove, 500);
     }
 }
 
-// ===== ЗАПУСК / ПЕРЕЗАПУСК ИГРЫ =====
+// ===== ИГРА С БОТОМ И СЛУШАТЕЛИ =====
 
-function computeGameSignature(state) {
-    const winnerPart = state.winner || "";
-    const winReasonPart = state.winReason || "";
-    const playersPart = JSON.stringify(state.players || null);
-    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart;
+function makeBotMove() {
+    if (!currentState || currentState.winner || currentState.turn !== "dark" || !isBotGame) return;
+
+    const legalMoves = [];
+    for (const key in currentState.pieces) {
+        const p = currentState.pieces[key];
+        if (p.color === "dark") {
+            const parts = key.split("_");
+            const r = parseInt(parts[0]);
+            const c = parseInt(parts[1]);
+
+            if (currentState.mustContinueFrom && (currentState.mustContinueFrom.row !== r || currentState.mustContinueFrom.col !== c)) {
+                continue;
+            }
+
+            const dests = getLegalDestinations(currentState.pieces, r, c, "dark", !!p.king);
+            dests.forEach(function (d) {
+                const testResult = attemptMove(currentState, r, c, d.row, d.col, "dark");
+                if (testResult) {
+                    legalMoves.push({ from: { row: r, col: c }, to: { row: d.row, col: d.col } });
+                }
+            });
+        }
+    }
+
+    if (legalMoves.length === 0) return;
+    const chosen = legalMoves[Math.floor(Math.random() * legalMoves.length)];
+    performMove(chosen.from.row, chosen.from.col, chosen.to.row, chosen.to.col);
 }
 
-function startOnlineGame() {
-    isOnlineGame = true;
-    flipped = (myColor === "dark");
-    lastSeenMoveCount = -1;
-    selectedFrom = null;
-    endGameShownForRoom = null;
-    opponentAbsenceHandled = false;
-    lastRenderedSignature = null;
-    boardBuilt = false;
-
-    setupPresence();
-
+function listenToRoom(code) {
     if (roomListenerRef) roomListenerRef.off();
-    roomListenerRef = database.ref("rooms/" + roomCode);
+
+    roomListenerRef = database.ref("rooms/" + code);
     roomListenerRef.on("value", function (snapshot) {
-        const room = snapshot.val();
-        if (!room || !room.pieces) return;
+        const data = snapshot.val();
+        if (!data) return;
 
-        const newState = {
-            pieces: room.pieces,
-            turn: room.turn,
-            mustContinueFrom: room.mustContinueFrom || null,
-            capturedDark: room.capturedDark || 0,
-            capturedLight: room.capturedLight || 0,
-            moveCount: room.moveCount || 0,
-            lastMove: room.lastMove || null,
-            moveType: room.moveType || null,
-            players: room.players || null,
-            presence: room.presence || null,
-            timeControlSeconds: room.timeControlSeconds || 0,
-            turnStartedAt: room.turnStartedAt || null,
-            winner: room.winner || null,
-            winReason: room.winReason || null
-        };
+        currentState = data;
 
-        const newSignature = computeGameSignature(newState);
-
-        if (newSignature !== lastRenderedSignature) {
-            // Партия реально изменилась (ход, взятие, победа, подключение игрока) —
-            // применяем новое состояние полностью, включая пересчёт выбранной шашки
-            currentState = newState;
-
-            if (currentState.turn === myColor && currentState.mustContinueFrom) {
-                selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
-            } else {
-                selectedFrom = null;
+        if (data.moveCount !== lastSeenMoveCount) {
+            if (lastSeenMoveCount !== -1 && data.lastMove) {
+                playSoundForMoveType(data.moveType || "move");
             }
-
-            if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
-                playSoundForMoveType(currentState.moveType);
-            }
-            lastSeenMoveCount = currentState.moveCount;
-            lastRenderedSignature = newSignature;
-            renderBoard();
-        } else if (currentState) {
-            // Ничего в самой партии не изменилось — это просто heartbeat статуса "в сети".
-            // ВАЖНО: не трогаем currentState.pieces/turn и НЕ сбрасываем selectedFrom —
-            // именно этот сброс раньше "съедал" выбор шашки игрока в середине хода
-            // и вызывал ощущение задержки в 3-5 секунд или необходимость нажать дважды.
-            currentState.presence = newState.presence;
-            updatePresenceOnly();
+            lastSeenMoveCount = data.moveCount;
         }
+
+        renderBoard();
     });
 }
 
-function startOfflineGame() {
+function startNewLocalGame(vsBot) {
     isOnlineGame = false;
+    isBotGame = vsBot;
+    roomCode = null;
     myColor = "light";
     flipped = false;
     selectedFrom = null;
+    lastSeenMoveCount = -1;
     endGameShownForRoom = null;
-    opponentAbsenceHandled = false;
-    lastRenderedSignature = null;
-    boardBuilt = false;
-    stopPresenceHeartbeat();
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+
+    const user = getMyTelegramUser();
+    myTelegramId = user.id;
+    myTelegramName = user.name;
+
     currentState = {
         pieces: createInitialPieces(),
         turn: "light",
@@ -1037,445 +969,146 @@ function startOfflineGame() {
         capturedDark: 0,
         capturedLight: 0,
         moveCount: 0,
-        lastMove: null,
-        moveType: null,
-        players: { light: { name: "Игрок 1" }, dark: { name: "Игрок 2" } },
-        timeControlSeconds: 0,
-        turnStartedAt: null,
+        players: {
+            light: { id: myTelegramId, name: myTelegramName },
+            dark: { id: vsBot ? "bot" : "player2", name: vsBot ? "Бот" : "Игрок 2" }
+        },
         winner: null,
         winReason: null
     };
+
+    showScreen(gameScreen);
     renderBoard();
 }
 
-// ===== АКТИВНЫЕ ИГРЫ =====
+function checkStartParamAndJoin() {
+    const tg = window.Telegram?.WebApp;
+    let startParam = null;
 
-function loadActiveRooms() {
-    const sectionEl = document.getElementById("active-rooms-section");
-    const listEl = document.getElementById("active-rooms-list");
-    const noGameText = document.getElementById("no-active-game-text");
-    database.ref("users/" + myTelegramId + "/rooms").once("value").then(function (snapshot) {
+    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) {
+        startParam = tg.initDataUnsafe.start_param;
+    } else {
+        const urlParams = new URLSearchParams(window.location.search);
+        startParam = urlParams.get("start_param") || urlParams.get("tgWebAppStartParam");
+    }
+
+    if (startParam) {
+        joinOnlineRoom(startParam);
+        return true;
+    }
+    return false;
+}
+
+function joinOnlineRoom(code) {
+    isOnlineGame = true;
+    isBotGame = false;
+    roomCode = code;
+    selectedFrom = null;
+    lastSeenMoveCount = -1;
+    endGameShownForRoom = null;
+    opponentAbsenceHandled = false;
+
+    const user = getMyTelegramUser();
+    myTelegramId = user.id;
+    myTelegramName = user.name;
+
+    database.ref("rooms/" + code).once("value").then(function (snapshot) {
         const data = snapshot.val();
         if (!data) {
-            sectionEl.classList.add("hidden");
-            noGameText.classList.remove("hidden");
-            return;
-        }
-        const codes = Object.keys(data);
-        if (codes.length === 0) {
-            sectionEl.classList.add("hidden");
-            noGameText.classList.remove("hidden");
+            alert("Комната не найдена.");
+            showScreen(menuScreen);
             return;
         }
 
-        let pending = codes.length;
-        const items = [];
-        codes.forEach(function (code) {
-            database.ref("rooms/" + code).once("value").then(function (roomSnap) {
-                pending--;
-                const room = roomSnap.val();
-
-                const lightP = room && room.players && room.players.light;
-                const darkP = room && room.players && room.players.dark;
-                const bothPlayersExist = !!(lightP && darkP && lightP.id && darkP.id);
-                const differentPlayers = bothPlayersExist && lightP.id !== darkP.id;
-                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner;
-
-                if (isValidActiveGame) {
-                    items.push({ code: code, opponent: data[code].opponentName || "Соперник", color: data[code].myColor });
-                } else {
-                    database.ref("users/" + myTelegramId + "/rooms/" + code).remove();
-                }
-
-                if (pending === 0) {
-                    listEl.innerHTML = "";
-                    if (items.length === 0) {
-                        sectionEl.classList.add("hidden");
-                        noGameText.classList.remove("hidden");
-                        return;
-                    }
-                    sectionEl.classList.remove("hidden");
-                    noGameText.classList.add("hidden");
-                    items.forEach(function (item) {
-                        const btn = document.createElement("button");
-                        btn.className = "menu-button room-item-button";
-                        btn.textContent = "Игра против " + item.opponent;
-                        btn.addEventListener("click", function () {
-                            roomCode = item.code;
-                            myColor = item.color;
-                            isOnlineGame = true;
-                            showScreen(gameScreen);
-                            startOnlineGame();
-                        });
-                        listEl.appendChild(btn);
-                    });
-                }
-            }).catch(function () {
-                pending--;
+        if (data.players && data.players.light && data.players.light.id === myTelegramId) {
+            myColor = "light";
+            flipped = false;
+        } else {
+            myColor = "dark";
+            flipped = true;
+            database.ref("rooms/" + code + "/players/dark").set({
+                id: myTelegramId,
+                name: myTelegramName
             });
-        });
-    }).catch(function () {
-        sectionEl.classList.add("hidden");
-        noGameText.classList.remove("hidden");
-    });
-}
-
-// ===== КНОПКИ МЕНЮ =====
-
-btnPlayFriend.addEventListener("click", function () {
-    showScreen(timeControlScreen);
-});
-
-const timeOptionButtons = document.querySelectorAll(".time-option");
-timeOptionButtons.forEach(function (btn) {
-    btn.addEventListener("click", function () {
-        pendingTimeControlSeconds = parseInt(btn.dataset.seconds);
-        createRoomAndShowWaiting();
-    });
-});
-
-function createRoomAndShowWaiting() {
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    stopPresenceHeartbeat();
-    roomCode = generateRoomCode();
-    myColor = "light";
-    isOnlineGame = true;
-
-    const initialState = {
-        status: "waiting",
-        turn: "light",
-        mustContinueFrom: null,
-        capturedDark: 0,
-        capturedLight: 0,
-        moveCount: 0,
-        lastMove: null,
-        moveType: null,
-        pieces: createInitialPieces(),
-        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
-        timeControlSeconds: pendingTimeControlSeconds,
-        turnStartedAt: Date.now(),
-        winner: null,
-        winReason: null
-    };
-
-    database.ref("rooms/" + roomCode).set(initialState).then(function () {
-        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-            opponentName: "Ожидание подключения...",
-            myColor: "light"
-        });
-    }).catch(function () {
-        showInfoModal("Не удалось создать игру. Проверьте интернет-соединение и попробуйте снова.", true);
-    });
-
-    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
-    inviteLinkBox.textContent = link;
-
-    showScreen(waitingScreen);
-
-    database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
-        if (snapshot.val() === "active") {
-            database.ref("rooms/" + roomCode + "/status").off();
-            waitingText.textContent = "Друг подключился! Начинаем игру.";
-            setTimeout(function () {
-                showScreen(gameScreen);
-                startOnlineGame();
-            }, 1000);
         }
+
+        setupPresence();
+        showScreen(gameScreen);
+        listenToRoom(code);
     });
 }
 
-btnShareLink.addEventListener("click", function () {
-    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
-    const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
-    if (window.Telegram && window.Telegram.WebApp) {
-        Telegram.WebApp.openTelegramLink(shareUrl);
-    } else {
-        window.open(shareUrl, "_blank");
-    }
-});
+function initUserAndEvents() {
+    const user = getMyTelegramUser();
+    myTelegramId = user.id;
+    myTelegramName = user.name;
 
-btnPlayBot.addEventListener("click", function () {
-    showScreen(gameScreen);
-    startOfflineGame();
-});
+    btnPlayBot.addEventListener("click", function () {
+        startNewLocalGame(true);
+    });
 
-// ===== СДАТЬСЯ =====
+    btnPlayFriend.addEventListener("click", function () {
+        showScreen(timeControlScreen);
+    });
 
-btnResign.addEventListener("click", function () {
-    resignConfirmModal.classList.remove("hidden");
-});
+    btnResign.addEventListener("click", function () {
+        resignConfirmModal.classList.remove("hidden");
+    });
 
-btnResignNo.addEventListener("click", function () {
-    resignConfirmModal.classList.add("hidden");
-});
+    btnResignNo.addEventListener("click", function () {
+        resignConfirmModal.classList.add("hidden");
+    });
 
-btnResignYes.addEventListener("click", function () {
-    resignConfirmModal.classList.add("hidden");
-    if (!currentState) return;
+    btnResignYes.addEventListener("click", function () {
+        resignConfirmModal.classList.add("hidden");
+        if (!currentState || currentState.winner) return;
 
-    if (isOnlineGame) {
-        database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room || room.winner) return;
-            const newRoom = {};
-            for (const key in room) newRoom[key] = room[key];
-            newRoom.winner = myColor === "light" ? "dark" : "light";
-            newRoom.winReason = "resign";
-            newRoom.status = "finished";
-            return newRoom;
-        });
-    } else {
-        currentState.winner = currentState.turn === "light" ? "dark" : "light";
+        const winnerColor = myColor === "light" ? "dark" : "light";
+        currentState.winner = winnerColor;
         currentState.winReason = "resign";
         renderBoard();
-    }
-});
 
-// ===== НОВАЯ ИГРА / ЗАКРЫТЬ =====
-
-btnCloseGame.addEventListener("click", function () {
-    endGameModal.classList.add("hidden");
-    markMyselfLeftExplicitly();
-    if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
-});
-
-btnNewGame.addEventListener("click", function () {
-    endGameModal.classList.add("hidden");
-
-    if (isOnlineGame) {
-        database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room) return;
-            const newRoom = {};
-            for (const key in room) newRoom[key] = room[key];
-            newRoom.pieces = createInitialPieces();
-            newRoom.turn = "light";
-            newRoom.mustContinueFrom = null;
-            newRoom.capturedDark = 0;
-            newRoom.capturedLight = 0;
-            newRoom.moveCount = 0;
-            newRoom.moveType = null;
-            newRoom.lastMove = null;
-            newRoom.winner = null;
-            newRoom.winReason = null;
-            newRoom.status = "active";
-            newRoom.turnStartedAt = Date.now();
-            return newRoom;
-        });
-    } else {
-        startOfflineGame();
-    }
-});
-
-// ===== ТАЙМЕР ХОДА =====
-
-setInterval(function () {
-    if (!gameScreen.classList.contains("hidden")) {
-        updateTimerDisplay();
-        checkTimeout();
-        updatePresenceOnly();
-    }
-}, 1000);
-
-function updatePresenceOnly() {
-    if (!isOnlineGame || !currentState) return;
-    const topColor = flipped ? "light" : "dark";
-    const bottomColor = flipped ? "dark" : "light";
-    applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
-    applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
-    checkOpponentAbsence();
-}
-
-function checkTimeout() {
-    if (!isOnlineGame || !currentState || currentState.winner) return;
-    if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
-
-    const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
-    if (elapsed <= currentState.timeControlSeconds) return;
-
-    const loser = currentState.turn;
-    database.ref("rooms/" + roomCode).transaction(function (room) {
-        if (!room || room.winner) return;
-        if (room.turn !== loser) return room;
-        const newRoom = {};
-        for (const key in room) newRoom[key] = room[key];
-        newRoom.winner = loser === "light" ? "dark" : "light";
-        newRoom.winReason = "timeout";
-        newRoom.status = "finished";
-        return newRoom;
-    });
-}
-
-// ===== ПРИСОЕДИНЕНИЕ ПО ССЫЛКЕ =====
-
-function showInfoModal(text, offerNewGame) {
-    infoModalText.textContent = text;
-    if (offerNewGame) {
-        btnInfoNewGame.classList.remove("hidden");
-    } else {
-        btnInfoNewGame.classList.add("hidden");
-    }
-    infoModal.classList.remove("hidden");
-}
-
-function checkForInviteLink() {
-    let startParam = null;
-    if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
-        startParam = Telegram.WebApp.initDataUnsafe.start_param;
-    }
-
-    if (!startParam) return false;
-
-    roomCode = startParam;
-
-    showScreen(waitingScreen);
-    waitingText.textContent = "Проверяем игру...";
-    inviteLinkBox.classList.add("hidden");
-    btnShareLink.classList.add("hidden");
-
-    let settled = false;
-    const timeoutId = setTimeout(function () {
-        if (!settled) {
-            settled = true;
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", true);
-        }
-    }, 10000);
-
-    database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
-        if (settled) return;
-        const room = snapshot.val();
-
-        if (!room || room.status === "finished" || room.winner) {
-            settled = true;
-            clearTimeout(timeoutId);
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal("Нет активной игры", true);
-            return;
-        }
-
-        const creatorId = (room.players && room.players.light) ? room.players.light.id : null;
-        const creatorName = (room.players && room.players.light) ? room.players.light.name : "Соперник";
-
-        if (creatorId && creatorId === myTelegramId) {
-            settled = true;
-            clearTimeout(timeoutId);
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal("Нельзя играть против самого себя", false);
-            return;
-        }
-
-        if (room.players && room.players.dark && room.players.dark.id && room.players.dark.id !== myTelegramId) {
-            settled = true;
-            clearTimeout(timeoutId);
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal("Нет активной игры", true);
-            return;
-        }
-
-        myColor = "dark";
-        isOnlineGame = true;
-        waitingText.textContent = "Подключаемся к другу...";
-
-        database.ref("rooms/" + roomCode).update({
-            status: "active",
-            "players/dark": { id: myTelegramId, name: myTelegramName },
-            turnStartedAt: Date.now()
-        }).then(function () {
-            settled = true;
-            clearTimeout(timeoutId);
-            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-                opponentName: creatorName,
-                myColor: "dark"
+        if (isOnlineGame && roomCode) {
+            database.ref("rooms/" + roomCode).update({
+                winner: winnerColor,
+                winReason: "resign"
             });
-            if (creatorId) {
-                database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
-                    opponentName: myTelegramName
-                });
-            }
-            setTimeout(function () {
-                showScreen(gameScreen);
-                startOnlineGame();
-            }, 800);
-        }).catch(function () {
-            if (settled) return;
-            settled = true;
-            clearTimeout(timeoutId);
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", true);
-        });
-    }).catch(function () {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutId);
-        roomCode = null;
-        showScreen(menuScreen);
-        loadActiveRooms();
-        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", true);
+        }
     });
 
-    return true;
-}
-
-// ===== МОДАЛКА "СОПЕРНИК ПОКИНУЛ ИГРУ" =====
-
-btnNewGameAfterLeave.addEventListener("click", function () {
-    opponentLeftModal.classList.add("hidden");
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    stopPresenceHeartbeat();
-    roomCode = null;
-    currentState = null;
-    isOnlineGame = true;
-    showScreen(timeControlScreen);
-});
-
-btnCloseAfterLeave.addEventListener("click", function () {
-    opponentLeftModal.classList.add("hidden");
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    stopPresenceHeartbeat();
-    if (window.Telegram && window.Telegram.WebApp) {
-        Telegram.WebApp.close();
-    } else {
-        roomCode = null;
-        currentState = null;
+    btnNewGame.addEventListener("click", function () {
+        endGameModal.classList.add("hidden");
         showScreen(menuScreen);
-        loadActiveRooms();
+    });
+
+    btnCloseGame.addEventListener("click", function () {
+        markMyselfLeftExplicitly();
+        endGameModal.classList.add("hidden");
+        showScreen(menuScreen);
+    });
+
+    if (btnNewGameAfterLeave) {
+        btnNewGameAfterLeave.addEventListener("click", function () {
+            opponentLeftModal.classList.add("hidden");
+            showScreen(menuScreen);
+        });
     }
-});
 
-// ===== МОДАЛКА "НЕТ ИГРЫ / НЕЛЬЗЯ ИГРАТЬ С СОБОЙ" =====
+    if (btnCloseAfterLeave) {
+        btnCloseAfterLeave.addEventListener("click", function () {
+            opponentLeftModal.classList.add("hidden");
+            showScreen(menuScreen);
+        });
+    }
 
-btnInfoNewGame.addEventListener("click", function () {
-    infoModal.classList.add("hidden");
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    stopPresenceHeartbeat();
-    roomCode = null;
-    currentState = null;
-    isOnlineGame = true;
-    showScreen(timeControlScreen);
-});
+    const joined = checkStartParamAndJoin();
+    if (!joined) {
+        showScreen(menuScreen);
+    }
 
-btnInfoClose.addEventListener("click", function () {
-    infoModal.classList.add("hidden");
-    showScreen(menuScreen);
-    loadActiveRooms();
-});
-
-// ===== СТАРТ ПРИЛОЖЕНИЯ =====
-
-const me = getMyTelegramUser();
-myTelegramId = me.id;
-myTelegramName = me.name;
-
-const joinedViaLink = checkForInviteLink();
-if (!joinedViaLink) {
-    loadActiveRooms();
+    setInterval(updateTimerDisplay, 500);
 }
+
+document.addEventListener("DOMContentLoaded", function () {
+    initUserAndEvents();
+});
