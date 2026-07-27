@@ -817,9 +817,11 @@ function renderEndGameModal() {
 }
 
 function updateSelectionDom(oldSel, newSel) {
-    if (oldSel) {
-        const oldEl = pieceElements[oldSel.row + "_" + oldSel.col];
-        if (oldEl) oldEl.classList.remove("selected");
+    // Снимаем "selected" со ВСЕХ шашек на доске, а не только с ранее запомненной одной —
+    // это исключает рассинхронизацию между тем, что видно на экране, и тем,
+    // что игра считает выбранным внутри себя
+    for (const key in pieceElements) {
+        pieceElements[key].classList.remove("selected");
     }
     if (newSel) {
         const newEl = pieceElements[newSel.row + "_" + newSel.col];
