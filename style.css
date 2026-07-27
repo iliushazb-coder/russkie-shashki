@@ -462,12 +462,14 @@ h1 {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    font-size: clamp(15px, 4.2vw, 23px);
-    background: linear-gradient(180deg, #fff2c2, #d4af37 55%, #9c7a1e);
+    font-size: clamp(16px, 4.4vw, 24px);
+    line-height: 1;
+    background: linear-gradient(180deg, #fff6d8, #ffd75e 40%, #d4af37 70%, #9c7a1e);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
-    filter: drop-shadow(0 0 4px rgba(255,215,110,0.7));
+    -webkit-text-stroke: 0.6px rgba(40, 25, 5, 0.65);
+    filter: drop-shadow(0 0 3px rgba(255,215,110,0.8)) drop-shadow(0 1px 1px rgba(0,0,0,0.5));
     z-index: 3;
 }
 

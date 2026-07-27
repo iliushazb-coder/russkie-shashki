@@ -348,10 +348,10 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         }
         pieces[toKey] = moving;
 
-        let canContinue = false;
-        if (!becameKing) {
-            canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
-        }
+        // ВАЖНО: даже если шашка только что стала дамкой (becameKing), она обязана
+        // продолжить серию взятий, если такая возможность есть — по официальным
+        // правилам русских шашек превращение в дамку не прерывает серию боя.
+        const canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
 
         if (canContinue) {
             mustContinueFrom = { row: toRow, col: toCol };
@@ -531,11 +531,21 @@ function markMyselfLeftExplicitly() {
     }
     stopPresenceHeartbeat();
 }
+let squareElements = {};
+let boardBuilt = false;
+let builtFlipped = null;
 
-function renderBoard() {
+// Строит сетку доски (клетки + подписи) ОДИН РАЗ. Повторно вызывается только
+// при смене ориентации доски (переворот под другого игрока) или при первом запуске —
+// НЕ при каждом ходе. Именно многократное пересоздание этой сетки было причиной
+// того, что все шашки на мгновение "испарялись" при каждом ходе.
+function ensureBoardBuilt() {
+    if (boardBuilt && builtFlipped === flipped) return;
+
     const wrapper = document.getElementById("board-wrapper");
     wrapper.innerHTML = "";
     pieceElements = {};
+    squareElements = {};
 
     const labels = getLabels();
     const boardDiv = document.createElement("div");
@@ -583,9 +593,6 @@ function renderBoard() {
     wrapper.appendChild(rightLabels);
     wrapper.appendChild(boardDiv);
 
-    if (!currentState) return;
-    const lastMove = currentState.lastMove;
-
     for (let dispRow = 0; dispRow < 8; dispRow++) {
         for (let dispCol = 0; dispCol < 8; dispCol++) {
             let row, col;
@@ -605,27 +612,75 @@ function renderBoard() {
             const isDark = (row + col) % 2 !== 0;
             square.classList.add(isDark ? "dark" : "light");
 
-            if (lastMove) {
-                const isFrom = lastMove.from.row === row && lastMove.from.col === col;
-                const isTo = lastMove.to.row === row && lastMove.to.col === col;
-                if (isFrom || isTo) square.classList.add("last-move");
-            }
-
-            const pieceData = pieceAt(currentState.pieces, row, col);
-            if (pieceData) {
-                const piece = document.createElement("div");
-                piece.classList.add("piece", pieceData.color === "light" ? "piece-light" : "piece-dark");
-                if (pieceData.king) piece.classList.add("king");
-                if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) piece.classList.add("selected");
-                square.appendChild(piece);
-                pieceElements[row + "_" + col] = piece;
-            }
-
             square.addEventListener("click", function () { handleClick(row, col); });
             boardDiv.appendChild(square);
+            squareElements[row + "_" + col] = square;
         }
     }
 
+    boardBuilt = true;
+    builtFlipped = flipped;
+}
+
+// Обновляет ТОЛЬКО те клетки, где реально изменилась шашка (ход, взятие, превращение
+// в дамку), плюс подсветку последнего хода и выбранной шашки. Остальные ~28 шашек
+// на доске вообще не трогаются — поэтому они больше не "мигают".
+function updateBoardPieces() {
+    if (!currentState) return;
+    const lastMove = currentState.lastMove;
+
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            const key = row + "_" + col;
+            const square = squareElements[key];
+            if (!square) continue;
+
+            const isLastMove = !!(lastMove && (
+                (lastMove.from.row === row && lastMove.from.col === col) ||
+                (lastMove.to.row === row && lastMove.to.col === col)
+            ));
+            square.classList.toggle("last-move", isLastMove);
+
+            const pieceData = pieceAt(currentState.pieces, row, col);
+            const existingPieceEl = pieceElements[key];
+            const isSelected = !!(selectedFrom && selectedFrom.row === row && selectedFrom.col === col);
+
+            if (!pieceData) {
+                if (existingPieceEl) {
+                    existingPieceEl.remove();
+                    delete pieceElements[key];
+                }
+                continue;
+            }
+
+            const desiredIsKing = !!pieceData.king;
+            const existingIsKing = existingPieceEl ? existingPieceEl.classList.contains("king") : null;
+            const existingColor = existingPieceEl ? existingPieceEl.dataset.pieceColor : null;
+
+            if (existingPieceEl && existingColor === pieceData.color && existingIsKing === desiredIsKing) {
+                // Эта же шашка уже правильно отображена в этой клетке — просто обновляем выделение
+                existingPieceEl.classList.toggle("selected", isSelected);
+                continue;
+            }
+
+            // Шашки здесь не было, либо она изменилась (например, стала дамкой) — создаём заново
+            if (existingPieceEl) {
+                existingPieceEl.remove();
+            }
+            const piece = document.createElement("div");
+            piece.classList.add("piece", pieceData.color === "light" ? "piece-light" : "piece-dark");
+            piece.dataset.pieceColor = pieceData.color;
+            if (desiredIsKing) piece.classList.add("king");
+            if (isSelected) piece.classList.add("selected");
+            square.appendChild(piece);
+            pieceElements[key] = piece;
+        }
+    }
+}
+
+function renderBoard() {
+    ensureBoardBuilt();
+    updateBoardPieces();
     renderPlayerPanels();
     renderEndGameModal();
 }
@@ -724,6 +779,36 @@ function handleClick(row, col) {
 }
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
+        // Сначала проверяем ход локально по тем же правилам, что и сервер
+        const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
+        if (!optimisticResult) return;
+
+        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
+        // это устраняет ощутимую задержку в 3-5 секунд на нажатие
+        currentState.pieces = optimisticResult.pieces;
+        currentState.turn = optimisticResult.turn;
+        currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
+        currentState.capturedDark = optimisticResult.capturedDark;
+        currentState.capturedLight = optimisticResult.capturedLight;
+        currentState.moveCount = optimisticResult.moveCount;
+        currentState.moveType = optimisticResult.moveType;
+        currentState.lastMove = optimisticResult.lastMove;
+        if (optimisticResult.winner) {
+            currentState.winner = optimisticResult.winner;
+            currentState.winReason = optimisticResult.winReason;
+        }
+        selectedFrom = optimisticResult.mustContinueFrom
+            ? { row: optimisticResult.mustContinueFrom.row, col: optimisticResult.mustContinueFrom.col }
+            : null;
+
+        lastSeenMoveCount = currentState.moveCount;
+        lastRenderedSignature = computeGameSignature(currentState);
+
+        playSoundForMoveType(optimisticResult.moveType);
+        renderBoard();
+
+        // Затем синхронизируем этот же ход с сервером в фоне — Firebase остаётся
+        // единственным источником истины и сам исправит состояние, если что-то разойдётся
         database.ref("rooms/" + roomCode).transaction(function (room) {
             if (!room || !room.pieces || room.winner) return;
 
@@ -796,6 +881,7 @@ function startOnlineGame() {
     endGameShownForRoom = null;
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
+    boardBuilt = false;
 
     setupPresence();
 
@@ -851,6 +937,7 @@ function startOfflineGame() {
     endGameShownForRoom = null;
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
+    boardBuilt = false;
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     currentState = {
@@ -942,7 +1029,6 @@ function loadActiveRooms() {
         noGameText.classList.remove("hidden");
     });
 }
-
 // ===== КНОПКИ МЕНЮ =====
 
 btnPlayFriend.addEventListener("click", function () {
@@ -1126,6 +1212,7 @@ function checkTimeout() {
         return newRoom;
     });
 }
+
 // ===== ПРИСОЕДИНЕНИЕ ПО ССЫЛКЕ =====
 
 function showInfoModal(text, offerNewGame) {
