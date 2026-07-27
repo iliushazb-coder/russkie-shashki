@@ -480,8 +480,6 @@ function checkOpponentAbsence() {
     const info = statusForColor(oppColor);
 
     if (info.cls === "status-left") {
-        // Соперник пропал (потерял соединение / закрыл приложение) — не завершаем
-        // партию сразу, а даём 60 секунд на то, чтобы он мог вернуться
         if (!opponentGraceTimer) {
             opponentGraceTimer = setTimeout(function () {
                 opponentGraceTimer = null;
@@ -501,7 +499,6 @@ function checkOpponentAbsence() {
             }, RECONNECT_GRACE_MS);
         }
     } else {
-        // Соперник снова в сети — отменяем отсчёт, если он был запущен
         if (opponentGraceTimer) {
             clearTimeout(opponentGraceTimer);
             opponentGraceTimer = null;
@@ -883,8 +880,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
 
-        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
-        // это устраняет ощутимую задержку в 3-5 секунд на нажатие
+        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase
         currentState.pieces = optimisticResult.pieces;
         currentState.turn = optimisticResult.turn;
         currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
@@ -907,15 +903,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         playSoundForMoveType(optimisticResult.moveType);
         renderBoard();
 
-        // Затем синхронизируем этот же ход с сервером в фоне. ВАЖНО: отправляем
-        // запросы к Firebase СТРОГО по очереди (через pendingSyncChain), а не
-        // параллельно. Если во время серии ударов кликать быстро, несколько
-        // запросов могли уйти почти одновременно — и следующий иногда "видел"
-        // на сервере ещё не зафиксированный предыдущий ход, из-за чего сам
-        // отклонялся как невозможный, а финальный шаг серии терялся. Теперь
-        // каждый следующий запрос ждёт завершения предыдущего, прежде чем уйти
-        // на сервер — на скорость отклика для игрока это не влияет (локально
-        // всё по-прежнему происходит мгновенно).
+        // Затем синхронизируем этот же ход с сервером в фоне, строго по очереди
         pendingSyncChain = pendingSyncChain.then(function () {
             return database.ref("rooms/" + roomCode).transaction(function (room) {
                 if (!room || !room.pieces || room.winner) return;
@@ -951,8 +939,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 return newRoom;
             });
         }).catch(function () {
-            // Если этот шаг по какой-то причине не прошёл — не роняем всю цепочку,
-            // следующий ход всё равно попробует синхронизироваться самостоятельно
+            // Если этот шаг по какой-то причине не прошёл — не роняем всю цепочку
         });
     } else {
         const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
@@ -1025,6 +1012,20 @@ function startOnlineGame() {
         };
 
         const newSignature = computeGameSignature(newState);
+
+        // ВАЖНО: если во время серии ударов кликать быстро, локальное состояние
+        // может "убежать" вперёд раньше, чем сервер успеет подтвердить каждый шаг
+        // по отдельности. В этом случае сюда прилетает "эхо" от сервера про ход,
+        // который уже устарел — если такое эхо применить как есть, оно откатит
+        // экран назад, будто серия ударов прервалась раньше времени. Поэтому:
+        // если номер хода в пришедших данных МЕНЬШЕ того, что уже показано на
+        // экране — это устаревшее эхо нашего же более раннего хода, и его нужно
+        // просто проигнорировать, дождавшись, пока сервер "догонит" локальный прогресс.
+        if (currentState && newState.moveCount < lastSeenMoveCount) {
+            currentState.presence = newState.presence;
+            updatePresenceOnly();
+            return;
+        }
 
         if (newSignature !== lastRenderedSignature) {
             currentState = newState;
