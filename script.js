@@ -1408,6 +1408,7 @@ function loadActiveRooms() {
     const sectionEl = document.getElementById("active-rooms-section");
     const listEl = document.getElementById("active-rooms-list");
     const noGameText = document.getElementById("no-active-game-text");
+    if (!sectionEl || !listEl || !noGameText) return;
     database.ref("users/" + myTelegramId + "/rooms").once("value").then(function (snapshot) {
         const data = snapshot.val();
         if (!data) {
@@ -1912,11 +1913,15 @@ function openStatsModal() {
     });
 }
 
-btnShowStats.addEventListener("click", openStatsModal);
+if (btnShowStats) {
+    btnShowStats.addEventListener("click", openStatsModal);
+}
 
-btnStatsClose.addEventListener("click", function () {
-    statsModal.classList.add("hidden");
-});
+if (btnStatsClose) {
+    btnStatsClose.addEventListener("click", function () {
+        statsModal.classList.add("hidden");
+    });
+}
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
 
