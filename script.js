@@ -19,60 +19,91 @@ firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
 
 // ===== ЗВУКИ =====
-// ASMR-звуки деревянной доски — воспроизводятся из файлов, которые нужно
-// положить в папку sounds/ рядом с index.html:
-//   sounds/move.mp3          — обычный тихий ход
-//   sounds/capture.mp3       — взятие обычной шашкой (более резкий стук)
-//   sounds/king.mp3          — момент превращения в дамку (торжественный акцент)
-//   sounds/king-capture.mp3  — взятие ДАМКОЙ (самый мощный, увесистый удар)
-//   sounds/win.mp3           — окончание партии
+// Синтезируются прямо в браузере (Web Audio API) — не требуют никаких
+// внешних файлов, поэтому звук гарантированно работает всегда.
 
-const soundFiles = {
-    move: "sounds/move.mp3",
-    capture: "sounds/capture.mp3",
-    king: "sounds/king.mp3",
-    kingCapture: "sounds/king-capture.mp3",
-    win: "sounds/win.mp3"
-};
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
-const audioCache = {};
-
-function getAudio(key) {
-    if (!audioCache[key]) {
-        const audio = new Audio(soundFiles[key]);
-        audio.preload = "auto";
-        audioCache[key] = audio;
-    }
-    return audioCache[key];
+function playTone(frequency, duration, volume) {
+    const oscillator = audioContext.createOscillator();
+    const gainNode = audioContext.createGain();
+    oscillator.connect(gainNode);
+    gainNode.connect(audioContext.destination);
+    oscillator.frequency.value = frequency;
+    oscillator.type = "sine";
+    gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+    oscillator.start();
+    oscillator.stop(audioContext.currentTime + duration);
 }
 
-function playSound(key) {
-    try {
-        const audio = getAudio(key);
-        audio.currentTime = 0;
-        const playPromise = audio.play();
-        if (playPromise && typeof playPromise.catch === "function") {
-            playPromise.catch(function () {
-                // Браузер мог заблокировать автовоспроизведение до первого
-                // взаимодействия пользователя с экраном — это не критично,
-                // игра продолжает работать без звука в этом единичном случае
-            });
-        }
-    } catch (e) {
-        // Файл ещё не подложен или не поддерживается устройством —
-        // не должно прерывать саму игру
+// Глухой "деревянный" стук — фильтрованный шум с быстрым затуханием,
+// звучит гораздо реалистичнее, чем чистый электронный тон
+function playWoodKnock(duration, volume, filterFreq) {
+    const bufferSize = Math.floor(audioContext.sampleRate * duration);
+    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 3);
     }
+    const noise = audioContext.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = audioContext.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.value = filterFreq;
+    filter.Q.value = 1.1;
+
+    const gain = audioContext.createGain();
+    gain.gain.setValueAtTime(volume, audioContext.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(audioContext.destination);
+    noise.start();
 }
 
-function playMoveSound() { playSound("move"); }
-function playCaptureSound() { playSound("capture"); }
-function playKingSound() { playSound("king"); }
-function playKingCaptureSound() { playSound("kingCapture"); }
-function playWinSound() { playSound("win"); }
+// Лёгкий выбор шашки — короткий, тихий, высокий стук
+function playSelectSound() {
+    playWoodKnock(0.045, 0.14, 2600);
+}
+
+// Обычный ход — мягкий, короткий стук дерева по дереву
+function playMoveSound() {
+    playWoodKnock(0.09, 0.32, 1700);
+}
+
+// Взятие — более глубокий, выразительный двойной удар
+function playCaptureSound() {
+    playWoodKnock(0.13, 0.5, 850);
+    setTimeout(function () { playWoodKnock(0.1, 0.32, 650); }, 55);
+}
+
+// Превращение в дамку — короткая торжественная восходящая трель
+function playKingSound() {
+    playTone(523, 0.1, 0.22);
+    setTimeout(function () { playTone(659, 0.1, 0.24); }, 90);
+    setTimeout(function () { playTone(784, 0.22, 0.26); }, 180);
+}
+
+// Взятие уже готовой дамкой — самый тяжёлый, мощный удар
+function playKingCaptureSound() {
+    playWoodKnock(0.18, 0.6, 600);
+    setTimeout(function () { playWoodKnock(0.13, 0.42, 480); }, 65);
+    setTimeout(function () { playTone(880, 0.14, 0.18); }, 150);
+}
+
+// Окончание партии
+function playWinSound() {
+    playTone(392, 0.15, 0.3);
+    setTimeout(function () { playTone(523, 0.15, 0.3); }, 150);
+    setTimeout(function () { playTone(659, 0.3, 0.3); }, 300);
+}
 
 // wasKing — била ли ЭТА шашка уже будучи дамкой (а не только что ставшая ею).
-// Только для выбора звука: превращение всегда играет king.mp3, а взятие уже
-// готовой дамкой — самый увесистый king-capture.mp3, отдельно от простого capture.mp3
+// Только для выбора звука: превращение всегда играет king-эффект, а взятие уже
+// готовой дамкой — самый увесистый вариант, отдельно от простого взятия
 function playSoundForMoveType(type, wasKing) {
     if (type === "king") {
         playKingSound();
@@ -142,6 +173,11 @@ const infoModal = document.getElementById("info-modal");
 const infoModalText = document.getElementById("info-modal-text");
 const btnInfoNewGame = document.getElementById("btn-info-new-game");
 const btnInfoClose = document.getElementById("btn-info-close");
+const btnShowStats = document.getElementById("btn-show-stats");
+const statsModal = document.getElementById("stats-modal");
+const statsMySummary = document.getElementById("stats-my-summary");
+const statsLeaderboard = document.getElementById("stats-leaderboard");
+const btnStatsClose = document.getElementById("btn-stats-close");
 
 let roomCode = null;
 let myColor = "light";
@@ -560,24 +596,45 @@ function renderCapturedIcons(container, count, iconClass) {
     }
 }
 
+// Кэш статистики игроков (побед/поражений), чтобы не запрашивать базу
+// при каждой мелкой перерисовке панели — грузим один раз на игрока за партию
+let statsCache = {};
+
+function fetchAndCacheStatsIfNeeded(id) {
+    if (!id || statsCache[id] !== undefined) return;
+    statsCache[id] = null; // помечаем как "уже загружаем", чтобы не дублировать запрос
+    database.ref("stats/" + id).once("value").then(function (snapshot) {
+        const val = snapshot.val();
+        statsCache[id] = { wins: (val && val.wins) || 0, losses: (val && val.losses) || 0 };
+        renderPlayerPanels();
+    }).catch(function () {
+        statsCache[id] = { wins: 0, losses: 0 };
+    });
+}
+
 function statusForColor(color) {
     if (!currentState) return { text: "", cls: "" };
-    const name = (currentState.players && currentState.players[color] && currentState.players[color].name) || (color === "light" ? "Белые" : "Чёрные");
     if (!isOnlineGame) {
         return { text: "", cls: "" };
     }
+
+    const playerId = currentState.players && currentState.players[color] && currentState.players[color].id;
+    if (playerId) fetchAndCacheStatsIfNeeded(playerId);
+    const stats = playerId ? statsCache[playerId] : null;
+    const ratingPrefix = stats ? ("🏆" + stats.wins + " · ") : "";
+
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
-        return { text: name + " • подключение...", cls: "status-neutral" };
+        return { text: ratingPrefix + "подключение...", cls: "status-neutral" };
     }
     if (presence.online === false) {
-        return { text: name + " покинул игру 👋", cls: "status-left" };
+        return { text: ratingPrefix + "покинул игру 👋", cls: "status-left" };
     }
     const age = Date.now() - (presence.lastSeen || 0);
     if (age > STALE_MS) {
-        return { text: name + " потерял соединение", cls: "status-left" };
+        return { text: ratingPrefix + "потерял соединение", cls: "status-left" };
     }
-    return { text: name + " • В игре", cls: "status-online" };
+    return { text: ratingPrefix + "В игре", cls: "status-online" };
 }
 
 function applyStatusToElement(el, panelEl, statusInfo) {
@@ -810,7 +867,6 @@ function updateBoardPieces() {
                 (lastMove.to.row === row && lastMove.to.col === col)
             ));
             square.classList.toggle("last-move", isLastMove);
-
             const pieceData = pieceAt(currentState.pieces, row, col);
             const existingPieceEl = pieceElements[key];
             const isSelected = !!(selectedFrom && selectedFrom.row === row && selectedFrom.col === col);
@@ -1011,9 +1067,36 @@ function renderEndGameModal() {
             playWinSound();
             endGameShownForRoom = marker;
         }
+        if (statsRecordedForRoom !== marker) {
+            statsRecordedForRoom = marker;
+            recordGameResult();
+        }
     } else {
         endGameModal.classList.add("hidden");
     }
+}
+
+let statsRecordedForRoom = null;
+
+// Записывает результат ЭТОЙ онлайн-партии в статистику текущего игрока —
+// каждый клиент пишет только свою собственную запись, поэтому конфликтов
+// между двумя игроками одной партии не возникает
+function recordGameResult() {
+    if (!isOnlineGame || !currentState || !currentState.winner) return;
+    if (!myTelegramId) return;
+
+    const didIWin = currentState.winner === myColor;
+
+    database.ref("stats/" + myTelegramId).transaction(function (current) {
+        const result = current || { wins: 0, losses: 0, name: myTelegramName };
+        result.name = myTelegramName;
+        if (didIWin) {
+            result.wins = (result.wins || 0) + 1;
+        } else {
+            result.losses = (result.losses || 0) + 1;
+        }
+        return result;
+    });
 }
 
 function updateSelectionDom(oldSel, newSel) {
@@ -1026,6 +1109,7 @@ function updateSelectionDom(oldSel, newSel) {
     if (newSel) {
         const newEl = pieceElements[newSel.row + "_" + newSel.col];
         if (newEl) newEl.classList.add("selected");
+        playSelectSound();
     }
     showMoveHints(newSel);
     resetMustCaptureHintTimer();
@@ -1072,7 +1156,6 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         // Только для выбора звука: била ли ЭТА шашка уже будучи дамкой
         // (до того, как currentState.pieces будет перезаписан результатом хода)
         const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
-
         // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
         // это устраняет ощутимую задержку в 3-5 секунд на нажатие
         currentState.pieces = optimisticResult.pieces;
@@ -1182,6 +1265,7 @@ function startOnlineGame() {
     lastSeenMoveCount = -1;
     selectedFrom = null;
     endGameShownForRoom = null;
+    statsRecordedForRoom = null;
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
     boardBuilt = false;
@@ -1231,7 +1315,15 @@ function startOnlineGame() {
         // данных МЕНЬШЕ того, что уже показано на экране — это устаревшее эхо
         // нашего же более раннего хода, и его нужно просто проигнорировать,
         // дождавшись, пока сервер "догонит" локальный прогресс.
-        if (currentState && newState.moveCount < lastSeenMoveCount) {
+        //
+        // НО: это относится только к ходу ВНУТРИ ещё идущей партии. Когда партия
+        // уже завершена локально (currentState.winner уже установлен) и приходит
+        // "Новая игра" — там moveCount ЗАКОНОМЕРНО сбрасывается на 0, что тоже
+        // технически "меньше" прежнего — это НЕ устаревшее эхо, а настоящий
+        // новый сброс, и его нельзя игнорировать (именно это раньше приводило
+        // к тому, что после "Новая игра" оставалась видна старая доска).
+        const isMidGameStaleEcho = currentState && !currentState.winner && newState.moveCount < lastSeenMoveCount;
+        if (isMidGameStaleEcho) {
             currentState.presence = newState.presence;
             updatePresenceOnly();
             return;
@@ -1341,7 +1433,9 @@ function loadActiveRooms() {
                 const darkP = room && room.players && room.players.dark;
                 const bothPlayersExist = !!(lightP && darkP && lightP.id && darkP.id);
                 const differentPlayers = bothPlayersExist && lightP.id !== darkP.id;
-                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner;
+                const STALE_ROOM_MS = 48 * 60 * 60 * 1000; // 48 часов без единого хода — считаем заброшенной
+                const isStaleRoom = room && room.turnStartedAt && (Date.now() - room.turnStartedAt > STALE_ROOM_MS);
+                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner && !isStaleRoom;
 
                 if (isValidActiveGame) {
                     items.push({ code: code, opponent: data[code].opponentName || "Соперник", color: data[code].myColor });
@@ -1352,6 +1446,7 @@ function loadActiveRooms() {
                 if (pending === 0) {
                     listEl.innerHTML = "";
                     if (items.length === 0) {
+                        if (items.length === 0) {
                         sectionEl.classList.add("hidden");
                         noGameText.classList.remove("hidden");
                         return;
@@ -1359,6 +1454,9 @@ function loadActiveRooms() {
                     sectionEl.classList.remove("hidden");
                     noGameText.classList.add("hidden");
                     items.forEach(function (item) {
+                        const row = document.createElement("div");
+                        row.className = "room-item-row";
+
                         const btn = document.createElement("button");
                         btn.className = "menu-button room-item-button";
                         btn.textContent = "Игра против " + item.opponent;
@@ -1369,7 +1467,23 @@ function loadActiveRooms() {
                             showScreen(gameScreen);
                             startOnlineGame();
                         });
-                        listEl.appendChild(btn);
+
+                        const removeBtn = document.createElement("button");
+                        removeBtn.className = "room-item-remove";
+                        removeBtn.textContent = "✕";
+                        removeBtn.title = "Убрать из списка";
+                        removeBtn.addEventListener("click", function (e) {
+                            e.stopPropagation();
+                            // Убираем только из СВОЕГО списка — саму партию и запись
+                            // у соперника не трогаем, чтобы не мешать его игре
+                            database.ref("users/" + myTelegramId + "/rooms/" + item.code).remove().then(function () {
+                                loadActiveRooms();
+                            });
+                        });
+
+                        row.appendChild(btn);
+                        row.appendChild(removeBtn);
+                        listEl.appendChild(row);
                     });
                 }
             }).catch(function () {
@@ -1495,8 +1609,26 @@ btnResignYes.addEventListener("click", function () {
 btnCloseGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
     markMyselfLeftExplicitly();
+    // Партия уже завершена (эта кнопка доступна только в модалке окончания игры) —
+    // сразу удаляем её из базы, чтобы старые сыгранные партии не копились там вечно
+    if (isOnlineGame) {
+        cleanupFinishedRoom();
+    }
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
 });
+
+function cleanupFinishedRoom() {
+    if (!roomCode) return;
+    const codeToClean = roomCode;
+    if (myTelegramId) {
+        database.ref("users/" + myTelegramId + "/rooms/" + codeToClean).remove();
+    }
+    const oppColor = myColor === "light" ? "dark" : "light";
+    if (currentState && currentState.players && currentState.players[oppColor] && currentState.players[oppColor].id) {
+        database.ref("users/" + currentState.players[oppColor].id + "/rooms/" + codeToClean).remove();
+    }
+    database.ref("rooms/" + codeToClean).remove();
+}
 
 btnNewGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
@@ -1584,6 +1716,7 @@ function checkForInviteLink() {
 
     if (!startParam) return false;
 
+    roomCode = startParam;
     roomCode = startParam;
 
     showScreen(waitingScreen);
@@ -1727,6 +1860,62 @@ btnInfoClose.addEventListener("click", function () {
     infoModal.classList.add("hidden");
     showScreen(menuScreen);
     loadActiveRooms();
+});
+
+// ===== СТАТИСТИКА И РЕЙТИНГ =====
+
+function renderStatsRow(rank, name, wins, losses) {
+    const row = document.createElement("div");
+    row.className = "stats-row";
+    const total = wins + losses;
+    row.innerHTML =
+        '<span><span class="stats-rank">' + rank + '.</span>' + name + "</span>" +
+        "<span>🏆 " + wins + " · 💔 " + losses + " · " + total + " партий</span>";
+    return row;
+}
+
+function openStatsModal() {
+    statsMySummary.textContent = "Загрузка...";
+    statsLeaderboard.innerHTML = "";
+    statsModal.classList.remove("hidden");
+
+    database.ref("stats/" + myTelegramId).once("value").then(function (snapshot) {
+        const mine = snapshot.val();
+        const wins = (mine && mine.wins) || 0;
+        const losses = (mine && mine.losses) || 0;
+        const total = wins + losses;
+        if (total === 0) {
+            statsMySummary.textContent = "Ты ещё не сыграл ни одной онлайн-партии";
+        } else {
+            statsMySummary.textContent = "🏆 Побед: " + wins + "   💔 Поражений: " + losses + "   Всего: " + total;
+        }
+    }).catch(function () {
+        statsMySummary.textContent = "Не удалось загрузить статистику";
+    });
+
+    database.ref("stats").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
+        const data = snapshot.val();
+        statsLeaderboard.innerHTML = "";
+        if (!data) {
+            statsLeaderboard.textContent = "Пока никто не сыграл ни одной партии";
+            return;
+        }
+        const entries = Object.keys(data).map(function (key) {
+            return { name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
+        });
+        entries.sort(function (a, b) { return b.wins - a.wins; });
+        entries.forEach(function (entry, index) {
+            statsLeaderboard.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
+        });
+    }).catch(function () {
+        statsLeaderboard.textContent = "Не удалось загрузить рейтинг";
+    });
+}
+
+btnShowStats.addEventListener("click", openStatsModal);
+
+btnStatsClose.addEventListener("click", function () {
+    statsModal.classList.add("hidden");
 });
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
