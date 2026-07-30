@@ -621,7 +621,7 @@ function statusForColor(color) {
     const playerId = currentState.players && currentState.players[color] && currentState.players[color].id;
     if (playerId) fetchAndCacheStatsIfNeeded(playerId);
     const stats = playerId ? statsCache[playerId] : null;
-    const ratingPrefix = stats ? ("🏆" + stats.wins + " · ") : "";
+    const ratingPrefix = stats ? ("🏆" + stats.wins + " ❌" + stats.losses + " · ") : "";
 
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
@@ -867,6 +867,7 @@ function updateBoardPieces() {
                 (lastMove.to.row === row && lastMove.to.col === col)
             ));
             square.classList.toggle("last-move", isLastMove);
+
             const pieceData = pieceAt(currentState.pieces, row, col);
             const existingPieceEl = pieceElements[key];
             const isSelected = !!(selectedFrom && selectedFrom.row === row && selectedFrom.col === col);
@@ -1156,6 +1157,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         // Только для выбора звука: била ли ЭТА шашка уже будучи дамкой
         // (до того, как currentState.pieces будет перезаписан результатом хода)
         const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
+
         // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
         // это устраняет ощутимую задержку в 3-5 секунд на нажатие
         currentState.pieces = optimisticResult.pieces;
@@ -1447,7 +1449,6 @@ function loadActiveRooms() {
                 if (pending === 0) {
                     listEl.innerHTML = "";
                     if (items.length === 0) {
-                        if (items.length === 0) {
                         sectionEl.classList.add("hidden");
                         noGameText.classList.remove("hidden");
                         return;
@@ -1718,7 +1719,6 @@ function checkForInviteLink() {
     if (!startParam) return false;
 
     roomCode = startParam;
-    roomCode = startParam;
 
     showScreen(waitingScreen);
     waitingText.textContent = "Проверяем игру...";
@@ -1871,7 +1871,7 @@ function renderStatsRow(rank, name, wins, losses) {
     const total = wins + losses;
     row.innerHTML =
         '<span><span class="stats-rank">' + rank + '.</span>' + name + "</span>" +
-        "<span>🏆 " + wins + " · 💔 " + losses + " · " + total + " партий</span>";
+        "<span>🏆 " + wins + " · ❌ " + losses + " · " + total + " партий</span>";
     return row;
 }
 
@@ -1888,7 +1888,7 @@ function openStatsModal() {
         if (total === 0) {
             statsMySummary.textContent = "Ты ещё не сыграл ни одной онлайн-партии";
         } else {
-            statsMySummary.textContent = "🏆 Побед: " + wins + "   💔 Поражений: " + losses + "   Всего: " + total;
+            statsMySummary.textContent = "🏆 Побед: " + wins + "   ❌ Поражений: " + losses + "   Всего: " + total;
         }
     }).catch(function () {
         statsMySummary.textContent = "Не удалось загрузить статистику";
