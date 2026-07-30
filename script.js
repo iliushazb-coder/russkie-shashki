@@ -444,6 +444,9 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     let capturedLight = state.capturedLight || 0;
     let moveCount = state.moveCount || 0;
 
+    let lastMovePath = (!mustContinueFrom) ? [{ row: fromRow, col: fromCol }] : (state.lastMovePath || [{ row: fromRow, col: fromCol }]).slice();
+    let lastCapturedSquares = (!mustContinueFrom) ? [] : (state.lastCapturedSquares || []).slice();
+
     if (turn !== actingColor) return null;
 
     const fromKey = fromRow + "_" + fromCol;
@@ -499,6 +502,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         mustContinueFrom = null;
         moveCount++;
         moveType = becameKing ? "king" : "move";
+        lastMovePath.push({ row: toRow, col: toCol });
     } else {
         if (!king && rowDiff !== 2) return null;
 
@@ -518,6 +522,9 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         delete pieces[capturedKey];
         delete pieces[fromKey];
 
+        const capturedParts = capturedKey.split("_");
+        lastCapturedSquares.push({ row: parseInt(capturedParts[0]), col: parseInt(capturedParts[1]) });
+
         if (capturedPiece.color === "dark") {
             capturedDark++;
         } else {
@@ -529,6 +536,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
             if (actingColor === "dark" && toRow === 7) { moving.king = true; becameKing = true; }
         }
         pieces[toKey] = moving;
+        lastMovePath.push({ row: toRow, col: toCol });
 
         // ВАЖНО: даже если шашка только что стала дамкой (becameKing), она обязана
         // продолжить серию взятий, если такая возможность есть — по официальным
@@ -565,6 +573,8 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         moveCount: moveCount,
         moveType: moveType,
         lastMove: { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } },
+        lastMovePath: lastMovePath,
+        lastCapturedSquares: lastCapturedSquares,
         winner: winner,
         winReason: winReason
     };
@@ -845,6 +855,10 @@ function ensureBoardBuilt() {
         }
     }
 
+    const arrowSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    arrowSvg.setAttribute("id", "last-move-arrow-svg");
+    boardDiv.appendChild(arrowSvg);
+
     boardBuilt = true;
     builtFlipped = flipped;
 }
@@ -912,6 +926,68 @@ function renderBoard() {
     renderEndGameModal();
     showMoveHints(selectedFrom);
     resetMustCaptureHintTimer();
+    renderLastMoveArrow();
+}
+
+function renderLastMoveArrow() {
+    const svg = document.getElementById("last-move-arrow-svg");
+    if (!svg) return;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+    const path = currentState && currentState.lastMovePath;
+    if (!path || path.length < 2) return;
+
+    const points = [];
+    for (let i = 0; i < path.length; i++) {
+        const sq = squareElements[path[i].row + "_" + path[i].col];
+        if (!sq) return;
+        points.push({
+            x: sq.offsetLeft + sq.offsetWidth / 2,
+            y: sq.offsetTop + sq.offsetHeight / 2
+        });
+    }
+
+    const svgNS = "http://www.w3.org/2000/svg";
+
+    const defs = document.createElementNS(svgNS, "defs");
+    const marker = document.createElementNS(svgNS, "marker");
+    marker.setAttribute("id", "last-move-arrowhead");
+    marker.setAttribute("markerWidth", "9");
+    marker.setAttribute("markerHeight", "9");
+    marker.setAttribute("refX", "6.5");
+    marker.setAttribute("refY", "4.5");
+    marker.setAttribute("orient", "auto");
+    const arrowShape = document.createElementNS(svgNS, "polygon");
+    arrowShape.setAttribute("points", "0,0 9,4.5 0,9");
+    arrowShape.setAttribute("fill", "rgba(224,48,48,0.85)");
+    marker.appendChild(arrowShape);
+    defs.appendChild(marker);
+    svg.appendChild(defs);
+
+    for (let i = 0; i < points.length - 1; i++) {
+        const line = document.createElementNS(svgNS, "line");
+        line.setAttribute("x1", points[i].x);
+        line.setAttribute("y1", points[i].y);
+        line.setAttribute("x2", points[i + 1].x);
+        line.setAttribute("y2", points[i + 1].y);
+        line.setAttribute("stroke", "rgba(224,48,48,0.72)");
+        line.setAttribute("stroke-width", "5");
+        line.setAttribute("stroke-linecap", "round");
+        line.setAttribute("marker-end", "url(#last-move-arrowhead)");
+        svg.appendChild(line);
+    }
+
+    const capturedSquares = currentState.lastCapturedSquares || [];
+    capturedSquares.forEach(function (cap) {
+        const sq = squareElements[cap.row + "_" + cap.col];
+        if (!sq) return;
+        const circle = document.createElementNS(svgNS, "circle");
+        circle.setAttribute("cx", sq.offsetLeft + sq.offsetWidth / 2);
+        circle.setAttribute("cy", sq.offsetTop + sq.offsetHeight / 2);
+        circle.setAttribute("r", Math.max(6, sq.offsetWidth * 0.14));
+        circle.setAttribute("class", "last-move-capture-mark");
+        svg.appendChild(circle);
+    });
 }
 
 // ===== ПОДСКАЗКА "НУЖНО БИТЬ" ПОСЛЕ 5 СЕКУНД БЕЗДЕЙСТВИЯ =====
@@ -1168,6 +1244,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.moveCount = optimisticResult.moveCount;
         currentState.moveType = optimisticResult.moveType;
         currentState.lastMove = optimisticResult.lastMove;
+        currentState.lastMovePath = optimisticResult.lastMovePath;
+        currentState.lastCapturedSquares = optimisticResult.lastCapturedSquares;
         if (optimisticResult.winner) {
             currentState.winner = optimisticResult.winner;
             currentState.winReason = optimisticResult.winReason;
@@ -1201,7 +1279,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                     mustContinueFrom: room.mustContinueFrom || null,
                     capturedDark: room.capturedDark || 0,
                     capturedLight: room.capturedLight || 0,
-                    moveCount: room.moveCount || 0
+                    moveCount: room.moveCount || 0,
+                    lastMovePath: room.lastMovePath || null,
+                    lastCapturedSquares: room.lastCapturedSquares || null
                 };
 
                 const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
@@ -1217,6 +1297,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 newRoom.moveCount = result.moveCount;
                 newRoom.moveType = result.moveType;
                 newRoom.lastMove = result.lastMove;
+                newRoom.lastMovePath = result.lastMovePath;
+                newRoom.lastCapturedSquares = result.lastCapturedSquares;
                 if (result.mustContinueFrom === null) newRoom.turnStartedAt = Date.now();
                 if (result.winner) {
                     newRoom.winner = result.winner;
@@ -1298,6 +1380,8 @@ function startOnlineGame() {
             moveCount: room.moveCount || 0,
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
+            lastMovePath: room.lastMovePath || null,
+            lastCapturedSquares: room.lastCapturedSquares || null,
             players: room.players || null,
             presence: room.presence || null,
             timeControlSeconds: room.timeControlSeconds || 0,
@@ -1394,6 +1478,8 @@ function startOfflineGame() {
         capturedLight: 0,
         moveCount: 0,
         lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
         moveType: null,
         players: { light: { name: "Игрок 1" }, dark: { name: "Игрок 2" } },
         timeControlSeconds: 0,
@@ -1527,6 +1613,8 @@ function createRoomAndShowWaiting() {
         capturedLight: 0,
         moveCount: 0,
         lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
         moveType: null,
         pieces: createInitialPieces(),
         players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
@@ -1648,6 +1736,8 @@ btnNewGame.addEventListener("click", function () {
             newRoom.moveCount = 0;
             newRoom.moveType = null;
             newRoom.lastMove = null;
+            newRoom.lastMovePath = null;
+            newRoom.lastCapturedSquares = null;
             newRoom.winner = null;
             newRoom.winReason = null;
             newRoom.status = "active";
