@@ -178,6 +178,14 @@ const statsModal = document.getElementById("stats-modal");
 const statsMySummary = document.getElementById("stats-my-summary");
 const statsLeaderboard = document.getElementById("stats-leaderboard");
 const btnStatsClose = document.getElementById("btn-stats-close");
+const offlineOpponentModal = document.getElementById("offline-opponent-modal");
+const offlineOpponentText = document.getElementById("offline-opponent-text");
+const btnOfflinePlayBot = document.getElementById("btn-offline-play-bot");
+const btnOfflineInviteFriend = document.getElementById("btn-offline-invite-friend");
+const rematchRequestModal = document.getElementById("rematch-request-modal");
+const rematchRequestText = document.getElementById("rematch-request-text");
+const btnRematchAccept = document.getElementById("btn-rematch-accept");
+const btnRematchDecline = document.getElementById("btn-rematch-decline");
 
 let roomCode = null;
 let myColor = "light";
@@ -315,6 +323,16 @@ function getCaptureJumps(pieces, row, col, color, king) {
 
 // Максимальное число ДОПОЛНИТЕЛЬНЫХ шашек, которые можно сбить, продолжая
 // серию из (row, col) — рекурсивно перебирает все варианты продолжения
+function withPendingBlockers(pieces, pendingRemovals) {
+    if (!pendingRemovals || pendingRemovals.length === 0) return pieces;
+    const blocked = {};
+    for (const k in pieces) blocked[k] = pieces[k];
+    pendingRemovals.forEach(function (key) {
+        if (!blocked[key]) blocked[key] = { color: "blocked", king: false };
+    });
+    return blocked;
+}
+
 function maxCaptureChainLength(pieces, row, col, color, king) {
     const jumps = getCaptureJumps(pieces, row, col, color, king);
     if (jumps.length === 0) return 0;
@@ -324,7 +342,7 @@ function maxCaptureChainLength(pieces, row, col, color, king) {
         const j = jumps[i];
         const newPieces = {};
         for (const k in pieces) newPieces[k] = pieces[k];
-        delete newPieces[j.capturedRow + "_" + j.capturedCol];
+        newPieces[j.capturedRow + "_" + j.capturedCol] = { color: "blocked", king: false };
         delete newPieces[row + "_" + col];
 
         let newKing = king;
@@ -349,7 +367,7 @@ function filterJumpsByMajorityRule(pieces, row, col, color, king, jumps) {
         const j = jumps[i];
         const newPieces = {};
         for (const k in pieces) newPieces[k] = pieces[k];
-        delete newPieces[j.capturedRow + "_" + j.capturedCol];
+        newPieces[j.capturedRow + "_" + j.capturedCol] = { color: "blocked", king: false };
         delete newPieces[row + "_" + col];
 
         let newKing = king;
@@ -444,8 +462,16 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     let capturedLight = state.capturedLight || 0;
     let moveCount = state.moveCount || 0;
 
+    // Полный маршрут текущего хода — накапливается через всю серию взятий одной
+    // шашкой. Сбрасывается только когда начинается НОВЫЙ ход (mustContinueFrom
+    // ещё не был установлен), а не на каждом отдельном прыжке внутри серии.
     let lastMovePath = (!mustContinueFrom) ? [{ row: fromRow, col: fromCol }] : (state.lastMovePath || [{ row: fromRow, col: fromCol }]).slice();
     let lastCapturedSquares = (!mustContinueFrom) ? [] : (state.lastCapturedSquares || []).slice();
+
+    // Клетки шашек, сбитых РАНЕЕ В ЭТОМ ЖЕ ходе — по правилам они физически
+    // остаются на доске (как препятствие) до самого конца всего хода и снимаются
+    // только когда серия взятий полностью завершится.
+    let pendingRemovals = (!mustContinueFrom) ? [] : (state.pendingRemovals || []).slice();
 
     if (turn !== actingColor) return null;
 
@@ -467,14 +493,21 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const king = !!moving.king;
     if (!king && rowDiff > 2) return null;
 
+    // "Вид доски с учётом ещё не снятых шашек" — используется только для ПРОВЕРКИ
+    // хода, чтобы дамка не могла пройти сквозь клетку, где лежит уже сбитая
+    // в этом ходе (но формально ещё не снятая) шашка соперника
+    const scanPieces = withPendingBlockers(pieces, pendingRemovals);
+
     let opponentsOnPath = 0;
     let capturedKey = null;
     for (let dist = 1; dist < rowDiff; dist++) {
         const key = (fromRow + dRow * dist) + "_" + (fromCol + dCol * dist);
-        if (pieces[key]) {
+        const scanPiece = scanPieces[key];
+        if (scanPiece) {
+            if (scanPiece.color === "blocked") return null;
             opponentsOnPath++;
             capturedKey = key;
-            if (pieces[key].color === actingColor) return null;
+            if (scanPiece.color === actingColor) return null;
         }
     }
     if (opponentsOnPath > 1) return null;
@@ -507,10 +540,12 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         if (!king && rowDiff !== 2) return null;
 
         // Разрешён только тот прыжок (направление/клетка приземления), который
-        // ведёт к максимально длинной суммарной серии взятий этой же шашкой
+        // ведёт к максимально длинной суммарной серии взятий этой же шашкой.
+        // Проверяем через scanPieces, чтобы уже сбитые ранее шашки корректно
+        // учитывались как препятствие и в этом расчёте тоже.
         {
-            const allJumps = getCaptureJumps(pieces, fromRow, fromCol, actingColor, king);
-            const bestJumps = filterJumpsByMajorityRule(pieces, fromRow, fromCol, actingColor, king, allJumps);
+            const allJumps = getCaptureJumps(scanPieces, fromRow, fromCol, actingColor, king);
+            const bestJumps = filterJumpsByMajorityRule(scanPieces, fromRow, fromCol, actingColor, king, allJumps);
             let isOptimalJump = false;
             for (let i = 0; i < bestJumps.length; i++) {
                 if (bestJumps[i].toRow === toRow && bestJumps[i].toCol === toCol) { isOptimalJump = true; break; }
@@ -521,6 +556,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         const capturedPiece = pieces[capturedKey];
         delete pieces[capturedKey];
         delete pieces[fromKey];
+        pendingRemovals.push(capturedKey);
 
         const capturedParts = capturedKey.split("_");
         lastCapturedSquares.push({ row: parseInt(capturedParts[0]), col: parseInt(capturedParts[1]) });
@@ -541,7 +577,10 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         // ВАЖНО: даже если шашка только что стала дамкой (becameKing), она обязана
         // продолжить серию взятий, если такая возможность есть — по официальным
         // правилам русских шашек превращение в дамку не прерывает серию боя.
-        const canContinue = canCaptureAt(pieces, toRow, toCol, actingColor, !!moving.king);
+        // Проверяем через "вид с препятствиями", учитывающий все шашки, сбитые
+        // за весь этот ход — включая ту, что только что сбили этим прыжком.
+        const continuationScanPieces = withPendingBlockers(pieces, pendingRemovals);
+        const canContinue = canCaptureAt(continuationScanPieces, toRow, toCol, actingColor, !!moving.king);
 
         if (canContinue) {
             mustContinueFrom = { row: toRow, col: toCol };
@@ -575,6 +614,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         lastMove: { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } },
         lastMovePath: lastMovePath,
         lastCapturedSquares: lastCapturedSquares,
+        pendingRemovals: (mustContinueFrom === null) ? [] : pendingRemovals,
         winner: winner,
         winReason: winReason
     };
@@ -927,8 +967,13 @@ function renderBoard() {
     showMoveHints(selectedFrom);
     resetMustCaptureHintTimer();
     renderLastMoveArrow();
+    checkRematchProposal();
 }
 
+// Рисует полупрозрачную красную стрелку через ВЕСЬ маршрут последнего хода —
+// включая все промежуточные клетки долгой серии взятий дамкой, а не только
+// финальный прыжок. Остаётся на доске до тех пор, пока не начнётся новый ход
+// (currentState.lastMovePath заменяется на новый маршрут автоматически).
 function renderLastMoveArrow() {
     const svg = document.getElementById("last-move-arrow-svg");
     if (!svg) return;
@@ -950,25 +995,18 @@ function renderLastMoveArrow() {
     const svgNS = "http://www.w3.org/2000/svg";
 
     const defs = document.createElementNS(svgNS, "defs");
-    const filter = document.createElementNS(svgNS, "filter");
-    filter.setAttribute("id", "last-move-glow");
-    filter.setAttribute("x", "-60%");
-    filter.setAttribute("y", "-60%");
-    filter.setAttribute("width", "220%");
-    filter.setAttribute("height", "220%");
-    const blur = document.createElementNS(svgNS, "feGaussianBlur");
-    blur.setAttribute("stdDeviation", "2.4");
-    blur.setAttribute("result", "blurred");
-    const merge = document.createElementNS(svgNS, "feMerge");
-    const mergeBlur = document.createElementNS(svgNS, "feMergeNode");
-    mergeBlur.setAttribute("in", "blurred");
-    const mergeSource = document.createElementNS(svgNS, "feMergeNode");
-    mergeSource.setAttribute("in", "SourceGraphic");
-    merge.appendChild(mergeBlur);
-    merge.appendChild(mergeSource);
-    filter.appendChild(blur);
-    filter.appendChild(merge);
-    defs.appendChild(filter);
+    const marker = document.createElementNS(svgNS, "marker");
+    marker.setAttribute("id", "last-move-arrowhead");
+    marker.setAttribute("markerWidth", "9");
+    marker.setAttribute("markerHeight", "9");
+    marker.setAttribute("refX", "6.5");
+    marker.setAttribute("refY", "4.5");
+    marker.setAttribute("orient", "auto");
+    const arrowShape = document.createElementNS(svgNS, "polygon");
+    arrowShape.setAttribute("points", "0,0 9,4.5 0,9");
+    arrowShape.setAttribute("fill", "rgba(224,48,48,0.85)");
+    marker.appendChild(arrowShape);
+    defs.appendChild(marker);
     svg.appendChild(defs);
 
     for (let i = 0; i < points.length - 1; i++) {
@@ -977,13 +1015,14 @@ function renderLastMoveArrow() {
         line.setAttribute("y1", points[i].y);
         line.setAttribute("x2", points[i + 1].x);
         line.setAttribute("y2", points[i + 1].y);
-        line.setAttribute("stroke", "rgba(178, 214, 128, 0.22)");
-        line.setAttribute("stroke-width", "2.5");
+        line.setAttribute("stroke", "rgba(224,48,48,0.72)");
+        line.setAttribute("stroke-width", "5");
         line.setAttribute("stroke-linecap", "round");
-        line.setAttribute("filter", "url(#last-move-glow)");
+        line.setAttribute("marker-end", "url(#last-move-arrowhead)");
         svg.appendChild(line);
     }
 
+    // Отмечаем клетки, где именно были сбиты шашки — маленький красный кружок
     const capturedSquares = currentState.lastCapturedSquares || [];
     capturedSquares.forEach(function (cap) {
         const sq = squareElements[cap.row + "_" + cap.col];
@@ -991,9 +1030,8 @@ function renderLastMoveArrow() {
         const circle = document.createElementNS(svgNS, "circle");
         circle.setAttribute("cx", sq.offsetLeft + sq.offsetWidth / 2);
         circle.setAttribute("cy", sq.offsetTop + sq.offsetHeight / 2);
-        circle.setAttribute("r", Math.max(4, sq.offsetWidth * 0.08));
+        circle.setAttribute("r", Math.max(6, sq.offsetWidth * 0.14));
         circle.setAttribute("class", "last-move-capture-mark");
-        circle.setAttribute("filter", "url(#last-move-glow)");
         svg.appendChild(circle);
     });
 }
@@ -1059,9 +1097,10 @@ function clearMoveHints() {
 
 // Возвращает список клеток, куда выбранная шашка может сходить прямо сейчас
 // (учитывает обязательное взятие: если бой возможен — возвращаются только клетки боя)
-function getLegalDestinations(pieces, row, col, color, king) {
-    const captureJumps = getCaptureJumps(pieces, row, col, color, king);
-    const allowedJumps = filterJumpsByMajorityRule(pieces, row, col, color, king, captureJumps);
+function getLegalDestinations(pieces, row, col, color, king, pendingRemovals) {
+    const scanPieces = withPendingBlockers(pieces, pendingRemovals);
+    const captureJumps = getCaptureJumps(scanPieces, row, col, color, king);
+    const allowedJumps = filterJumpsByMajorityRule(scanPieces, row, col, color, king, captureJumps);
     if (allowedJumps.length > 0) {
         return allowedJumps.map(function (j) { return { row: j.toRow, col: j.toCol }; });
     }
@@ -1079,7 +1118,7 @@ function getLegalDestinations(pieces, row, col, color, king) {
             const r = row + dRow * dist;
             const c = col + dCol * dist;
             if (r < 0 || r > 7 || c < 0 || c > 7) break;
-            const p = pieceAt(pieces, r, c);
+            const p = pieceAt(scanPieces, r, c);
             if (!p) {
                 destinations.push({ row: r, col: c });
             } else {
@@ -1095,7 +1134,7 @@ function showMoveHints(sel) {
     if (!sel || !currentState) return;
     const pieceData = pieceAt(currentState.pieces, sel.row, sel.col);
     if (!pieceData) return;
-    const destinations = getLegalDestinations(currentState.pieces, sel.row, sel.col, pieceData.color, !!pieceData.king);
+    const destinations = getLegalDestinations(currentState.pieces, sel.row, sel.col, pieceData.color, !!pieceData.king, currentState.pendingRemovals);
     destinations.forEach(function (d) {
         const sq = squareElements[d.row + "_" + d.col];
         if (sq) {
@@ -1254,6 +1293,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.lastMove = optimisticResult.lastMove;
         currentState.lastMovePath = optimisticResult.lastMovePath;
         currentState.lastCapturedSquares = optimisticResult.lastCapturedSquares;
+        currentState.pendingRemovals = optimisticResult.pendingRemovals;
         if (optimisticResult.winner) {
             currentState.winner = optimisticResult.winner;
             currentState.winReason = optimisticResult.winReason;
@@ -1289,7 +1329,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                     capturedLight: room.capturedLight || 0,
                     moveCount: room.moveCount || 0,
                     lastMovePath: room.lastMovePath || null,
-                    lastCapturedSquares: room.lastCapturedSquares || null
+                    lastCapturedSquares: room.lastCapturedSquares || null,
+                    pendingRemovals: room.pendingRemovals || null
                 };
 
                 const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
@@ -1307,6 +1348,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 newRoom.lastMove = result.lastMove;
                 newRoom.lastMovePath = result.lastMovePath;
                 newRoom.lastCapturedSquares = result.lastCapturedSquares;
+                newRoom.pendingRemovals = result.pendingRemovals;
                 if (result.mustContinueFrom === null) newRoom.turnStartedAt = Date.now();
                 if (result.winner) {
                     newRoom.winner = result.winner;
@@ -1331,6 +1373,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             currentState.moveCount = result.moveCount;
             currentState.moveType = result.moveType;
             currentState.lastMove = result.lastMove;
+            currentState.lastMovePath = result.lastMovePath;
+            currentState.lastCapturedSquares = result.lastCapturedSquares;
+            currentState.pendingRemovals = result.pendingRemovals;
             if (result.winner) {
                 currentState.winner = result.winner;
                 currentState.winReason = result.winReason;
@@ -1348,7 +1393,8 @@ function computeGameSignature(state) {
     const winnerPart = state.winner || "";
     const winReasonPart = state.winReason || "";
     const playersPart = JSON.stringify(state.players || null);
-    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart;
+    const rematchPart = JSON.stringify(state.rematchProposal || null);
+    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart + "_" + rematchPart;
 }
 
 function startOnlineGame() {
@@ -1390,12 +1436,14 @@ function startOnlineGame() {
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
             lastCapturedSquares: room.lastCapturedSquares || null,
+            pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
-            winReason: room.winReason || null
+            winReason: room.winReason || null,
+            rematchProposal: room.rematchProposal || null
         };
 
         const newSignature = computeGameSignature(newState);
@@ -1637,6 +1685,9 @@ function createRoomAndShowWaiting() {
             opponentName: "Ожидание подключения...",
             myColor: "light"
         });
+        // Отмечаем себя "в сети" уже на этапе ожидания — иначе если создатель
+        // выйдет ДО подключения друга, второй игрок не сможет это обнаружить
+        setupPresence();
     });
 
     const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
@@ -1729,32 +1780,89 @@ function cleanupFinishedRoom() {
 }
 
 btnNewGame.addEventListener("click", function () {
-    endGameModal.classList.add("hidden");
-
     if (isOnlineGame) {
-        database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room) return;
-            const newRoom = {};
-            for (const key in room) newRoom[key] = room[key];
-            newRoom.pieces = createInitialPieces();
-            newRoom.turn = "light";
-            newRoom.mustContinueFrom = null;
-            newRoom.capturedDark = 0;
-            newRoom.capturedLight = 0;
-            newRoom.moveCount = 0;
-            newRoom.moveType = null;
-            newRoom.lastMove = null;
-            newRoom.lastMovePath = null;
-            newRoom.lastCapturedSquares = null;
-            newRoom.winner = null;
-            newRoom.winReason = null;
-            newRoom.status = "active";
-            newRoom.turnStartedAt = Date.now();
-            return newRoom;
-        });
+        // Не сбрасываем партию сразу — только предлагаем реванш, ждём согласия соперника
+        database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
     } else {
+        endGameModal.classList.add("hidden");
         startOfflineGame();
     }
+});
+
+function performRematchReset() {
+    return database.ref("rooms/" + roomCode).transaction(function (room) {
+        if (!room) return;
+        const newRoom = {};
+        for (const key in room) newRoom[key] = room[key];
+        newRoom.pieces = createInitialPieces();
+        newRoom.turn = "light";
+        newRoom.mustContinueFrom = null;
+        newRoom.capturedDark = 0;
+        newRoom.capturedLight = 0;
+        newRoom.moveCount = 0;
+        newRoom.moveType = null;
+        newRoom.lastMove = null;
+        newRoom.lastMovePath = null;
+        newRoom.lastCapturedSquares = null;
+        newRoom.winner = null;
+        newRoom.winReason = null;
+        newRoom.status = "active";
+        newRoom.turnStartedAt = Date.now();
+        newRoom.rematchProposal = null;
+        // Меняем цвета местами — кто был белыми, теперь чёрные, и наоборот
+        const oldLight = room.players ? room.players.light : null;
+        const oldDark = room.players ? room.players.dark : null;
+        newRoom.players = { light: oldDark, dark: oldLight };
+        return newRoom;
+    });
+}
+
+// Проверяет, есть ли активное предложение реванша, и показывает нужный экран:
+// либо "жду ответа" (если предложил я сам), либо запрос "принять/отклонить"
+// (если предложил соперник)
+function checkRematchProposal() {
+    if (!rematchRequestModal) return;
+    if (!isOnlineGame || !currentState) {
+        rematchRequestModal.classList.add("hidden");
+        return;
+    }
+    const proposal = currentState.rematchProposal;
+    const buttonsRow = endGameModal.querySelector(".modal-buttons");
+
+    if (!proposal) {
+        rematchRequestModal.classList.add("hidden");
+        if (buttonsRow) buttonsRow.classList.remove("hidden");
+        return;
+    }
+
+    if (proposal.by === myColor) {
+        rematchRequestModal.classList.add("hidden");
+        if (currentState.winner) {
+            endGameText.textContent = endGameText.textContent.split("\n\n⏳")[0] + "\n\n⏳ Ждём ответа соперника на реванш...";
+            if (buttonsRow) buttonsRow.classList.add("hidden");
+        }
+    } else {
+        rematchRequestText.textContent = (proposal.name || "Соперник") + " предлагает сыграть ещё раз";
+        rematchRequestModal.classList.remove("hidden");
+    }
+}
+
+btnRematchAccept.addEventListener("click", function () {
+    rematchRequestModal.classList.add("hidden");
+    performRematchReset().then(function () {
+        database.ref("rooms/" + roomCode + "/players").once("value").then(function (snap) {
+            const players = snap.val() || {};
+            myColor = (players.light && players.light.id === myTelegramId) ? "light" : "dark";
+            endGameModal.classList.add("hidden");
+            showScreen(gameScreen);
+            startOnlineGame();
+        });
+    });
+});
+
+btnRematchDecline.addEventListener("click", function () {
+    rematchRequestModal.classList.add("hidden");
+    database.ref("rooms/" + roomCode + "/rematchProposal").remove();
 });
 
 // ===== ТАЙМЕР ХОДА =====
@@ -1861,6 +1969,21 @@ function checkForInviteLink() {
             return;
         }
 
+        // Проверяем, действительно ли создатель комнаты сейчас на связи —
+        // если он закрыл приложение до нашего подключения, показываем
+        // отдельное красивое окно вместо зависшей пустой доски
+        const creatorPresence = room.presence && room.presence.light;
+        const creatorIsOffline = creatorPresence
+            ? (creatorPresence.online === false || (Date.now() - (creatorPresence.lastSeen || 0)) > STALE_MS)
+            : true;
+        if (creatorIsOffline) {
+            settled = true;
+            clearTimeout(timeoutId);
+            offlineOpponentText.textContent = "Игрок " + creatorName + " больше не в игре.";
+            offlineOpponentModal.classList.remove("hidden");
+            return;
+        }
+
         if (room.players && room.players.dark && room.players.dark.id && room.players.dark.id !== myTelegramId) {
             settled = true;
             clearTimeout(timeoutId);
@@ -1959,6 +2082,21 @@ btnInfoClose.addEventListener("click", function () {
     infoModal.classList.add("hidden");
     showScreen(menuScreen);
     loadActiveRooms();
+});
+
+// ===== МОДАЛКА "СОПЕРНИК ОФЛАЙН" =====
+
+btnOfflinePlayBot.addEventListener("click", function () {
+    offlineOpponentModal.classList.add("hidden");
+    roomCode = null;
+    showScreen(gameScreen);
+    startOfflineGame();
+});
+
+btnOfflineInviteFriend.addEventListener("click", function () {
+    offlineOpponentModal.classList.add("hidden");
+    roomCode = null;
+    showScreen(timeControlScreen);
 });
 
 // ===== СТАТИСТИКА И РЕЙТИНГ =====
