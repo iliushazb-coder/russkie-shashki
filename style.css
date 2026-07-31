@@ -259,9 +259,9 @@ h1 {
     border-radius: 14px;
     padding: 12px;
     background:
-        radial-gradient(circle at 30% 10%, rgba(255,200,140,0.10), transparent 55%),
+        radial-gradient(circle at 30% 10%, rgba(255,200,140,0.12), transparent 55%),
         repeating-linear-gradient(100deg, rgba(0,0,0,0.10) 0px, transparent 3px, transparent 7px),
-        linear-gradient(155deg, #7a2018 0%, #4f120c 55%, #2e0a06 100%);
+        linear-gradient(155deg, #9a2818 0%, #6a160e 55%, #3e0a06 100%);
     border: 2px solid #d4a94f;
     box-shadow:
         0 22px 50px rgba(0,0,0,0.65),
@@ -310,20 +310,20 @@ h1 {
     position: relative;
 }
 
-/* Светлые клетки — приглушённое тёплое дерево, не режет глаз */
+/* Светлые клетки — тёплое светлое дерево (клён), хорошая читаемость */
 .light {
-    background: linear-gradient(155deg, rgba(190, 145, 85, 0.95), rgba(120, 80, 40, 0.85));
+    background: linear-gradient(155deg, #e8d5a8 0%, #d4b88a 100%);
     box-shadow:
-        inset 0 0 16px rgba(160, 120, 60, 0.4),
-        inset 0 0 5px rgba(0, 0, 0, 0.2);
+        inset 0 0 15px rgba(232, 213, 168, 0.5),
+        inset 0 0 4px rgba(0, 0, 0, 0.1);
 }
 
-/* Тёмные клетки — то же подсвеченное стекло, но глубже и приглушённее */
+/* Тёмные клетки — глубокое тёмное дерево (орех), чёткий контраст */
 .dark {
-    background: linear-gradient(155deg, rgba(165, 105, 60, 0.85), rgba(75, 42, 22, 0.9));
+    background: linear-gradient(155deg, #6b4226 0%, #3e2415 100%);
     box-shadow:
-        inset 0 0 16px rgba(255, 190, 110, 0.22),
-        inset 0 0 5px rgba(0,0,0,0.35);
+        inset 0 0 15px rgba(50, 30, 15, 0.5),
+        inset 0 0 4px rgba(0, 0, 0, 0.4);
 }
 
 .piece {
@@ -519,7 +519,6 @@ h1 {
     50% { opacity: 1; }
 }
 
-/* Дамка — премиальная золотая корона, строго по центру, 80% шашки */
 /* Дамка — премиальный жемчужный стеклянный контур */
 .king {
     border-color: rgba(255, 255, 255, 0.4) !important;
