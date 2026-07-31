@@ -950,18 +950,25 @@ function renderLastMoveArrow() {
     const svgNS = "http://www.w3.org/2000/svg";
 
     const defs = document.createElementNS(svgNS, "defs");
-    const marker = document.createElementNS(svgNS, "marker");
-    marker.setAttribute("id", "last-move-arrowhead");
-    marker.setAttribute("markerWidth", "9");
-    marker.setAttribute("markerHeight", "9");
-    marker.setAttribute("refX", "6.5");
-    marker.setAttribute("refY", "4.5");
-    marker.setAttribute("orient", "auto");
-    const arrowShape = document.createElementNS(svgNS, "polygon");
-    arrowShape.setAttribute("points", "0,0 9,4.5 0,9");
-    arrowShape.setAttribute("fill", "rgba(224,48,48,0.85)");
-    marker.appendChild(arrowShape);
-    defs.appendChild(marker);
+    const filter = document.createElementNS(svgNS, "filter");
+    filter.setAttribute("id", "last-move-glow");
+    filter.setAttribute("x", "-60%");
+    filter.setAttribute("y", "-60%");
+    filter.setAttribute("width", "220%");
+    filter.setAttribute("height", "220%");
+    const blur = document.createElementNS(svgNS, "feGaussianBlur");
+    blur.setAttribute("stdDeviation", "2.4");
+    blur.setAttribute("result", "blurred");
+    const merge = document.createElementNS(svgNS, "feMerge");
+    const mergeBlur = document.createElementNS(svgNS, "feMergeNode");
+    mergeBlur.setAttribute("in", "blurred");
+    const mergeSource = document.createElementNS(svgNS, "feMergeNode");
+    mergeSource.setAttribute("in", "SourceGraphic");
+    merge.appendChild(mergeBlur);
+    merge.appendChild(mergeSource);
+    filter.appendChild(blur);
+    filter.appendChild(merge);
+    defs.appendChild(filter);
     svg.appendChild(defs);
 
     for (let i = 0; i < points.length - 1; i++) {
@@ -970,10 +977,10 @@ function renderLastMoveArrow() {
         line.setAttribute("y1", points[i].y);
         line.setAttribute("x2", points[i + 1].x);
         line.setAttribute("y2", points[i + 1].y);
-        line.setAttribute("stroke", "rgba(224,48,48,0.72)");
-        line.setAttribute("stroke-width", "5");
+        line.setAttribute("stroke", "rgba(178, 214, 128, 0.22)");
+        line.setAttribute("stroke-width", "2.5");
         line.setAttribute("stroke-linecap", "round");
-        line.setAttribute("marker-end", "url(#last-move-arrowhead)");
+        line.setAttribute("filter", "url(#last-move-glow)");
         svg.appendChild(line);
     }
 
@@ -984,8 +991,9 @@ function renderLastMoveArrow() {
         const circle = document.createElementNS(svgNS, "circle");
         circle.setAttribute("cx", sq.offsetLeft + sq.offsetWidth / 2);
         circle.setAttribute("cy", sq.offsetTop + sq.offsetHeight / 2);
-        circle.setAttribute("r", Math.max(6, sq.offsetWidth * 0.14));
+        circle.setAttribute("r", Math.max(4, sq.offsetWidth * 0.08));
         circle.setAttribute("class", "last-move-capture-mark");
+        circle.setAttribute("filter", "url(#last-move-glow)");
         svg.appendChild(circle);
     });
 }

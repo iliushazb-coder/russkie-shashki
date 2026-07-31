@@ -296,9 +296,9 @@ h1 {
 }
 
 .last-move-capture-mark {
-    fill: rgba(230, 40, 40, 0.55);
-    stroke: rgba(255, 255, 255, 0.6);
-    stroke-width: 1.5;
+    fill: rgba(178, 214, 128, 0.35);
+    stroke: rgba(230, 245, 210, 0.4);
+    stroke-width: 1;
 }
 
 .square {
