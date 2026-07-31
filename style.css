@@ -516,7 +516,7 @@ h1 {
     50% { opacity: 1; }
 }
 
-/* Дамка — ювелирная корона с самоцветами на всю шашку, с эффектной анимацией появления */
+/* Дамка — премиальная золотая корона, строго по центру, 80% шашки */
 .king {
     border-color: #ffd75e !important;
     border-width: 4px !important;
@@ -541,12 +541,19 @@ h1 {
 .king::before {
     content: "";
     position: absolute;
-    inset: -22%;
-    background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%275%205%2054%2051%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27g%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff6d0%27/%3E%3Cstop%20offset%3D%2735%25%27%20stop-color%3D%27%23ffdb85%27/%3E%3Cstop%20offset%3D%2765%25%27%20stop-color%3D%27%23dba83f%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%238f6a1c%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M9%2C46%20L16%2C18%20L25%2C31%20L32%2C12%20L39%2C31%20L48%2C18%20L55%2C46%20Z%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272.5%27%20stroke-linejoin%3D%27round%27%20stroke-linecap%3D%27round%27/%3E%3Crect%20x%3D%279%27%20y%3D%2744%27%20width%3D%2746%27%20height%3D%2710%27%20rx%3D%272.5%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272.5%27/%3E%3Ccircle%20cx%3D%2716%27%20cy%3D%2716%27%20r%3D%273%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2732%27%20cy%3D%2710%27%20r%3D%273.4%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2748%27%20cy%3D%2716%27%20r%3D%273%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2720%27%20cy%3D%2749%27%20r%3D%272.2%27%20fill%3D%27%233b6fd6%27%20stroke%3D%27%23132a56%27%20stroke-width%3D%271%27/%3E%3Ccircle%20cx%3D%2732%27%20cy%3D%2749%27%20r%3D%272.4%27%20fill%3D%27%23d63b3b%27%20stroke%3D%27%23561313%27%20stroke-width%3D%271%27/%3E%3Ccircle%20cx%3D%2744%27%20cy%3D%2749%27%20r%3D%272.2%27%20fill%3D%27%233b6fd6%27%20stroke%3D%27%23132a56%27%20stroke-width%3D%271%27/%3E%3C/svg%3E");
+    /* Фикс: жестко задаём позицию и размер, перебивая базовый класс .piece::before */
+    top: 10% !important;
+    left: 10% !important;
+    width: 80% !important;
+    height: 80% !important;
+    inset: auto !important; /* Сбрасываем старый inset */
+    
+    /* Новый SVG: массивная, объемная золотая корона с рубинами и сапфирами */
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27goldGrad%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff6d0%27/%3E%3Cstop%20offset%3D%2735%25%27%20stop-color%3D%27%23ffd700%27/%3E%3Cstop%20offset%3D%2765%25%27%20stop-color%3D%27%23b8860b%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%235c440d%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M15%2C40%20L30%2C60%20L50%2C25%20L70%2C60%20L85%2C40%20L80%2C75%20L20%2C75%20Z%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%273%27%20stroke-linejoin%3D%27round%27/%3E%3Crect%20x%3D%2720%27%20y%3D%2765%27%20width%3D%2760%27%20height%3D%2710%27%20rx%3D%273%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2715%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2725%27%20r%3D%276%27%20fill%3D%27%234db8ff%27%20stroke%3D%27%23002a66%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2785%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2770%27%20r%3D%273.5%27%20fill%3D%27%234dff88%27%20stroke%3D%27%23003311%27%20stroke-width%3D%271%27/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;
     background-size: contain;
-    filter: drop-shadow(0 0 10px rgba(255,225,140,1)) drop-shadow(0 0 4px rgba(255,255,255,0.6)) drop-shadow(0 1px 2px rgba(0,0,0,0.55));
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6)) drop-shadow(0 0 8px rgba(255,215,120,0.9));
     pointer-events: none;
     z-index: 3;
     animation: crownAppear 0.45s cubic-bezier(.34,1.56,.64,1), crownShimmer 2.6s ease-in-out 0.45s infinite;
