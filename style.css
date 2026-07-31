@@ -371,25 +371,27 @@ h1 {
     pointer-events: none;
 }
 
-/* Тёмные шашки — отполированный чёрный камень с премиальным стеклянным контуром */
+/* Тёмные шашки — отполированный камень с серебряным контуром */
 .piece-dark {
+    border-radius: 50% !important; /* Делаем идеально круглыми */
     background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
-    border: 2px solid rgba(255, 255, 255, 0.15);
+    border: 2px solid #a0a0a8; /* Благородный серебристый цвет */
     box-shadow:
         inset -5px -5px 9px rgba(0,0,0,0.7),
         inset 4px 4px 8px rgba(190,190,205,0.35),
-        0 0 8px rgba(0,0,0,0.4),
+        0 0 6px rgba(160, 160, 168, 0.3), /* Лёгкое серебряное свечение */
         0 6px 12px rgba(0,0,0,0.6);
 }
 
-/* Светлые шашки — матовое опаловое стекло с премиальным контуром */
+/* Светлые шашки — матовое стекло с бронзовым контуром */
 .piece-light {
+    border-radius: 50% !important; /* Делаем идеально круглыми */
     background: radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%);
-    border: 2px solid rgba(40, 20, 10, 0.25);
+    border: 2px solid #b08d57; /* Мягкий бронзовый цвет */
     box-shadow:
         inset -5px -5px 9px rgba(160,130,70,0.25),
         inset 4px 4px 10px rgba(255,255,255,0.9),
-        0 0 8px rgba(0,0,0,0.3),
+        0 0 6px rgba(176, 141, 87, 0.3), /* Лёгкое тёплое свечение */
         0 6px 12px rgba(0,0,0,0.45);
 }
 
