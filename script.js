@@ -2035,7 +2035,8 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", true);
+            // Везде ставим false, чтобы была только одна кнопка "ОК"
+            showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", false);
         }
     }, 10000);
 
@@ -2049,7 +2050,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Меняем false, чтобы скрыть кнопку "Начать новую игру"
+            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Нет активной игры", false);
             return;
         }
@@ -2063,6 +2064,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
+            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Нельзя играть против самого себя", false);
             return;
         }
@@ -2085,6 +2087,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
+            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Соперник оффлайн\n\n" + creatorName + " больше не находится в игре.", false);
             return;
         }
@@ -2095,7 +2098,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Меняем false, чтобы скрыть кнопку "Начать новую игру"
+            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Нет активной игры", false);
             return;
         }
@@ -2131,7 +2134,8 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", true);
+            // Везде ставим false, чтобы была только одна кнопка "ОК"
+            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
         });
     }).catch(function () {
         if (settled) return;
@@ -2140,7 +2144,8 @@ function checkForInviteLink() {
         roomCode = null;
         showScreen(menuScreen);
         loadActiveRooms();
-        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", true);
+        // Везде ставим false, чтобы была только одна кнопка "ОК"
+        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
     });
 
     return true;
