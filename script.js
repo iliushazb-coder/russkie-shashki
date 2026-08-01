@@ -2049,7 +2049,8 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Нет активной игры", true);
+            // Меняем false, чтобы скрыть кнопку "Начать новую игру"
+            showInfoModal("Нет активной игры", false);
             return;
         }
 
@@ -2094,7 +2095,8 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Нет активной игры", true);
+            // Меняем false, чтобы скрыть кнопку "Начать новую игру"
+            showInfoModal("Нет активной игры", false);
             return;
         }
 
