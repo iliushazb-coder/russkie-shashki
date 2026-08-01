@@ -519,28 +519,6 @@ h1 {
     50% { opacity: 1; }
 }
 
-/* Дамка — сохраняем оригинальные цвета шашек, только меняем ободок */
-.king {
-    border-color: #ffd75e !important; /* Золотой ободок для дамки */
-    border-width: 3px !important;
-    transform: scale(1.1);
-    box-shadow:
-        inset -4px -4px 8px rgba(0,0,0,0.35),
-        inset 3px 3px 8px rgba(255,240,200,0.55),
-        0 0 15px rgba(255, 215, 94, 0.4),
-        0 5px 10px rgba(0,0,0,0.5) !important;
-}
-
-/* Светлая дамка остаётся светлой (айвори) */
-.piece-light.king {
-    background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%) !important;
-}
-
-/* Тёмная дамка остаётся тёмной (чёрный камень) */
-.piece-dark.king {
-    background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%) !important;
-}
-
 .king::before {
     content: "";
     position: absolute;
@@ -720,4 +698,27 @@ h1 {
 
 .room-item-remove:active {
     background: rgba(255, 90, 90, 0.3);
+}
+
+/* =========================================================
+   ФИНАЛЬНЫЕ СТИЛИ ДАМОК (В КОНЦЕ ФАЙЛА, ПЕРЕБИВАЮТ ВСЁ)
+   ========================================================= */
+
+.king {
+    border-color: #ffd75e !important;
+    border-width: 3px !important;
+    transform: scale(1.1) !important;
+    box-shadow:
+        inset -4px -4px 8px rgba(0,0,0,0.35),
+        inset 3px 3px 8px rgba(255,240,200,0.55),
+        0 0 15px rgba(255, 215, 94, 0.4),
+        0 5px 10px rgba(0,0,0,0.5) !important;
+}
+
+.piece-light.king {
+    background: radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%) !important;
+}
+
+.piece-dark.king {
+    background: radial-gradient(circle at 30% 22%, #4a4a52, #1a1a1e 45%, #000000 85%) !important;
 }
