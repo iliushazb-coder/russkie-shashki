@@ -969,7 +969,15 @@ function updateBoardPieces() {
             const piece = document.createElement("div");
             piece.classList.add("piece", pieceData.color === "light" ? "piece-light" : "piece-dark");
             piece.dataset.pieceColor = pieceData.color;
-            if (desiredIsKing) piece.classList.add("king");
+            if (desiredIsKing) {
+                piece.classList.add("king");
+                // ФИКС: Жестко задаем цвет шашки через JS, чтобы 100% перебить старый кэш CSS в Telegram
+                if (pieceData.color === "dark") {
+                    piece.style.setProperty("background", "radial-gradient(circle at 30% 22%, #4a4a52, #1a1a1e 45%, #000000 85%)", "important");
+                } else {
+                    piece.style.setProperty("background", "radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%)", "important");
+                }
+            }
             if (isSelected) piece.classList.add("selected");
             square.appendChild(piece);
             pieceElements[key] = piece;
