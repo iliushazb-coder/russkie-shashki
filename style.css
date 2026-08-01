@@ -519,26 +519,26 @@ h1 {
     50% { opacity: 1; }
 }
 
-/* Дамка — премиальный жемчужный стеклянный контур */
+/* Дамка — сохраняем оригинальные цвета шашек, только меняем ободок */
 .king {
-    border-color: rgba(255, 255, 255, 0.4) !important;
+    border-color: #ffd75e !important; /* Золотой ободок для дамки */
     border-width: 3px !important;
     transform: scale(1.1);
     box-shadow:
         inset -4px -4px 8px rgba(0,0,0,0.35),
         inset 3px 3px 8px rgba(255,240,200,0.55),
-        0 0 12px rgba(255, 255, 255, 0.15),
+        0 0 15px rgba(255, 215, 94, 0.4),
         0 5px 10px rgba(0,0,0,0.5) !important;
 }
 
-/* Светлая дамка — приглушённое золото */
+/* Светлая дамка остаётся светлой (айвори) */
 .piece-light.king {
-    background: radial-gradient(circle at 30% 22%, #f0e0b0, #c8a868 45%, #8f6a1c 85%) !important;
+    background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%) !important;
 }
 
-/* Тёмная дамка — глубокий золотисто-бронзовый, чётко отличим от светлой */
+/* Тёмная дамка остаётся тёмной (чёрный камень) */
 .piece-dark.king {
-    background: radial-gradient(circle at 30% 22%, #6e4e1e, #3c2a0f 45%, #170f05 85%) !important;
+    background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%) !important;
 }
 
 .king::before {
