@@ -677,8 +677,11 @@ function statusForColor(color) {
     if (!presence) {
         return { text: ratingPrefix + "подключение...", cls: "status-neutral" };
     }
-    if (presence.online === false) {
-        return { text: ratingPrefix + "покинул игру 👋", cls: "status-left" };
+    // Проверяем время последнего обновления. 
+    // Если прошло более 20 секунд — игрок свернул или закрыл приложение.
+    const isStale = (Date.now() - (presence.lastSeen || 0)) > 20000;
+    if (presence.online === false || isStale) {
+        return { text: ratingPrefix + "Оффлайн", cls: "status-left" };
     }
     return { text: ratingPrefix + "В игре", cls: "status-online" };
 }
@@ -774,6 +777,17 @@ function cleanupAbandonedRoom() {
 
 // ===== СИСТЕМА ПРИСУТСТВИЯ (ONLINE / OFFLINE) =====
 
+function handleVisibilityChange() {
+    if (!myPresenceRef) return;
+    if (document.hidden || !document.hasFocus()) {
+        // Приложение свернуто — ставим статус "Оффлайн"
+        myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    } else {
+        // Приложение снова активно — ставим статус "В игре"
+        myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    }
+}
+
 function setupPresence() {
     if (!myTelegramId || !roomCode) return;
     stopPresenceHeartbeat();
@@ -787,6 +801,11 @@ function setupPresence() {
     presenceHeartbeatInterval = setInterval(function () {
         presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }, 4000);
+
+    // Отслеживаем сворачивание/разворачивание приложения
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleVisibilityChange);
+    window.addEventListener("focus", handleVisibilityChange);
 }
 
 function stopPresenceHeartbeat() {
@@ -794,6 +813,9 @@ function stopPresenceHeartbeat() {
         clearInterval(presenceHeartbeatInterval);
         presenceHeartbeatInterval = null;
     }
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("blur", handleVisibilityChange);
+    window.removeEventListener("focus", handleVisibilityChange);
 }
 
 function markMyselfLeftExplicitly() {
@@ -1926,8 +1948,10 @@ function showInfoModal(text, offerNewGame) {
     infoModalText.textContent = text;
     if (offerNewGame) {
         btnInfoNewGame.classList.remove("hidden");
+        btnInfoClose.textContent = "Закрыть";
     } else {
         btnInfoNewGame.classList.add("hidden");
+        btnInfoClose.textContent = "ОК";
     }
     infoModal.classList.remove("hidden");
 }
@@ -1986,15 +2010,19 @@ function checkForInviteLink() {
         }
 
         // Проверяем, действительно ли создатель комнаты сейчас на связи —
-        // если он закрыл приложение до нашего подключения, показываем
-        // отдельное красивое окно вместо зависшей пустой доски
+        // если он закрыл приложение, показываем модалку "ОК" и возвращаем в меню
         const creatorPresence = room.presence && room.presence.light;
-        const creatorIsOffline = !creatorPresence || creatorPresence.online === false;
+        const creatorLastSeen = creatorPresence ? (creatorPresence.lastSeen || 0) : 0;
+        const isCreatorStale = (Date.now() - creatorLastSeen) > 20000; 
+        const creatorIsOffline = !creatorPresence || creatorPresence.online === false || isCreatorStale;
+        
         if (creatorIsOffline) {
             settled = true;
             clearTimeout(timeoutId);
-            offlineOpponentText.textContent = "Игрок " + creatorName + " больше не находится в игре.";
-            offlineOpponentModal.classList.remove("hidden");
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal("Соперник оффлайн\n\n" + creatorName + " больше не находится в игре.", false);
             return;
         }
 
