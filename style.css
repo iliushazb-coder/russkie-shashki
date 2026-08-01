@@ -696,6 +696,10 @@ h1 {
     border-color: #ffd75e !important;
     border-width: 3px !important;
     transform: scale(1.1) !important;
+}
+
+.piece-light.king {
+    background: radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%) !important;
     box-shadow:
         inset -4px -4px 8px rgba(0,0,0,0.35),
         inset 3px 3px 8px rgba(255,240,200,0.55),
@@ -703,10 +707,11 @@ h1 {
         0 5px 10px rgba(0,0,0,0.5) !important;
 }
 
-.piece-light.king {
-    background: radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%) !important;
-}
-
 .piece-dark.king {
     background: radial-gradient(circle at 30% 22%, #4a4a52, #1a1a1e 45%, #000000 85%) !important;
+    box-shadow:
+        inset -5px -5px 9px rgba(0,0,0,0.7),
+        inset 3px 3px 8px rgba(150,150,160,0.35),
+        0 0 10px rgba(200, 200, 210, 0.3),
+        0 5px 10px rgba(0,0,0,0.5) !important;
 }
