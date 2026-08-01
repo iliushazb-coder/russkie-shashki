@@ -680,10 +680,6 @@ function statusForColor(color) {
     if (presence.online === false) {
         return { text: ratingPrefix + "покинул игру 👋", cls: "status-left" };
     }
-    const age = Date.now() - (presence.lastSeen || 0);
-    if (age > STALE_MS) {
-        return { text: ratingPrefix + "потерял соединение", cls: "status-left" };
-    }
     return { text: ratingPrefix + "В игре", cls: "status-online" };
 }
 
@@ -1482,6 +1478,19 @@ function startOnlineGame() {
             // Партия реально изменилась (ход, взятие, победа, подключение игрока) —
             // применяем новое состояние полностью, включая пересчёт выбранной шашки
             const piecesBeforeThisUpdate = currentState ? currentState.pieces : null;
+
+            // ФИКС РЕВАНША: Если игра перезапустилась (был победитель, а теперь нет и ходы сброшены),
+            // мы автоматически обновляем свой цвет и переворачиваем доску для обоих игроков.
+            if (currentState && currentState.winner && !newState.winner && newState.moveCount === 0) {
+                if (newState.players && newState.players.light && newState.players.light.id === myTelegramId) {
+                    myColor = "light";
+                } else if (newState.players && newState.players.dark && newState.players.dark.id === myTelegramId) {
+                    myColor = "dark";
+                }
+                flipped = (myColor === "dark");
+                boardBuilt = false; // Заставляем доску перестроиться с новой ориентацией
+            }
+
             currentState = newState;
 
             if (currentState.turn === myColor && currentState.mustContinueFrom) {
@@ -1980,13 +1989,11 @@ function checkForInviteLink() {
         // если он закрыл приложение до нашего подключения, показываем
         // отдельное красивое окно вместо зависшей пустой доски
         const creatorPresence = room.presence && room.presence.light;
-        const creatorIsOffline = creatorPresence
-            ? (creatorPresence.online === false || (Date.now() - (creatorPresence.lastSeen || 0)) > STALE_MS)
-            : true;
+        const creatorIsOffline = !creatorPresence || creatorPresence.online === false;
         if (creatorIsOffline) {
             settled = true;
             clearTimeout(timeoutId);
-            offlineOpponentText.textContent = "Игрок " + creatorName + " больше не в игре.";
+            offlineOpponentText.textContent = "Игрок " + creatorName + " больше не находится в игре.";
             offlineOpponentModal.classList.remove("hidden");
             return;
         }
@@ -2102,8 +2109,17 @@ btnOfflinePlayBot.addEventListener("click", function () {
 
 btnOfflineInviteFriend.addEventListener("click", function () {
     offlineOpponentModal.classList.add("hidden");
-    roomCode = null;
-    showScreen(timeControlScreen);
+    pendingTimeControlSeconds = 0;
+    createRoomAndShowWaiting();
+    setTimeout(function() {
+        const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+        const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
+        if (window.Telegram && window.Telegram.WebApp) {
+            Telegram.WebApp.openTelegramLink(shareUrl);
+        } else {
+            window.open(shareUrl, "_blank");
+        }
+    }, 500);
 });
 
 // ===== СТАТИСТИКА И РЕЙТИНГ =====
