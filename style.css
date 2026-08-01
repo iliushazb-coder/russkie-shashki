@@ -251,7 +251,6 @@ h1 {
     text-shadow: 0 0 16px rgba(255,190,90,0.6);
 }
 
-/* Рама доски — вишнёвое дерево с золотым кантом, как на референсе */
 #board-wrapper {
     display: grid;
     grid-template-columns: clamp(20px, 6vw, 32px) repeat(8, clamp(32px, 10.2vw, 50px)) clamp(20px, 6vw, 32px);
@@ -310,7 +309,6 @@ h1 {
     position: relative;
 }
 
-/* Светлые клетки — тёплое светлое дерево (клён), хорошая читаемость */
 .light {
     background: linear-gradient(155deg, #e8d5a8 0%, #d4b88a 100%);
     box-shadow:
@@ -318,7 +316,6 @@ h1 {
         inset 0 0 4px rgba(0, 0, 0, 0.1);
 }
 
-/* Тёмные клетки — глубокое тёмное дерево (орех), чёткий контраст */
 .dark {
     background: linear-gradient(155deg, #6b4226 0%, #3e2415 100%);
     box-shadow:
@@ -371,27 +368,25 @@ h1 {
     pointer-events: none;
 }
 
-/* Тёмные шашки — отполированный камень с серебряным контуром */
 .piece-dark {
-    border-radius: 50% !important; /* Делаем идеально круглыми */
+    border-radius: 50% !important;
     background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
-    border: 2px solid #a0a0a8; /* Благородный серебристый цвет */
+    border: 2px solid #a0a0a8;
     box-shadow:
         inset -5px -5px 9px rgba(0,0,0,0.7),
         inset 4px 4px 8px rgba(190,190,205,0.35),
-        0 0 6px rgba(160, 160, 168, 0.3), /* Лёгкое серебряное свечение */
+        0 0 6px rgba(160, 160, 168, 0.3),
         0 6px 12px rgba(0,0,0,0.6);
 }
 
-/* Светлые шашки — мягкий цвет слоновой кости с тёмно-графитовым объёмным контуром */
 .piece-light {
     border-radius: 50% !important;
     background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
-    border: 2px solid #1a1a1a; /* Тёмно-графитовый контур для объёма */
+    border: 2px solid #1a1a1a;
     box-shadow:
         inset -5px -5px 9px rgba(100,70,30,0.4),
         inset 4px 4px 10px rgba(255,250,230,0.4),
-        0 0 5px rgba(0,0,0,0.4), /* Лёгкая тёмная тень вокруг */
+        0 0 5px rgba(0,0,0,0.4),
         0 6px 12px rgba(0,0,0,0.45);
 }
 
@@ -439,7 +434,6 @@ h1 {
     height: clamp(32px, 10.2vw, 50px);
 }
 
-/* Выбранная обычная шашка — ЗЕЛЁНОЕ свечение */
 .selected {
     border-color: #4CD964 !important;
     transform: scale(1.1);
@@ -451,7 +445,6 @@ h1 {
     50% { box-shadow: inset -4px -4px 7px rgba(0,0,0,0.4), 0 0 24px #4CD964, 0 0 10px #4CD964; }
 }
 
-/* Выбранная дамка — РОЗОВОЕ свечение */
 .king.selected {
     border-color: #ff2d92 !important;
     transform: scale(1.18);
@@ -463,7 +456,6 @@ h1 {
     50% { box-shadow: inset -4px -4px 7px rgba(0,0,0,0.4), 0 0 26px #ff2d92, 0 0 11px #ff2d92; }
 }
 
-/* Подсказка хода — тёплая янтарная стеклянная капля, как отблеск подсветки доски */
 .square.move-hint::after {
     content: "";
     width: 30%;
@@ -482,7 +474,6 @@ h1 {
     50% { opacity: 1; transform: scale(1.12); }
 }
 
-/* Подсказка "нужно бить" через 5 секунд бездействия */
 .piece.must-capture-hint {
     border-color: #ff8c3c !important;
     animation: mustCaptureHint 1.8s ease-in-out infinite;
@@ -522,14 +513,11 @@ h1 {
 .king::before {
     content: "";
     position: absolute;
-    /* Фикс: жестко задаём позицию и размер, перебивая базовый класс .piece::before */
     top: 10% !important;
     left: 10% !important;
     width: 80% !important;
     height: 80% !important;
-    inset: auto !important; /* Сбрасываем старый inset */
-    
-    /* Новый SVG: массивная, объемная золотая корона с рубинами и сапфирами */
+    inset: auto !important;
     background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27goldGrad%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff6d0%27/%3E%3Cstop%20offset%3D%2735%25%27%20stop-color%3D%27%23ffd700%27/%3E%3Cstop%20offset%3D%2765%25%27%20stop-color%3D%27%23b8860b%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%235c440d%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M15%2C40%20L30%2C60%20L50%2C25%20L70%2C60%20L85%2C40%20L80%2C75%20L20%2C75%20Z%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%273%27%20stroke-linejoin%3D%27round%27/%3E%3Crect%20x%3D%2720%27%20y%3D%2765%27%20width%3D%2760%27%20height%3D%2710%27%20rx%3D%273%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2715%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2725%27%20r%3D%276%27%20fill%3D%27%234db8ff%27%20stroke%3D%27%23002a66%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2785%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2770%27%20r%3D%273.5%27%20fill%3D%27%234dff88%27%20stroke%3D%27%23003311%27%20stroke-width%3D%271%27/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: center;

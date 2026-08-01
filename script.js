@@ -19,9 +19,6 @@ firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
 
 // ===== ЗВУКИ =====
-// Синтезируются прямо в браузере (Web Audio API) — не требуют никаких
-// внешних файлов, поэтому звук гарантированно работает всегда.
-
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
 function playTone(frequency, duration, volume) {
@@ -37,8 +34,6 @@ function playTone(frequency, duration, volume) {
     oscillator.stop(audioContext.currentTime + duration);
 }
 
-// Глухой "деревянный" стук — фильтрованный шум с быстрым затуханием,
-// звучит гораздо реалистичнее, чем чистый электронный тон
 function playWoodKnock(duration, volume, filterFreq) {
     const bufferSize = Math.floor(audioContext.sampleRate * duration);
     const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
@@ -64,46 +59,26 @@ function playWoodKnock(duration, volume, filterFreq) {
     noise.start();
 }
 
-// Лёгкий выбор шашки — короткий, тихий, высокий стук
-function playSelectSound() {
-    playWoodKnock(0.045, 0.14, 2600);
-}
-
-// Обычный ход — мягкий, короткий стук дерева по дереву
-function playMoveSound() {
-    playWoodKnock(0.09, 0.32, 1700);
-}
-
-// Взятие — более глубокий, выразительный двойной удар
+function playMoveSound() { playWoodKnock(0.09, 0.32, 1700); }
 function playCaptureSound() {
     playWoodKnock(0.13, 0.5, 850);
     setTimeout(function () { playWoodKnock(0.1, 0.32, 650); }, 55);
 }
-
-// Превращение в дамку — короткая торжественная восходящая трель
 function playKingSound() {
     playTone(523, 0.1, 0.22);
     setTimeout(function () { playTone(659, 0.1, 0.24); }, 90);
     setTimeout(function () { playTone(784, 0.22, 0.26); }, 180);
 }
-
-// Взятие уже готовой дамкой — самый тяжёлый, мощный удар
 function playKingCaptureSound() {
     playWoodKnock(0.18, 0.6, 600);
     setTimeout(function () { playWoodKnock(0.13, 0.42, 480); }, 65);
     setTimeout(function () { playTone(880, 0.14, 0.18); }, 150);
 }
-
-// Окончание партии
 function playWinSound() {
     playTone(392, 0.15, 0.3);
     setTimeout(function () { playTone(523, 0.15, 0.3); }, 150);
     setTimeout(function () { playTone(659, 0.3, 0.3); }, 300);
 }
-
-// wasKing — била ли ЭТА шашка уже будучи дамкой (а не только что ставшая ею).
-// Только для выбора звука: превращение всегда играет king-эффект, а взятие уже
-// готовой дамкой — самый увесистый вариант, отдельно от простого взятия
 function playSoundForMoveType(type, wasKing) {
     if (type === "king") {
         playKingSound();
@@ -275,14 +250,6 @@ function canCaptureAt(pieces, row, col, color, king) {
     return false;
 }
 
-// ===== ПРАВИЛО "ОБЯЗАТЕЛЬНОЕ ВЗЯТИЕ ДО КОНЦА" =====
-// Среди всех вариантов продолжения одной и той же серии боя (для дамки —
-// выбор клетки приземления, для простой шашки — выбор направления) обязателен
-// только тот путь, что даёт МАКСИМАЛЬНОЕ суммарное число сбитых шашек в этой серии.
-// Работает всегда, без исключений.
-
-// Возвращает все прыжки-взятия, доступные из (row, col): каждый — это
-// {toRow, toCol, capturedRow, capturedCol}
 function getCaptureJumps(pieces, row, col, color, king) {
     const opponent = color === "light" ? "dark" : "light";
     const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
@@ -321,8 +288,6 @@ function getCaptureJumps(pieces, row, col, color, king) {
     return jumps;
 }
 
-// Максимальное число ДОПОЛНИТЕЛЬНЫХ шашек, которые можно сбить, продолжая
-// серию из (row, col) — рекурсивно перебирает все варианты продолжения
 function withPendingBlockers(pieces, pendingRemovals) {
     if (!pendingRemovals || pendingRemovals.length === 0) return pieces;
     const blocked = {};
@@ -357,7 +322,6 @@ function maxCaptureChainLength(pieces, row, col, color, king) {
     return best;
 }
 
-// Из списка прыжков оставляет только те, что ведут к максимально длинной серии
 function filterJumpsByMajorityRule(pieces, row, col, color, king, jumps) {
     if (jumps.length <= 1) return jumps;
 
@@ -462,15 +426,9 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     let capturedLight = state.capturedLight || 0;
     let moveCount = state.moveCount || 0;
 
-    // Полный маршрут текущего хода — накапливается через всю серию взятий одной
-    // шашкой. Сбрасывается только когда начинается НОВЫЙ ход (mustContinueFrom
-    // ещё не был установлен), а не на каждом отдельном прыжке внутри серии.
     let lastMovePath = (!mustContinueFrom) ? [{ row: fromRow, col: fromCol }] : (state.lastMovePath || [{ row: fromRow, col: fromCol }]).slice();
     let lastCapturedSquares = (!mustContinueFrom) ? [] : (state.lastCapturedSquares || []).slice();
 
-    // Клетки шашек, сбитых РАНЕЕ В ЭТОМ ЖЕ ходе — по правилам они физически
-    // остаются на доске (как препятствие) до самого конца всего хода и снимаются
-    // только когда серия взятий полностью завершится.
     let pendingRemovals = (!mustContinueFrom) ? [] : (state.pendingRemovals || []).slice();
 
     if (turn !== actingColor) return null;
@@ -493,9 +451,6 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const king = !!moving.king;
     if (!king && rowDiff > 2) return null;
 
-    // "Вид доски с учётом ещё не снятых шашек" — используется только для ПРОВЕРКИ
-    // хода, чтобы дамка не могла пройти сквозь клетку, где лежит уже сбитая
-    // в этом ходе (но формально ещё не снятая) шашка соперника
     const scanPieces = withPendingBlockers(pieces, pendingRemovals);
 
     let opponentsOnPath = 0;
@@ -539,10 +494,6 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     } else {
         if (!king && rowDiff !== 2) return null;
 
-        // Разрешён только тот прыжок (направление/клетка приземления), который
-        // ведёт к максимально длинной суммарной серии взятий этой же шашкой.
-        // Проверяем через scanPieces, чтобы уже сбитые ранее шашки корректно
-        // учитывались как препятствие и в этом расчёте тоже.
         {
             const allJumps = getCaptureJumps(scanPieces, fromRow, fromCol, actingColor, king);
             const bestJumps = filterJumpsByMajorityRule(scanPieces, fromRow, fromCol, actingColor, king, allJumps);
@@ -574,11 +525,6 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         pieces[toKey] = moving;
         lastMovePath.push({ row: toRow, col: toCol });
 
-        // ВАЖНО: даже если шашка только что стала дамкой (becameKing), она обязана
-        // продолжить серию взятий, если такая возможность есть — по официальным
-        // правилам русских шашек превращение в дамку не прерывает серию боя.
-        // Проверяем через "вид с препятствиями", учитывающий все шашки, сбитые
-        // за весь этот ход — включая ту, что только что сбили этим прыжком.
         const continuationScanPieces = withPendingBlockers(pieces, pendingRemovals);
         const canContinue = canCaptureAt(continuationScanPieces, toRow, toCol, actingColor, !!moving.king);
 
@@ -646,13 +592,11 @@ function renderCapturedIcons(container, count, iconClass) {
     }
 }
 
-// Кэш статистики игроков (побед/поражений), чтобы не запрашивать базу
-// при каждой мелкой перерисовке панели — грузим один раз на игрока за партию
 let statsCache = {};
 
 function fetchAndCacheStatsIfNeeded(id) {
     if (!id || statsCache[id] !== undefined) return;
-    statsCache[id] = null; // помечаем как "уже загружаем", чтобы не дублировать запрос
+    statsCache[id] = null;
     database.ref("stats/" + id).once("value").then(function (snapshot) {
         const val = snapshot.val();
         statsCache[id] = { wins: (val && val.wins) || 0, losses: (val && val.losses) || 0 };
@@ -677,8 +621,6 @@ function statusForColor(color) {
     if (!presence) {
         return { text: ratingPrefix + "подключение...", cls: "status-neutral" };
     }
-    // Проверяем время последнего обновления. 
-    // Если прошло более 20 секунд — игрок свернул или закрыл приложение.
     const isStale = (Date.now() - (presence.lastSeen || 0)) > 20000;
     if (presence.online === false || isStale) {
         return { text: ratingPrefix + "Оффлайн", cls: "status-left" };
@@ -723,7 +665,7 @@ function renderPlayerPanels() {
 }
 
 let opponentGraceTimer = null;
-const RECONNECT_GRACE_MS = 60000; // 60 секунд на восстановление соединения
+const RECONNECT_GRACE_MS = 60000;
 
 function checkOpponentAbsence() {
     if (!isOnlineGame || !currentState || currentState.winner) return;
@@ -733,8 +675,6 @@ function checkOpponentAbsence() {
     const info = statusForColor(oppColor);
 
     if (info.cls === "status-left") {
-        // Соперник пропал (потерял соединение / закрыл приложение) — не завершаем
-        // партию сразу, а даём 60 секунд на то, чтобы он мог вернуться
         if (!opponentGraceTimer) {
             opponentGraceTimer = setTimeout(function () {
                 opponentGraceTimer = null;
@@ -754,7 +694,6 @@ function checkOpponentAbsence() {
             }, RECONNECT_GRACE_MS);
         }
     } else {
-        // Соперник снова в сети — отменяем отсчёт, если он был запущен
         if (opponentGraceTimer) {
             clearTimeout(opponentGraceTimer);
             opponentGraceTimer = null;
@@ -780,10 +719,8 @@ function cleanupAbandonedRoom() {
 function handleVisibilityChange() {
     if (!myPresenceRef) return;
     if (document.hidden || !document.hasFocus()) {
-        // Приложение свернуто — ставим статус "Оффлайн"
         myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     } else {
-        // Приложение снова активно — ставим статус "В игре"
         myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }
 }
@@ -802,7 +739,6 @@ function setupPresence() {
         presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }, 4000);
 
-    // Отслеживаем сворачивание/разворачивание приложения
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("blur", handleVisibilityChange);
     window.addEventListener("focus", handleVisibilityChange);
@@ -829,10 +765,6 @@ let squareElements = {};
 let boardBuilt = false;
 let builtFlipped = null;
 
-// Строит сетку доски (клетки + подписи) ОДИН РАЗ. Повторно вызывается только
-// при смене ориентации доски (переворот под другого игрока) или при первом запуске —
-// НЕ при каждом ходе. Именно многократное пересоздание этой сетки было причиной
-// того, что все шашки на мгновение "испарялись" при каждом ходе.
 function ensureBoardBuilt() {
     if (boardBuilt && builtFlipped === flipped) return;
 
@@ -921,9 +853,6 @@ function ensureBoardBuilt() {
     builtFlipped = flipped;
 }
 
-// Обновляет ТОЛЬКО те клетки, где реально изменилась шашка (ход, взятие, превращение
-// в дамку), плюс подсветку последнего хода и выбранной шашки. Остальные ~28 шашек
-// на доске вообще не трогаются — поэтому они больше не "мигают".
 function updateBoardPieces() {
     if (!currentState) return;
     const lastMove = currentState.lastMove;
@@ -957,12 +886,10 @@ function updateBoardPieces() {
             const existingColor = existingPieceEl ? existingPieceEl.dataset.pieceColor : null;
 
             if (existingPieceEl && existingColor === pieceData.color && existingIsKing === desiredIsKing) {
-                // Эта же шашка уже правильно отображена в этой клетке — просто обновляем выделение
                 existingPieceEl.classList.toggle("selected", isSelected);
                 continue;
             }
 
-            // Шашки здесь не было, либо она изменилась (например, стала дамкой) — создаём заново
             if (existingPieceEl) {
                 existingPieceEl.remove();
             }
@@ -971,12 +898,6 @@ function updateBoardPieces() {
             piece.dataset.pieceColor = pieceData.color;
             if (desiredIsKing) {
                 piece.classList.add("king");
-                // ФИКС: Жестко задаем цвет шашки через JS, чтобы 100% перебить старый кэш CSS в Telegram
-                if (pieceData.color === "dark") {
-                    piece.style.setProperty("background", "radial-gradient(circle at 30% 22%, #4a4a52, #1a1a1e 45%, #000000 85%)", "important");
-                } else {
-                    piece.style.setProperty("background", "radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%)", "important");
-                }
             }
             if (isSelected) piece.classList.add("selected");
             square.appendChild(piece);
@@ -996,10 +917,6 @@ function renderBoard() {
     checkRematchProposal();
 }
 
-// Рисует полупрозрачную красную стрелку через ВЕСЬ маршрут последнего хода —
-// включая все промежуточные клетки долгой серии взятий дамкой, а не только
-// финальный прыжок. Остаётся на доске до тех пор, пока не начнётся новый ход
-// (currentState.lastMovePath заменяется на новый маршрут автоматически).
 function renderLastMoveArrow() {
     const svg = document.getElementById("last-move-arrow-svg");
     if (!svg) return;
@@ -1080,8 +997,6 @@ function clearMustCaptureHint() {
     hintedMustCapturePieces = [];
 }
 
-// Подсвечивает именно те шашки, которыми есть обязательное взятие —
-// вызывается только если игрок 5 секунд не делает выбор, хотя обязан бить
 function showMustCaptureHint() {
     mustCaptureHintTimer = null;
     if (!currentState || currentState.winner || selectedFrom) return;
@@ -1105,8 +1020,6 @@ function showMustCaptureHint() {
     }
 }
 
-// Перезапускает отсчёт 5 секунд — вызывается при каждом реальном изменении
-// доски и при каждом клике игрока (выбор/снятие выбора шашки)
 function resetMustCaptureHintTimer() {
     if (mustCaptureHintTimer) {
         clearTimeout(mustCaptureHintTimer);
@@ -1128,8 +1041,6 @@ function clearMoveHints() {
     hintedSquares = [];
 }
 
-// Возвращает список клеток, куда выбранная шашка может сходить прямо сейчас
-// (учитывает обязательное взятие: если бой возможен — возвращаются только клетки боя)
 function getLegalDestinations(pieces, row, col, color, king, pendingRemovals) {
     const scanPieces = withPendingBlockers(pieces, pendingRemovals);
     const captureJumps = getCaptureJumps(scanPieces, row, col, color, king);
@@ -1235,9 +1146,6 @@ function renderEndGameModal() {
 
 let statsRecordedForRoom = null;
 
-// Записывает результат ЭТОЙ онлайн-партии в статистику текущего игрока —
-// каждый клиент пишет только свою собственную запись, поэтому конфликтов
-// между двумя игроками одной партии не возникает
 function recordGameResult() {
     if (!isOnlineGame || !currentState || !currentState.winner) return;
     if (!myTelegramId) return;
@@ -1257,16 +1165,12 @@ function recordGameResult() {
 }
 
 function updateSelectionDom(oldSel, newSel) {
-    // Снимаем "selected" со ВСЕХ шашек на доске, а не только с ранее запомненной одной —
-    // это исключает рассинхронизацию между тем, что видно на экране, и тем,
-    // что игра считает выбранным внутри себя
     for (const key in pieceElements) {
         pieceElements[key].classList.remove("selected");
     }
     if (newSel) {
         const newEl = pieceElements[newSel.row + "_" + newSel.col];
         if (newEl) newEl.classList.add("selected");
-        // Звук при выборе шашки убран по запросу
     }
     showMoveHints(newSel);
     resetMustCaptureHintTimer();
@@ -1306,16 +1210,11 @@ let pendingSyncChain = Promise.resolve();
 
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
-        // Сначала проверяем ход локально по тем же правилам, что и сервер
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
 
-        // Только для выбора звука: била ли ЭТА шашка уже будучи дамкой
-        // (до того, как currentState.pieces будет перезаписан результатом хода)
         const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
 
-        // Мгновенно показываем результат игроку, не дожидаясь ответа от Firebase —
-        // это устраняет ощутимую задержку в 3-5 секунд на нажатие
         currentState.pieces = optimisticResult.pieces;
         currentState.turn = optimisticResult.turn;
         currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
@@ -1341,15 +1240,6 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
         renderBoard();
 
-        // Затем синхронизируем этот же ход с сервером в фоне. ВАЖНО: отправляем
-        // запросы к Firebase СТРОГО по очереди (через pendingSyncChain), а не
-        // параллельно. Если во время серии ударов кликать быстро, несколько
-        // запросов могли уйти почти одновременно — и следующий иногда "видел"
-        // на сервере ещё не зафиксированный предыдущий ход, из-за чего сам
-        // отклонялся как невозможный, а финальный шаг серии терялся. Теперь
-        // каждый следующий запрос ждёт завершения предыдущего, прежде чем уйти
-        // на сервер — на скорость отклика для игрока это не влияет (локально
-        // всё по-прежнему происходит мгновенно).
         pendingSyncChain = pendingSyncChain.then(function () {
             return database.ref("rooms/" + roomCode).transaction(function (room) {
                 if (!room || !room.pieces || room.winner) return;
@@ -1391,8 +1281,6 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 return newRoom;
             });
         }).catch(function () {
-            // Если этот шаг по какой-то причине не прошёл — не роняем всю цепочку,
-            // следующий ход всё равно попробует синхронизироваться самостоятельно
         });
     } else {
         const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
@@ -1481,22 +1369,6 @@ function startOnlineGame() {
 
         const newSignature = computeGameSignature(newState);
 
-        // ВАЖНО: если во время серии ударов кликать быстро, локальное состояние
-        // (после нескольких оптимистичных ходов подряд) может "убежать" вперёд
-        // раньше, чем сервер успеет подтвердить каждый шаг по отдельности. В этом
-        // случае сюда прилетает "эхо" от сервера про ход, который уже устарел —
-        // если такое эхо применить как есть, оно откатит экран назад, будто серия
-        // ударов прервалась раньше времени. Поэтому: если номер хода в пришедших
-        // данных МЕНЬШЕ того, что уже показано на экране — это устаревшее эхо
-        // нашего же более раннего хода, и его нужно просто проигнорировать,
-        // дождавшись, пока сервер "догонит" локальный прогресс.
-        //
-        // НО: это относится только к ходу ВНУТРИ ещё идущей партии. Когда партия
-        // уже завершена локально (currentState.winner уже установлен) и приходит
-        // "Новая игра" — там moveCount ЗАКОНОМЕРНО сбрасывается на 0, что тоже
-        // технически "меньше" прежнего — это НЕ устаревшее эхо, а настоящий
-        // новый сброс, и его нельзя игнорировать (именно это раньше приводило
-        // к тому, что после "Новая игра" оставалась видна старая доска).
         const isMidGameStaleEcho = currentState && !currentState.winner && newState.moveCount < lastSeenMoveCount;
         if (isMidGameStaleEcho) {
             currentState.presence = newState.presence;
@@ -1505,12 +1377,8 @@ function startOnlineGame() {
         }
 
         if (newSignature !== lastRenderedSignature) {
-            // Партия реально изменилась (ход, взятие, победа, подключение игрока) —
-            // применяем новое состояние полностью, включая пересчёт выбранной шашки
             const piecesBeforeThisUpdate = currentState ? currentState.pieces : null;
 
-            // ФИКС РЕВАНША: Если игра перезапустилась (был победитель, а теперь нет и ходы сброшены),
-            // мы автоматически обновляем свой цвет и переворачиваем доску для обоих игроков.
             if (currentState && currentState.winner && !newState.winner && newState.moveCount === 0) {
                 if (newState.players && newState.players.light && newState.players.light.id === myTelegramId) {
                     myColor = "light";
@@ -1518,7 +1386,7 @@ function startOnlineGame() {
                     myColor = "dark";
                 }
                 flipped = (myColor === "dark");
-                boardBuilt = false; // Заставляем доску перестроиться с новой ориентацией
+                boardBuilt = false;
             }
 
             currentState = newState;
@@ -1530,7 +1398,6 @@ function startOnlineGame() {
             }
 
             if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
-                // Только для выбора звука: била ли шашка соперника уже будучи дамкой
                 let movingPieceWasKing = false;
                 if (piecesBeforeThisUpdate && currentState.lastMove) {
                     const fromKey = currentState.lastMove.from.row + "_" + currentState.lastMove.from.col;
@@ -1542,10 +1409,6 @@ function startOnlineGame() {
             lastRenderedSignature = newSignature;
             renderBoard();
         } else if (currentState) {
-            // Ничего в самой партии не изменилось — это просто heartbeat статуса "в сети".
-            // ВАЖНО: не трогаем currentState.pieces/turn и НЕ сбрасываем selectedFrom —
-            // именно этот сброс раньше "съедал" выбор шашки игрока в середине хода
-            // и вызывал ощущение задержки в 3-5 секунд или необходимость нажать дважды.
             currentState.presence = newState.presence;
             updatePresenceOnly();
         }
@@ -1624,11 +1487,9 @@ function loadActiveRooms() {
                 const darkP = room && room.players && room.players.dark;
                 const bothPlayersExist = !!(lightP && darkP && lightP.id && darkP.id);
                 const differentPlayers = bothPlayersExist && lightP.id !== darkP.id;
-                const STALE_ROOM_MS = 48 * 60 * 60 * 1000; // 48 часов без единого хода — считаем заброшенной
+                const STALE_ROOM_MS = 48 * 60 * 60 * 1000;
                 const isStaleRoom = room && room.turnStartedAt && (Date.now() - room.turnStartedAt > STALE_ROOM_MS);
                 
-                // Проверяем, находятся ли игроки сейчас в сети. 
-                // Если кто-то закрыл приложение (более 20 секунд нет обновления) — игра считается неактивной.
                 const lightPresence = room.presence && room.presence.light;
                 const darkPresence = room.presence && room.presence.dark;
                 const isLightStale = !lightPresence || lightPresence.online === false || (Date.now() - (lightPresence.lastSeen || 0)) > 20000;
@@ -1673,8 +1534,6 @@ function loadActiveRooms() {
                         removeBtn.title = "Убрать из списка";
                         removeBtn.addEventListener("click", function (e) {
                             e.stopPropagation();
-                            // Убираем только из СВОЕГО списка — саму партию и запись
-                            // у соперника не трогаем, чтобы не мешать его игре
                             database.ref("users/" + myTelegramId + "/rooms/" + item.code).remove().then(function () {
                                 loadActiveRooms();
                             });
@@ -1698,7 +1557,6 @@ function loadActiveRooms() {
 // ===== КНОПКИ МЕНЮ =====
 
 btnPlayFriend.addEventListener("click", function () {
-    // Мгновенно создаём новую комнату и вызываем окно отправки ссылки
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = generateRoomCode();
@@ -1737,7 +1595,6 @@ btnPlayFriend.addEventListener("click", function () {
         waitingText.textContent = "Ожидание подключения друга...";
         showScreen(waitingScreen);
 
-        // Сразу вызываем стандартное окно Telegram для выбора контакта и отправки приглашения
         const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
         if (window.Telegram && window.Telegram.WebApp) {
             Telegram.WebApp.openTelegramLink(shareUrl);
@@ -1797,8 +1654,6 @@ function createRoomAndShowWaiting() {
             opponentName: "Ожидание подключения...",
             myColor: "light"
         });
-        // Отмечаем себя "в сети" уже на этапе ожидания — иначе если создатель
-        // выйдет ДО подключения друга, второй игрок не сможет это обнаружить
         setupPresence();
     });
 
@@ -1870,8 +1725,6 @@ btnResignYes.addEventListener("click", function () {
 btnCloseGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
     markMyselfLeftExplicitly();
-    // Партия уже завершена (эта кнопка доступна только в модалке окончания игры) —
-    // сразу удаляем её из базы, чтобы старые сыгранные партии не копились там вечно
     if (isOnlineGame) {
         cleanupFinishedRoom();
     }
@@ -1893,7 +1746,6 @@ function cleanupFinishedRoom() {
 
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
-        // Не сбрасываем партию сразу — только предлагаем реванш, ждём согласия соперника
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
     } else {
         endGameModal.classList.add("hidden");
@@ -1921,7 +1773,6 @@ function performRematchReset() {
         newRoom.status = "active";
         newRoom.turnStartedAt = Date.now();
         newRoom.rematchProposal = null;
-        // Меняем цвета местами — кто был белыми, теперь чёрные, и наоборот
         const oldLight = room.players ? room.players.light : null;
         const oldDark = room.players ? room.players.dark : null;
         newRoom.players = { light: oldDark, dark: oldLight };
@@ -1929,9 +1780,6 @@ function performRematchReset() {
     });
 }
 
-// Проверяет, есть ли активное предложение реванша, и показывает нужный экран:
-// либо "жду ответа" (если предложил я сам), либо запрос "принять/отклонить"
-// (если предложил соперник)
 function checkRematchProposal() {
     if (!rematchRequestModal) return;
     if (!isOnlineGame || !currentState) {
@@ -2052,7 +1900,6 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", false);
         }
     }, 10000);
@@ -2067,7 +1914,6 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Нет активной игры", false);
             return;
         }
@@ -2081,13 +1927,10 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Нельзя играть против самого себя", false);
             return;
         }
 
-        // Проверяем, действительно ли создатель комнаты сейчас на связи —
-        // если он закрыл приложение, показываем модалку "ОК" и возвращаем в меню
         const creatorPresence = room.presence && room.presence.light;
         const creatorLastSeen = creatorPresence ? (creatorPresence.lastSeen || 0) : 0;
         const isCreatorStale = (Date.now() - creatorLastSeen) > 20000; 
@@ -2096,7 +1939,6 @@ function checkForInviteLink() {
         if (creatorIsOffline) {
             settled = true;
             clearTimeout(timeoutId);
-            // Полностью удаляем комнату из базы и из списка активных игр
             database.ref("rooms/" + roomCode).remove();
             if (myTelegramId) {
                 database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
@@ -2104,7 +1946,6 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Соперник оффлайн\n\n" + creatorName + " больше не находится в игре.", false);
             return;
         }
@@ -2115,7 +1956,6 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Нет активной игры", false);
             return;
         }
@@ -2151,7 +1991,6 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            // Везде ставим false, чтобы была только одна кнопка "ОК"
             showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
         });
     }).catch(function () {
@@ -2161,7 +2000,6 @@ function checkForInviteLink() {
         roomCode = null;
         showScreen(menuScreen);
         loadActiveRooms();
-        // Везде ставим false, чтобы была только одна кнопка "ОК"
         showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
     });
 
