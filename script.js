@@ -1681,7 +1681,64 @@ function loadActiveRooms() {
 // ===== КНОПКИ МЕНЮ =====
 
 btnPlayFriend.addEventListener("click", function () {
-    showScreen(timeControlScreen);
+    // Мгновенно создаём новую комнату и вызываем окно отправки ссылки
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    stopPresenceHeartbeat();
+    roomCode = generateRoomCode();
+    myColor = "light";
+    isOnlineGame = true;
+    pendingTimeControlSeconds = 0;
+
+    const initialState = {
+        status: "waiting",
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
+        moveType: null,
+        pieces: createInitialPieces(),
+        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+        timeControlSeconds: pendingTimeControlSeconds,
+        turnStartedAt: Date.now(),
+        winner: null,
+        winReason: null
+    };
+
+    database.ref("rooms/" + roomCode).set(initialState).then(function () {
+        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+            opponentName: "Ожидание подключения...",
+            myColor: "light"
+        });
+        setupPresence();
+
+        const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+        inviteLinkBox.textContent = link;
+        waitingText.textContent = "Ожидание подключения друга...";
+        showScreen(waitingScreen);
+
+        // Сразу вызываем стандартное окно Telegram для выбора контакта и отправки приглашения
+        const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
+        if (window.Telegram && window.Telegram.WebApp) {
+            Telegram.WebApp.openTelegramLink(shareUrl);
+        } else {
+            window.open(shareUrl, "_blank");
+        }
+
+        database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
+            if (snapshot.val() === "active") {
+                database.ref("rooms/" + roomCode + "/status").off();
+                waitingText.textContent = "Друг подключился! Начинаем игру.";
+                setTimeout(function () {
+                    showScreen(gameScreen);
+                    startOnlineGame();
+                }, 1000);
+            }
+        });
+    });
 });
 
 const timeOptionButtons = document.querySelectorAll(".time-option");
@@ -2019,6 +2076,11 @@ function checkForInviteLink() {
         if (creatorIsOffline) {
             settled = true;
             clearTimeout(timeoutId);
+            // Полностью удаляем комнату из базы и из списка активных игр
+            database.ref("rooms/" + roomCode).remove();
+            if (myTelegramId) {
+                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
+            }
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
