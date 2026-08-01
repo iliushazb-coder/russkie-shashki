@@ -1240,7 +1240,7 @@ function updateSelectionDom(oldSel, newSel) {
     if (newSel) {
         const newEl = pieceElements[newSel.row + "_" + newSel.col];
         if (newEl) newEl.classList.add("selected");
-        playSelectSound();
+        // Звук при выборе шашки убран по запросу
     }
     showMoveHints(newSel);
     resetMustCaptureHintTimer();

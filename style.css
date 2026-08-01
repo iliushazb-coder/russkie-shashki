@@ -383,15 +383,15 @@ h1 {
         0 6px 12px rgba(0,0,0,0.6);
 }
 
-/* Светлые шашки — мягкий цвет слоновой кости (айвори), не режет глаз */
+/* Светлые шашки — мягкий цвет слоновой кости с тёмно-графитовым объёмным контуром */
 .piece-light {
     border-radius: 50% !important;
     background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
-    border: 2px solid #b08d57;
+    border: 2px solid #1a1a1a; /* Тёмно-графитовый контур для объёма */
     box-shadow:
         inset -5px -5px 9px rgba(100,70,30,0.4),
         inset 4px 4px 10px rgba(255,250,230,0.4),
-        0 0 6px rgba(176, 141, 87, 0.3),
+        0 0 5px rgba(0,0,0,0.4), /* Лёгкая тёмная тень вокруг */
         0 6px 12px rgba(0,0,0,0.45);
 }
 
