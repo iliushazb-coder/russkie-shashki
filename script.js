@@ -1618,7 +1618,16 @@ function loadActiveRooms() {
                 const differentPlayers = bothPlayersExist && lightP.id !== darkP.id;
                 const STALE_ROOM_MS = 48 * 60 * 60 * 1000; // 48 часов без единого хода — считаем заброшенной
                 const isStaleRoom = room && room.turnStartedAt && (Date.now() - room.turnStartedAt > STALE_ROOM_MS);
-                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner && !isStaleRoom;
+                
+                // Проверяем, находятся ли игроки сейчас в сети. 
+                // Если кто-то закрыл приложение (более 20 секунд нет обновления) — игра считается неактивной.
+                const lightPresence = room.presence && room.presence.light;
+                const darkPresence = room.presence && room.presence.dark;
+                const isLightStale = !lightPresence || lightPresence.online === false || (Date.now() - (lightPresence.lastSeen || 0)) > 20000;
+                const isDarkStale = !darkPresence || darkPresence.online === false || (Date.now() - (darkPresence.lastSeen || 0)) > 20000;
+                const isSomeoneOffline = isLightStale || isDarkStale;
+
+                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner && !isStaleRoom && !isSomeoneOffline;
 
                 if (isValidActiveGame) {
                     items.push({ code: code, opponent: data[code].opponentName || "Соперник", color: data[code].myColor });
