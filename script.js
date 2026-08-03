@@ -2,7 +2,9 @@ if (window.Telegram && window.Telegram.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
 }
+
 // ===== FIREBASE =====
+
 const firebaseConfig = {
     apiKey: "AIzaSyBZzxmmgRxNe1b-MFG4zIlCFTI7D3lStiA",
     authDomain: "russkie-shashki-online.firebaseapp.com",
@@ -12,10 +14,14 @@ const firebaseConfig = {
     messagingSenderId: "225166276271",
     appId: "1:225166276271:web:f15906ebc83350b002c65a"
 };
+
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
+
 // ===== ЗВУКИ =====
+
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+
 function playTone(frequency, duration, volume) {
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
@@ -28,6 +34,7 @@ function playTone(frequency, duration, volume) {
     oscillator.start();
     oscillator.stop(audioContext.currentTime + duration);
 }
+
 function playWoodKnock(duration, volume, filterFreq) {
     const bufferSize = Math.floor(audioContext.sampleRate * duration);
     const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
@@ -37,18 +44,22 @@ function playWoodKnock(duration, volume, filterFreq) {
     }
     const noise = audioContext.createBufferSource();
     noise.buffer = buffer;
+
     const filter = audioContext.createBiquadFilter();
     filter.type = "lowpass";
     filter.frequency.value = filterFreq;
     filter.Q.value = 1.1;
+
     const gain = audioContext.createGain();
     gain.gain.setValueAtTime(volume, audioContext.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
+
     noise.connect(filter);
     filter.connect(gain);
     gain.connect(audioContext.destination);
     noise.start();
 }
+
 function playMoveSound() { playWoodKnock(0.09, 0.32, 1700); }
 function playCaptureSound() {
     playWoodKnock(0.13, 0.5, 850);
@@ -82,7 +93,9 @@ function playSoundForMoveType(type, wasKing) {
         playMoveSound();
     }
 }
+
 // ===== ТЕЛЕГРАМ-ПОЛЬЗОВАТЕЛЬ =====
+
 function getMyTelegramUser() {
     if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) {
         const u = Telegram.WebApp.initDataUnsafe.user;
@@ -96,9 +109,12 @@ function getMyTelegramUser() {
     }
     return { id: id, name: "Игрок (браузер)" };
 }
+
 let myTelegramId = null;
 let myTelegramName = null;
+
 // ===== ЭКРАНЫ =====
+
 const menuScreen = document.getElementById("menu-screen");
 const timeControlScreen = document.getElementById("time-control-screen");
 const waitingScreen = document.getElementById("waiting-screen");
@@ -153,6 +169,7 @@ const drawOfferText = document.getElementById("draw-offer-text");
 const btnDrawAccept = document.getElementById("btn-draw-accept");
 const btnDrawDecline = document.getElementById("btn-draw-decline");
 const btnDrawCancel = document.getElementById("btn-draw-cancel");
+
 let roomCode = null;
 let myColor = "light";
 let isOnlineGame = false;
@@ -161,14 +178,16 @@ let roomListenerRef = null;
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
-const STALE_MS = 10000;
+const STALE_MS = 45000; // ФИКС 1: Увеличено с 20 до 45 сек для защиты от ложных выходов при свернутом телефоне
 const BOT_USERNAME = "russkie_shashki_bot/play";
+
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let code = "";
     for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
     return code;
 }
+
 function showScreen(screen) {
     menuScreen.classList.add("hidden");
     timeControlScreen.classList.add("hidden");
@@ -176,7 +195,9 @@ function showScreen(screen) {
     gameScreen.classList.add("hidden");
     screen.classList.remove("hidden");
 }
+
 // ===== ИГРОВОЙ ДВИЖОК =====
+
 function createInitialPieces() {
     const pieces = {};
     for (let row = 0; row < 8; row++) {
@@ -192,9 +213,11 @@ function createInitialPieces() {
     }
     return pieces;
 }
+
 function pieceAt(pieces, row, col) {
     return pieces[row + "_" + col] || null;
 }
+
 function countPiecesOfColor(pieces, color) {
     let count = 0;
     for (const key in pieces) {
@@ -202,10 +225,12 @@ function countPiecesOfColor(pieces, color) {
     }
     return count;
 }
+
 function canCaptureAt(pieces, row, col, color, king) {
     const opponent = color === "light" ? "dark" : "light";
     const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
     const maxDistance = king ? 7 : 2;
+
     for (let d = 0; d < directions.length; d++) {
         const dRow = directions[d][0];
         const dCol = directions[d][1];
@@ -232,11 +257,13 @@ function canCaptureAt(pieces, row, col, color, king) {
     }
     return false;
 }
+
 function getCaptureJumps(pieces, row, col, color, king) {
     const opponent = color === "light" ? "dark" : "light";
     const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
     const maxDistance = king ? 7 : 2;
     const jumps = [];
+
     for (let d = 0; d < directions.length; d++) {
         const dRow = directions[d][0];
         const dCol = directions[d][1];
@@ -268,6 +295,7 @@ function getCaptureJumps(pieces, row, col, color, king) {
     }
     return jumps;
 }
+
 function withPendingBlockers(pieces, pendingRemovals) {
     if (!pendingRemovals || pendingRemovals.length === 0) return pieces;
     const blocked = {};
@@ -277,9 +305,11 @@ function withPendingBlockers(pieces, pendingRemovals) {
     });
     return blocked;
 }
+
 function maxCaptureChainLength(pieces, row, col, color, king) {
     const jumps = getCaptureJumps(pieces, row, col, color, king);
     if (jumps.length === 0) return 0;
+
     let best = 0;
     for (let i = 0; i < jumps.length; i++) {
         const j = jumps[i];
@@ -287,18 +317,22 @@ function maxCaptureChainLength(pieces, row, col, color, king) {
         for (const k in pieces) newPieces[k] = pieces[k];
         newPieces[j.capturedRow + "_" + j.capturedCol] = { color: "blocked", king: false };
         delete newPieces[row + "_" + col];
+
         let newKing = king;
         if (!king) {
             if ((color === "light" && j.toRow === 0) || (color === "dark" && j.toRow === 7)) newKing = true;
         }
         newPieces[j.toRow + "_" + j.toCol] = { color: color, king: newKing };
+
         const sub = 1 + maxCaptureChainLength(newPieces, j.toRow, j.toCol, color, newKing);
         if (sub > best) best = sub;
     }
     return best;
 }
+
 function filterJumpsByMajorityRule(pieces, row, col, color, king, jumps) {
     if (jumps.length <= 1) return jumps;
+
     let bestLen = -1;
     const lens = [];
     for (let i = 0; i < jumps.length; i++) {
@@ -307,27 +341,32 @@ function filterJumpsByMajorityRule(pieces, row, col, color, king, jumps) {
         for (const k in pieces) newPieces[k] = pieces[k];
         newPieces[j.capturedRow + "_" + j.capturedCol] = { color: "blocked", king: false };
         delete newPieces[row + "_" + col];
+
         let newKing = king;
         if (!king) {
             if ((color === "light" && j.toRow === 0) || (color === "dark" && j.toRow === 7)) newKing = true;
         }
         newPieces[j.toRow + "_" + j.toCol] = { color: color, king: newKing };
+
         const len = 1 + maxCaptureChainLength(newPieces, j.toRow, j.toCol, color, newKing);
         lens.push(len);
         if (len > bestLen) bestLen = len;
     }
+
     const filtered = [];
     for (let i = 0; i < jumps.length; i++) {
         if (lens[i] === bestLen) filtered.push(jumps[i]);
     }
     return filtered;
 }
+
 function canMoveNormally(pieces, row, col, color, king) {
     const forwardDirection = color === "light" ? -1 : 1;
     const directions = king
         ? [[-1, -1], [-1, 1], [1, -1], [1, 1]]
         : [[forwardDirection, -1], [forwardDirection, 1]];
     const maxDistance = king ? 7 : 1;
+
     for (let d = 0; d < directions.length; d++) {
         const dRow = directions[d][0];
         const dCol = directions[d][1];
@@ -345,6 +384,7 @@ function canMoveNormally(pieces, row, col, color, king) {
     }
     return false;
 }
+
 function hasMandatoryCapture(pieces, color) {
     for (const key in pieces) {
         const p = pieces[key];
@@ -357,6 +397,7 @@ function hasMandatoryCapture(pieces, color) {
     }
     return false;
 }
+
 function hasAnyLegalMove(pieces, color) {
     if (hasMandatoryCapture(pieces, color)) return true;
     for (const key in pieces) {
@@ -370,6 +411,7 @@ function hasAnyLegalMove(pieces, color) {
     }
     return false;
 }
+
 function checkWinCondition(pieces, opponentColor) {
     if (countPiecesOfColor(pieces, opponentColor) === 0) {
         return { winner: opponentColor === "light" ? "dark" : "light", reason: "no_pieces" };
@@ -379,35 +421,46 @@ function checkWinCondition(pieces, opponentColor) {
     }
     return null;
 }
+
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
     for (const k in state.pieces) {
         pieces[k] = { color: state.pieces[k].color, king: !!state.pieces[k].king };
     }
+
     let turn = state.turn;
     let mustContinueFrom = state.mustContinueFrom || null;
     let capturedDark = state.capturedDark || 0;
     let capturedLight = state.capturedLight || 0;
     let moveCount = state.moveCount || 0;
+
     let lastMovePath = (!mustContinueFrom) ? [{ row: fromRow, col: fromCol }] : (state.lastMovePath || [{ row: fromRow, col: fromCol }]).slice();
     let lastCapturedSquares = (!mustContinueFrom) ? [] : (state.lastCapturedSquares || []).slice();
+
     let pendingRemovals = (!mustContinueFrom) ? [] : (state.pendingRemovals || []).slice();
+
     if (turn !== actingColor) return null;
+
     const fromKey = fromRow + "_" + fromCol;
     const toKey = toRow + "_" + toCol;
     const moving = pieces[fromKey];
     if (!moving || moving.color !== actingColor) return null;
+
     if (mustContinueFrom && (mustContinueFrom.row !== fromRow || mustContinueFrom.col !== fromCol)) return null;
     if (toRow < 0 || toRow > 7 || toCol < 0 || toCol > 7) return null;
     if (pieces[toKey]) return null;
+
     const rowDiff = Math.abs(toRow - fromRow);
     const colDiff = Math.abs(toCol - fromCol);
     if (rowDiff !== colDiff || rowDiff === 0) return null;
+
     const dRow = (toRow - fromRow) / rowDiff;
     const dCol = (toCol - fromCol) / colDiff;
     const king = !!moving.king;
     if (!king && rowDiff > 2) return null;
+
     const scanPieces = withPendingBlockers(pieces, pendingRemovals);
+
     let opponentsOnPath = 0;
     let capturedKey = null;
     for (let dist = 1; dist < rowDiff; dist++) {
@@ -421,21 +474,26 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         }
     }
     if (opponentsOnPath > 1) return null;
+
     const forwardDirection = actingColor === "light" ? -1 : 1;
     const actualDirection = toRow - fromRow > 0 ? 1 : -1;
+
     let becameKing = false;
     let moveType;
+
     if (opponentsOnPath === 0) {
         if (mustContinueFrom) return null;
         if (hasMandatoryCapture(pieces, actingColor)) return null;
         if (!king && rowDiff !== 1) return null;
         if (!king && actualDirection !== forwardDirection) return null;
+
         delete pieces[fromKey];
         if (!king) {
             if (actingColor === "light" && toRow === 0) { moving.king = true; becameKing = true; }
             if (actingColor === "dark" && toRow === 7) { moving.king = true; becameKing = true; }
         }
         pieces[toKey] = moving;
+
         turn = actingColor === "light" ? "dark" : "light";
         mustContinueFrom = null;
         moveCount++;
@@ -443,6 +501,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         lastMovePath.push({ row: toRow, col: toCol });
     } else {
         if (!king && rowDiff !== 2) return null;
+
         {
             const allJumps = getCaptureJumps(scanPieces, fromRow, fromCol, actingColor, king);
             const bestJumps = filterJumpsByMajorityRule(scanPieces, fromRow, fromCol, actingColor, king, allJumps);
@@ -452,25 +511,31 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
             }
             if (!isOptimalJump) return null;
         }
+
         const capturedPiece = pieces[capturedKey];
         delete pieces[capturedKey];
         delete pieces[fromKey];
         pendingRemovals.push(capturedKey);
+
         const capturedParts = capturedKey.split("_");
         lastCapturedSquares.push({ row: parseInt(capturedParts[0]), col: parseInt(capturedParts[1]) });
+
         if (capturedPiece.color === "dark") {
             capturedDark++;
         } else {
             capturedLight++;
         }
+
         if (!king) {
             if (actingColor === "light" && toRow === 0) { moving.king = true; becameKing = true; }
             if (actingColor === "dark" && toRow === 7) { moving.king = true; becameKing = true; }
         }
         pieces[toKey] = moving;
         lastMovePath.push({ row: toRow, col: toCol });
+
         const continuationScanPieces = withPendingBlockers(pieces, pendingRemovals);
         const canContinue = canCaptureAt(continuationScanPieces, toRow, toCol, actingColor, !!moving.king);
+
         if (canContinue) {
             mustContinueFrom = { row: toRow, col: toCol };
         } else {
@@ -480,6 +545,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         moveCount++;
         moveType = becameKing ? "king" : "capture";
     }
+
     let winner = null;
     let winReason = null;
     if (mustContinueFrom === null) {
@@ -490,6 +556,7 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
             winReason = winResult.reason;
         }
     }
+
     return {
         pieces: pieces,
         turn: turn,
@@ -506,7 +573,9 @@ function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
         winReason: winReason
     };
 }
+
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
+
 let currentState = null;
 let selectedFrom = null;
 let flipped = false;
@@ -514,12 +583,14 @@ let lastSeenMoveCount = -1;
 let endGameShownForRoom = null;
 let pieceElements = {};
 let lastRenderedSignature = null;
+
 function getLabels() {
     if (!flipped) {
         return { letters: ["a", "b", "c", "d", "e", "f", "g", "h"], numbers: [8, 7, 6, 5, 4, 3, 2, 1] };
     }
     return { letters: ["h", "g", "f", "e", "d", "c", "b", "a"], numbers: [1, 2, 3, 4, 5, 6, 7, 8] };
 }
+
 function renderCapturedIcons(container, count, iconClass) {
     container.innerHTML = "";
     for (let i = 0; i < count; i++) {
@@ -528,7 +599,9 @@ function renderCapturedIcons(container, count, iconClass) {
         container.appendChild(icon);
     }
 }
+
 let statsCache = {};
+
 function fetchAndCacheStatsIfNeeded(id) {
     if (!id || statsCache[id] !== undefined) return;
     statsCache[id] = null;
@@ -540,25 +613,29 @@ function fetchAndCacheStatsIfNeeded(id) {
         statsCache[id] = { wins: 0, losses: 0 };
     });
 }
+
 function statusForColor(color) {
     if (!currentState) return { text: "", cls: "" };
     if (!isOnlineGame) {
         return { text: "", cls: "" };
     }
+
     const playerId = currentState.players && currentState.players[color] && currentState.players[color].id;
     if (playerId) fetchAndCacheStatsIfNeeded(playerId);
     const stats = playerId ? statsCache[playerId] : null;
     const ratingPrefix = stats ? ("🏆" + stats.wins + " ❌" + stats.losses + " · ") : "";
+
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
         return { text: ratingPrefix + "подключение...", cls: "status-neutral" };
     }
-    const isStale = (Date.now() - (presence.lastSeen || 0)) > 20000;
+    const isStale = (Date.now() - (presence.lastSeen || 0)) > STALE_MS;
     if (presence.online === false || isStale) {
         return { text: ratingPrefix + "Оффлайн", cls: "status-left" };
     }
     return { text: ratingPrefix + "В игре", cls: "status-online" };
 }
+
 function applyStatusToElement(el, panelEl, statusInfo) {
     el.className = "player-status";
     if (statusInfo.cls) el.classList.add(statusInfo.cls);
@@ -569,14 +646,18 @@ function applyStatusToElement(el, panelEl, statusInfo) {
         panelEl.classList.remove("player-faded");
     }
 }
+
 function renderPlayerPanels() {
     if (!currentState) return;
     const lightName = (currentState.players && currentState.players.light && currentState.players.light.name) || "Белые";
     const darkName = (currentState.players && currentState.players.dark && currentState.players.dark.name) || "Чёрные";
+
     const topColor = flipped ? "light" : "dark";
     const bottomColor = flipped ? "dark" : "light";
+
     playerTopName.textContent = (topColor === "light" ? "⚪ " : "⚫ ") + (topColor === "light" ? lightName : darkName);
     playerBottomName.textContent = (bottomColor === "light" ? "⚪ " : "⚫ ") + (bottomColor === "light" ? lightName : darkName);
+
     if (topColor === "light") {
         renderCapturedIcons(playerTopCaptured, currentState.capturedDark, "dark-icon");
         renderCapturedIcons(playerBottomCaptured, currentState.capturedLight, "light-icon");
@@ -584,22 +665,29 @@ function renderPlayerPanels() {
         renderCapturedIcons(playerTopCaptured, currentState.capturedLight, "light-icon");
         renderCapturedIcons(playerBottomCaptured, currentState.capturedDark, "dark-icon");
     }
+
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
+
     checkOpponentAbsence();
 }
+
 let opponentGraceTimer = null;
 const RECONNECT_GRACE_MS = 60000;
+
 function checkOpponentAbsence() {
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (opponentAbsenceHandled) return;
+
     const oppColor = myColor === "light" ? "dark" : "light";
     const info = statusForColor(oppColor);
+
     if (info.cls === "status-left") {
         if (!opponentGraceTimer) {
             opponentGraceTimer = setTimeout(function () {
                 opponentGraceTimer = null;
                 if (!isOnlineGame || !currentState || currentState.winner || opponentAbsenceHandled) return;
+
                 const stillInfo = statusForColor(oppColor);
                 if (stillInfo.cls === "status-left") {
                     opponentAbsenceHandled = true;
@@ -620,6 +708,7 @@ function checkOpponentAbsence() {
         }
     }
 }
+
 function cleanupAbandonedRoom() {
     if (!roomCode) return;
     const codeToClean = roomCode;
@@ -632,43 +721,72 @@ function cleanupAbandonedRoom() {
     }
     database.ref("rooms/" + codeToClean).remove();
 }
+
 // ===== СИСТЕМА ПРИСУТСТВИЯ (ONLINE / OFFLINE) =====
+
+function handleVisibilityChange() {
+    if (!myPresenceRef) return;
+    if (document.hidden || !document.hasFocus()) {
+        myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    } else {
+        myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    }
+}
+
 function setupPresence() {
     if (!myTelegramId || !roomCode) return;
     stopPresenceHeartbeat();
+
     const presenceRef = database.ref("rooms/" + roomCode + "/presence/" + myColor);
     myPresenceRef = presenceRef;
+
     presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     presenceRef.onDisconnect().update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+
     presenceHeartbeatInterval = setInterval(function () {
         presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }, 4000);
+
+    // ФИКС 1: Отслеживаем сворачивание приложения
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("blur", handleVisibilityChange);
+    window.addEventListener("focus", handleVisibilityChange);
 }
+
 function stopPresenceHeartbeat() {
     if (presenceHeartbeatInterval) {
         clearInterval(presenceHeartbeatInterval);
         presenceHeartbeatInterval = null;
     }
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
+    window.removeEventListener("blur", handleVisibilityChange);
+    window.removeEventListener("focus", handleVisibilityChange);
 }
+
 function markMyselfLeftExplicitly() {
     if (myPresenceRef) {
         myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }
     stopPresenceHeartbeat();
 }
+
 let squareElements = {};
 let boardBuilt = false;
 let builtFlipped = null;
+
 function ensureBoardBuilt() {
     if (boardBuilt && builtFlipped === flipped) return;
+
     const wrapper = document.getElementById("board-wrapper");
     wrapper.innerHTML = "";
     pieceElements = {};
     squareElements = {};
     hintedSquares = [];
+
     const labels = getLabels();
     const boardDiv = document.createElement("div");
     boardDiv.id = "board";
+
     const topLabels = document.createElement("div");
     topLabels.classList.add("labels", "labels-top");
     labels.letters.forEach(function (letter) {
@@ -677,6 +795,7 @@ function ensureBoardBuilt() {
         label.textContent = letter;
         topLabels.appendChild(label);
     });
+
     const bottomLabels = document.createElement("div");
     bottomLabels.classList.add("labels", "labels-bottom");
     labels.letters.forEach(function (letter) {
@@ -685,6 +804,7 @@ function ensureBoardBuilt() {
         label.textContent = letter;
         bottomLabels.appendChild(label);
     });
+
     const leftLabels = document.createElement("div");
     leftLabels.classList.add("labels", "labels-left");
     labels.numbers.forEach(function (number) {
@@ -693,6 +813,7 @@ function ensureBoardBuilt() {
         label.textContent = number;
         leftLabels.appendChild(label);
     });
+
     const rightLabels = document.createElement("div");
     rightLabels.classList.add("labels", "labels-right");
     labels.numbers.forEach(function (number) {
@@ -701,11 +822,13 @@ function ensureBoardBuilt() {
         label.textContent = number;
         rightLabels.appendChild(label);
     });
+
     wrapper.appendChild(topLabels);
     wrapper.appendChild(bottomLabels);
     wrapper.appendChild(leftLabels);
     wrapper.appendChild(rightLabels);
     wrapper.appendChild(boardDiv);
+
     for (let dispRow = 0; dispRow < 8; dispRow++) {
         for (let dispCol = 0; dispCol < 8; dispCol++) {
             let row, col;
@@ -716,39 +839,49 @@ function ensureBoardBuilt() {
                 row = dispRow;
                 col = dispCol;
             }
+
             const square = document.createElement("div");
             square.classList.add("square");
             square.dataset.row = row;
             square.dataset.col = col;
+
             const isDark = (row + col) % 2 !== 0;
             square.classList.add(isDark ? "dark" : "light");
+
             square.addEventListener("click", function () { handleClick(row, col); });
             boardDiv.appendChild(square);
             squareElements[row + "_" + col] = square;
         }
     }
+
     const arrowSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     arrowSvg.setAttribute("id", "last-move-arrow-svg");
     boardDiv.appendChild(arrowSvg);
+
     boardBuilt = true;
     builtFlipped = flipped;
 }
+
 function updateBoardPieces() {
     if (!currentState) return;
     const lastMove = currentState.lastMove;
+
     for (let row = 0; row < 8; row++) {
         for (let col = 0; col < 8; col++) {
             const key = row + "_" + col;
             const square = squareElements[key];
             if (!square) continue;
+
             const isLastMove = !!(lastMove && (
                 (lastMove.from.row === row && lastMove.from.col === col) ||
                 (lastMove.to.row === row && lastMove.to.col === col)
             ));
             square.classList.toggle("last-move", isLastMove);
+
             const pieceData = pieceAt(currentState.pieces, row, col);
             const existingPieceEl = pieceElements[key];
             const isSelected = !!(selectedFrom && selectedFrom.row === row && selectedFrom.col === col);
+
             if (!pieceData) {
                 if (existingPieceEl) {
                     existingPieceEl.remove();
@@ -756,13 +889,16 @@ function updateBoardPieces() {
                 }
                 continue;
             }
+
             const desiredIsKing = !!pieceData.king;
             const existingIsKing = existingPieceEl ? existingPieceEl.classList.contains("king") : null;
             const existingColor = existingPieceEl ? existingPieceEl.dataset.pieceColor : null;
+
             if (existingPieceEl && existingColor === pieceData.color && existingIsKing === desiredIsKing) {
                 existingPieceEl.classList.toggle("selected", isSelected);
                 continue;
             }
+
             if (existingPieceEl) {
                 existingPieceEl.remove();
             }
@@ -778,6 +914,7 @@ function updateBoardPieces() {
         }
     }
 }
+
 function renderBoard() {
     ensureBoardBuilt();
     updateBoardPieces();
@@ -789,12 +926,15 @@ function renderBoard() {
     checkRematchProposal();
     checkDrawProposal();
 }
+
 function renderLastMoveArrow() {
     const svg = document.getElementById("last-move-arrow-svg");
     if (!svg) return;
     while (svg.firstChild) svg.removeChild(svg.firstChild);
+
     const path = currentState && currentState.lastMovePath;
     if (!path || path.length < 2) return;
+
     const points = [];
     for (let i = 0; i < path.length; i++) {
         const sq = squareElements[path[i].row + "_" + path[i].col];
@@ -804,7 +944,9 @@ function renderLastMoveArrow() {
             y: sq.offsetTop + sq.offsetHeight / 2
         });
     }
+
     const svgNS = "http://www.w3.org/2000/svg";
+
     const defs = document.createElementNS(svgNS, "defs");
     const filter = document.createElementNS(svgNS, "filter");
     filter.setAttribute("id", "last-move-glow");
@@ -826,6 +968,7 @@ function renderLastMoveArrow() {
     filter.appendChild(merge);
     defs.appendChild(filter);
     svg.appendChild(defs);
+
     for (let i = 0; i < points.length - 1; i++) {
         const line = document.createElementNS(svgNS, "line");
         line.setAttribute("x1", points[i].x);
@@ -838,6 +981,7 @@ function renderLastMoveArrow() {
         line.setAttribute("filter", "url(#last-move-glow)");
         svg.appendChild(line);
     }
+
     const capturedSquares = currentState.lastCapturedSquares || [];
     capturedSquares.forEach(function (cap) {
         const sq = squareElements[cap.row + "_" + cap.col];
@@ -851,20 +995,25 @@ function renderLastMoveArrow() {
         svg.appendChild(circle);
     });
 }
+
 // ===== ПОДСКАЗКА "НУЖНО БИТЬ" ПОСЛЕ 5 СЕКУНД БЕЗДЕЙСТВИЯ =====
+
 let mustCaptureHintTimer = null;
 let hintedMustCapturePieces = [];
 const MUST_CAPTURE_HINT_DELAY_MS = 5000;
+
 function clearMustCaptureHint() {
     hintedMustCapturePieces.forEach(function (el) { el.classList.remove("must-capture-hint"); });
     hintedMustCapturePieces = [];
 }
+
 function showMustCaptureHint() {
     mustCaptureHintTimer = null;
     if (!currentState || currentState.winner || selectedFrom) return;
     const myTurnColor = isOnlineGame ? myColor : currentState.turn;
     if (currentState.turn !== myTurnColor) return;
     if (!hasMandatoryCapture(currentState.pieces, currentState.turn)) return;
+
     for (const key in currentState.pieces) {
         const p = currentState.pieces[key];
         if (p.color !== currentState.turn) continue;
@@ -880,22 +1029,28 @@ function showMustCaptureHint() {
         }
     }
 }
+
 function resetMustCaptureHintTimer() {
     if (mustCaptureHintTimer) {
         clearTimeout(mustCaptureHintTimer);
         mustCaptureHintTimer = null;
     }
     clearMustCaptureHint();
+
     if (!currentState || currentState.winner || selectedFrom) return;
     const myTurnColor = isOnlineGame ? myColor : currentState.turn;
     if (currentState.turn !== myTurnColor) return;
+
     mustCaptureHintTimer = setTimeout(showMustCaptureHint, MUST_CAPTURE_HINT_DELAY_MS);
 }
+
 let hintedSquares = [];
+
 function clearMoveHints() {
     hintedSquares.forEach(function (sq) { sq.classList.remove("move-hint"); });
     hintedSquares = [];
 }
+
 function getLegalDestinations(pieces, row, col, color, king, pendingRemovals) {
     const scanPieces = withPendingBlockers(pieces, pendingRemovals);
     const captureJumps = getCaptureJumps(scanPieces, row, col, color, king);
@@ -903,8 +1058,10 @@ function getLegalDestinations(pieces, row, col, color, king, pendingRemovals) {
     if (allowedJumps.length > 0) {
         return allowedJumps.map(function (j) { return { row: j.toRow, col: j.toCol }; });
     }
+
     const destinations = [];
     const directions = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+
     const forwardDirection = color === "light" ? -1 : 1;
     const moveDirections = king ? directions : [[forwardDirection, -1], [forwardDirection, 1]];
     const maxMoveDist = king ? 7 : 1;
@@ -925,6 +1082,7 @@ function getLegalDestinations(pieces, row, col, color, king, pendingRemovals) {
     }
     return destinations;
 }
+
 function showMoveHints(sel) {
     clearMoveHints();
     if (!sel || !currentState) return;
@@ -939,12 +1097,14 @@ function showMoveHints(sel) {
         }
     });
 }
+
 function formatTime(seconds) {
     const s = Math.max(0, Math.ceil(seconds));
     const m = Math.floor(s / 60);
     const rem = s % 60;
     return m + ":" + (rem < 10 ? "0" : "") + rem;
 }
+
 function updateTimerDisplay() {
     if (!currentState || currentState.winner) {
         turnTimerDiv.textContent = "";
@@ -955,10 +1115,17 @@ function updateTimerDisplay() {
         return;
     }
     const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
-    const remaining = currentState.timeControlSeconds - elapsed;
+    let remaining = currentState.timeControlSeconds - elapsed;
+    
+    // ФИКС 3: Предотвращаем показ времени больше положенного (например, 1:02 вместо 1:00)
+    if (remaining > currentState.timeControlSeconds) {
+        remaining = currentState.timeControlSeconds;
+    }
+    
     const whoseTurn = currentState.turn === "light" ? "Белые" : "Чёрные";
     turnTimerDiv.textContent = "⏱ Ход: " + whoseTurn + " — осталось " + formatTime(remaining);
 }
+
 function renderEndGameModal() {
     if (currentState && currentState.winner) {
         if (currentState.winner === "draw") {
@@ -977,13 +1144,16 @@ function renderEndGameModal() {
         const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? "Белые" : "Чёрные");
         const winnerIcon = winnerColor === "light" ? "⚪" : "⚫";
         const loserIcon = loserColor === "light" ? "⚪" : "⚫";
+
         let reasonText = "";
         if (currentState.winReason === "no_pieces") reasonText = "у соперника закончились шашки";
         else if (currentState.winReason === "no_moves") reasonText = "у соперника нет допустимых ходов";
         else if (currentState.winReason === "resign") reasonText = "соперник сдался";
         else if (currentState.winReason === "timeout") reasonText = "закончилось время на ход";
+
         let text = "🏆 Победитель: " + winnerName + " " + winnerIcon + "\nПроиграл: " + loserName + " " + loserIcon;
         if (reasonText) text += "\n(" + reasonText + ")";
+
         endGameText.textContent = text;
         endGameModal.classList.remove("hidden");
         const marker = (roomCode || "offline") + "_" + currentState.moveCount;
@@ -999,12 +1169,16 @@ function renderEndGameModal() {
         endGameModal.classList.add("hidden");
     }
 }
+
 let statsRecordedForRoom = null;
+
 function recordGameResult() {
     if (!isOnlineGame || !currentState || !currentState.winner) return;
     if (currentState.winner === "draw") return;
     if (!myTelegramId) return;
+
     const didIWin = currentState.winner === myColor;
+
     database.ref("stats/" + myTelegramId).transaction(function (current) {
         const result = current || { wins: 0, losses: 0, name: myTelegramName };
         result.name = myTelegramName;
@@ -1016,6 +1190,7 @@ function recordGameResult() {
         return result;
     });
 }
+
 function updateSelectionDom(oldSel, newSel) {
     for (const key in pieceElements) {
         pieceElements[key].classList.remove("selected");
@@ -1027,15 +1202,20 @@ function updateSelectionDom(oldSel, newSel) {
     showMoveHints(newSel);
     resetMustCaptureHintTimer();
 }
+
 function handleClick(row, col) {
     if (!currentState || currentState.winner) return;
     const state = currentState;
+
     if (isOnlineGame && state.turn !== myColor) return;
+
     const selectableColor = isOnlineGame ? myColor : state.turn;
     const pieceHere = pieceAt(state.pieces, row, col);
+
     if (pieceHere && pieceHere.color === state.turn && pieceHere.color === selectableColor) {
         if (state.mustContinueFrom) return;
         if (hasMandatoryCapture(state.pieces, state.turn) && !canCaptureAt(state.pieces, row, col, state.turn, !!pieceHere.king)) return;
+
         const oldSel = selectedFrom;
         let newSel;
         if (selectedFrom && selectedFrom.row === row && selectedFrom.col === col) {
@@ -1047,16 +1227,21 @@ function handleClick(row, col) {
         selectedFrom = newSel;
         return;
     }
+
     if (selectedFrom) {
         performMove(selectedFrom.row, selectedFrom.col, row, col);
     }
 }
+
 let pendingSyncChain = Promise.resolve();
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
+
         const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
+
         currentState.pieces = optimisticResult.pieces;
         currentState.turn = optimisticResult.turn;
         currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
@@ -1075,13 +1260,17 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         selectedFrom = optimisticResult.mustContinueFrom
             ? { row: optimisticResult.mustContinueFrom.row, col: optimisticResult.mustContinueFrom.col }
             : null;
+
         lastSeenMoveCount = currentState.moveCount;
         lastRenderedSignature = computeGameSignature(currentState);
+
         playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
         renderBoard();
+
         pendingSyncChain = pendingSyncChain.then(function () {
             return database.ref("rooms/" + roomCode).transaction(function (room) {
                 if (!room || !room.pieces || room.winner) return;
+
                 const state = {
                     pieces: room.pieces,
                     turn: room.turn,
@@ -1093,8 +1282,10 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                     lastCapturedSquares: room.lastCapturedSquares || null,
                     pendingRemovals: room.pendingRemovals || null
                 };
+
                 const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
                 if (!result) return;
+
                 const newRoom = {};
                 for (const key in room) newRoom[key] = room[key];
                 newRoom.pieces = result.pieces;
@@ -1143,7 +1334,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         }
     }
 }
+
 // ===== ЗАПУСК / ПЕРЕЗАПУСК ИГРЫ =====
+
 function computeGameSignature(state) {
     const winnerPart = state.winner || "";
     const winReasonPart = state.winReason || "";
@@ -1152,6 +1345,7 @@ function computeGameSignature(state) {
     const drawPart = JSON.stringify(state.drawProposal || null);
     return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart + "_" + rematchPart + "_" + drawPart;
 }
+
 function startOnlineGame() {
     isOnlineGame = true;
     flipped = (myColor === "dark");
@@ -1171,12 +1365,15 @@ function startOnlineGame() {
         clearTimeout(mustCaptureHintTimer);
         mustCaptureHintTimer = null;
     }
+
     setupPresence();
+
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
     roomListenerRef.on("value", function (snapshot) {
         const room = snapshot.val();
         if (!room || !room.pieces) return;
+
         const newState = {
             pieces: room.pieces,
             turn: room.turn,
@@ -1198,15 +1395,19 @@ function startOnlineGame() {
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };
+
         const newSignature = computeGameSignature(newState);
+
         const isMidGameStaleEcho = currentState && !currentState.winner && newState.moveCount < lastSeenMoveCount;
         if (isMidGameStaleEcho) {
             currentState.presence = newState.presence;
             updatePresenceOnly();
             return;
         }
+
         if (newSignature !== lastRenderedSignature) {
             const piecesBeforeThisUpdate = currentState ? currentState.pieces : null;
+
             if (currentState && currentState.winner && !newState.winner && newState.moveCount === 0) {
                 if (newState.players && newState.players.light && newState.players.light.id === myTelegramId) {
                     myColor = "light";
@@ -1216,12 +1417,15 @@ function startOnlineGame() {
                 flipped = (myColor === "dark");
                 boardBuilt = false;
             }
+
             currentState = newState;
+
             if (currentState.turn === myColor && currentState.mustContinueFrom) {
                 selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
             } else {
                 selectedFrom = null;
             }
+
             if (lastSeenMoveCount >= 0 && currentState.moveCount > lastSeenMoveCount) {
                 let movingPieceWasKing = false;
                 if (piecesBeforeThisUpdate && currentState.lastMove) {
@@ -1239,6 +1443,7 @@ function startOnlineGame() {
         }
     });
 }
+
 function startOfflineGame() {
     isOnlineGame = false;
     myColor = "light";
@@ -1278,7 +1483,9 @@ function startOfflineGame() {
     };
     renderBoard();
 }
+
 // ===== АКТИВНЫЕ ИГРЫ =====
+
 function loadActiveRooms() {
     const sectionEl = document.getElementById("active-rooms-section");
     const listEl = document.getElementById("active-rooms-list");
@@ -1297,29 +1504,35 @@ function loadActiveRooms() {
             noGameText.classList.remove("hidden");
             return;
         }
+
         let pending = codes.length;
         const items = [];
         codes.forEach(function (code) {
             database.ref("rooms/" + code).once("value").then(function (roomSnap) {
                 pending--;
                 const room = roomSnap.val();
+
                 const lightP = room && room.players && room.players.light;
                 const darkP = room && room.players && room.players.dark;
                 const bothPlayersExist = !!(lightP && darkP && lightP.id && darkP.id);
                 const differentPlayers = bothPlayersExist && lightP.id !== darkP.id;
                 const STALE_ROOM_MS = 48 * 60 * 60 * 1000;
                 const isStaleRoom = room && room.turnStartedAt && (Date.now() - room.turnStartedAt > STALE_ROOM_MS);
+                
                 const lightPresence = room.presence && room.presence.light;
                 const darkPresence = room.presence && room.presence.dark;
                 const isLightStale = !lightPresence || lightPresence.online === false || (Date.now() - (lightPresence.lastSeen || 0)) > 20000;
                 const isDarkStale = !darkPresence || darkPresence.online === false || (Date.now() - (darkPresence.lastSeen || 0)) > 20000;
                 const isSomeoneOffline = isLightStale || isDarkStale;
+
                 const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner && !isStaleRoom && !isSomeoneOffline;
+
                 if (isValidActiveGame) {
                     items.push({ code: code, opponent: data[code].opponentName || "Соперник", color: data[code].myColor });
                 } else {
                     database.ref("users/" + myTelegramId + "/rooms/" + code).remove();
                 }
+
                 if (pending === 0) {
                     listEl.innerHTML = "";
                     if (items.length === 0) {
@@ -1332,6 +1545,7 @@ function loadActiveRooms() {
                     items.forEach(function (item) {
                         const row = document.createElement("div");
                         row.className = "room-item-row";
+
                         const btn = document.createElement("button");
                         btn.className = "menu-button room-item-button";
                         btn.textContent = "Игра против " + item.opponent;
@@ -1342,6 +1556,7 @@ function loadActiveRooms() {
                             showScreen(gameScreen);
                             startOnlineGame();
                         });
+
                         const removeBtn = document.createElement("button");
                         removeBtn.className = "room-item-remove";
                         removeBtn.textContent = "✕";
@@ -1352,6 +1567,7 @@ function loadActiveRooms() {
                                 loadActiveRooms();
                             });
                         });
+
                         row.appendChild(btn);
                         row.appendChild(removeBtn);
                         listEl.appendChild(row);
@@ -1366,10 +1582,13 @@ function loadActiveRooms() {
         noGameText.classList.remove("hidden");
     });
 }
+
 // ===== КНОПКИ МЕНЮ =====
+
 btnPlayFriend.addEventListener("click", function () {
     showScreen(timeControlScreen);
 });
+
 const timeOptionButtons = document.querySelectorAll(".time-option");
 timeOptionButtons.forEach(function (btn) {
     btn.addEventListener("click", function () {
@@ -1377,12 +1596,14 @@ timeOptionButtons.forEach(function (btn) {
         createRoomAndShowWaiting();
     });
 });
+
 function createRoomAndShowWaiting() {
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = generateRoomCode();
     myColor = "light";
     isOnlineGame = true;
+
     const initialState = {
         status: "waiting",
         turn: "light",
@@ -1401,15 +1622,24 @@ function createRoomAndShowWaiting() {
         winner: null,
         winReason: null
     };
+
     database.ref("rooms/" + roomCode).set(initialState).then(function () {
         database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
             opponentName: "Ожидание подключения...",
             myColor: "light"
         });
         setupPresence();
+
         const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
         inviteLinkBox.textContent = link;
+        
+        // ФИКС 2: Сбрасываем текст ожидания, чтобы не зависало "Проверяем игру..."
+        waitingText.textContent = "Ожидание подключения друга...";
+        inviteLinkBox.classList.remove("hidden");
+        btnShareLink.classList.remove("hidden");
+        
         showScreen(waitingScreen);
+
         database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
             if (snapshot.val() === "active") {
                 database.ref("rooms/" + roomCode + "/status").off();
@@ -1422,6 +1652,7 @@ function createRoomAndShowWaiting() {
         });
     });
 }
+
 btnShareLink.addEventListener("click", function () {
     const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
     const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
@@ -1431,20 +1662,26 @@ btnShareLink.addEventListener("click", function () {
         window.open(shareUrl, "_blank");
     }
 });
+
 btnPlayBot.addEventListener("click", function () {
     showScreen(gameScreen);
     startOfflineGame();
 });
+
 // ===== СДАТЬСЯ =====
+
 btnResign.addEventListener("click", function () {
     resignConfirmModal.classList.remove("hidden");
 });
+
 btnResignNo.addEventListener("click", function () {
     resignConfirmModal.classList.add("hidden");
 });
+
 btnResignYes.addEventListener("click", function () {
     resignConfirmModal.classList.add("hidden");
     if (!currentState) return;
+
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode).transaction(function (room) {
             if (!room || room.winner) return;
@@ -1461,13 +1698,16 @@ btnResignYes.addEventListener("click", function () {
         renderBoard();
     }
 });
+
 // ===== НИЧЬЯ =====
+
 if (btnOfferDraw) {
     btnOfferDraw.addEventListener("click", function () {
         if (!isOnlineGame || !currentState || currentState.winner) return;
         database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
     });
 }
+
 function checkDrawProposal() {
     if (!drawOfferModal) return;
     if (!isOnlineGame || !currentState || currentState.winner) {
@@ -1492,6 +1732,7 @@ function checkDrawProposal() {
     }
     drawOfferModal.classList.remove("hidden");
 }
+
 if (btnDrawAccept) {
     btnDrawAccept.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
@@ -1507,19 +1748,23 @@ if (btnDrawAccept) {
         });
     });
 }
+
 if (btnDrawDecline) {
     btnDrawDecline.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
         database.ref("rooms/" + roomCode + "/drawProposal").remove();
     });
 }
+
 if (btnDrawCancel) {
     btnDrawCancel.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
         database.ref("rooms/" + roomCode + "/drawProposal").remove();
     });
 }
+
 // ===== НОВАЯ ИГРА / ЗАКРЫТЬ =====
+
 btnCloseGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
     markMyselfLeftExplicitly();
@@ -1528,6 +1773,7 @@ btnCloseGame.addEventListener("click", function () {
     }
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
 });
+
 function cleanupFinishedRoom() {
     if (!roomCode) return;
     const codeToClean = roomCode;
@@ -1540,6 +1786,7 @@ function cleanupFinishedRoom() {
     }
     database.ref("rooms/" + codeToClean).remove();
 }
+
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
@@ -1548,6 +1795,7 @@ btnNewGame.addEventListener("click", function () {
         startOfflineGame();
     }
 });
+
 function performRematchReset() {
     return database.ref("rooms/" + roomCode).transaction(function (room) {
         if (!room) return;
@@ -1574,6 +1822,7 @@ function performRematchReset() {
         return newRoom;
     });
 }
+
 function checkRematchProposal() {
     if (!rematchRequestModal) return;
     if (!isOnlineGame || !currentState) {
@@ -1582,11 +1831,13 @@ function checkRematchProposal() {
     }
     const proposal = currentState.rematchProposal;
     const buttonsRow = endGameModal.querySelector(".modal-buttons");
+
     if (!proposal) {
         rematchRequestModal.classList.add("hidden");
         if (buttonsRow) buttonsRow.classList.remove("hidden");
         return;
     }
+
     if (proposal.by === myColor) {
         rematchRequestModal.classList.add("hidden");
         if (currentState.winner) {
@@ -1598,6 +1849,7 @@ function checkRematchProposal() {
         rematchRequestModal.classList.remove("hidden");
     }
 }
+
 btnRematchAccept.addEventListener("click", function () {
     rematchRequestModal.classList.add("hidden");
     performRematchReset().then(function () {
@@ -1610,11 +1862,14 @@ btnRematchAccept.addEventListener("click", function () {
         });
     });
 });
+
 btnRematchDecline.addEventListener("click", function () {
     rematchRequestModal.classList.add("hidden");
     database.ref("rooms/" + roomCode + "/rematchProposal").remove();
 });
+
 // ===== ТАЙМЕР ХОДА =====
+
 setInterval(function () {
     if (!gameScreen.classList.contains("hidden")) {
         updateTimerDisplay();
@@ -1622,6 +1877,7 @@ setInterval(function () {
         updatePresenceOnly();
     }
 }, 1000);
+
 function updatePresenceOnly() {
     if (!isOnlineGame || !currentState) return;
     const topColor = flipped ? "light" : "dark";
@@ -1630,11 +1886,14 @@ function updatePresenceOnly() {
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
     checkOpponentAbsence();
 }
+
 function checkTimeout() {
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
+
     const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
     if (elapsed <= currentState.timeControlSeconds) return;
+
     const loser = currentState.turn;
     database.ref("rooms/" + roomCode).transaction(function (room) {
         if (!room || room.winner) return;
@@ -1647,7 +1906,9 @@ function checkTimeout() {
         return newRoom;
     });
 }
+
 // ===== ПРИСОЕДИНЕНИЕ ПО ССЫЛКЕ =====
+
 function showInfoModal(text, offerNewGame) {
     infoModalText.textContent = text;
     if (offerNewGame) {
@@ -1659,17 +1920,22 @@ function showInfoModal(text, offerNewGame) {
     }
     infoModal.classList.remove("hidden");
 }
+
 function checkForInviteLink() {
     let startParam = null;
     if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
         startParam = Telegram.WebApp.initDataUnsafe.start_param;
     }
+
     if (!startParam) return false;
+
     roomCode = startParam;
+
     showScreen(waitingScreen);
     waitingText.textContent = "Проверяем игру...";
     inviteLinkBox.classList.add("hidden");
     btnShareLink.classList.add("hidden");
+
     let settled = false;
     const timeoutId = setTimeout(function () {
         if (!settled) {
@@ -1680,9 +1946,11 @@ function checkForInviteLink() {
             showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", false);
         }
     }, 10000);
+
     database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
         if (settled) return;
         const room = snapshot.val();
+
         if (!room || room.status === "finished" || room.winner) {
             settled = true;
             clearTimeout(timeoutId);
@@ -1692,8 +1960,10 @@ function checkForInviteLink() {
             showInfoModal("Нет активной игры", false);
             return;
         }
+
         const creatorId = (room.players && room.players.light) ? room.players.light.id : null;
         const creatorName = (room.players && room.players.light) ? room.players.light.name : "Соперник";
+
         if (creatorId && creatorId === myTelegramId) {
             settled = true;
             clearTimeout(timeoutId);
@@ -1703,10 +1973,12 @@ function checkForInviteLink() {
             showInfoModal("Нельзя играть против самого себя", false);
             return;
         }
+
         const creatorPresence = room.presence && room.presence.light;
         const creatorLastSeen = creatorPresence ? (creatorPresence.lastSeen || 0) : 0;
-        const isCreatorStale = (Date.now() - creatorLastSeen) > 20000;
+        const isCreatorStale = (Date.now() - creatorLastSeen) > 20000; 
         const creatorIsOffline = !creatorPresence || creatorPresence.online === false || isCreatorStale;
+        
         if (creatorIsOffline) {
             settled = true;
             clearTimeout(timeoutId);
@@ -1720,6 +1992,7 @@ function checkForInviteLink() {
             showInfoModal("Соперник оффлайн\n\n" + creatorName + " больше не находится в игре.", false);
             return;
         }
+
         if (room.players && room.players.dark && room.players.dark.id && room.players.dark.id !== myTelegramId) {
             settled = true;
             clearTimeout(timeoutId);
@@ -1729,9 +2002,11 @@ function checkForInviteLink() {
             showInfoModal("Нет активной игры", false);
             return;
         }
+
         myColor = "dark";
         isOnlineGame = true;
         waitingText.textContent = "Подключаемся к другу...";
+
         database.ref("rooms/" + roomCode).update({
             status: "active",
             "players/dark": { id: myTelegramId, name: myTelegramName },
@@ -1770,9 +2045,12 @@ function checkForInviteLink() {
         loadActiveRooms();
         showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
     });
+
     return true;
 }
+
 // ===== МОДАЛКА "СОПЕРНИК ПОКИНУЛ ИГРУ" =====
+
 btnNewGameAfterLeave.addEventListener("click", function () {
     opponentLeftModal.classList.add("hidden");
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
@@ -1782,6 +2060,7 @@ btnNewGameAfterLeave.addEventListener("click", function () {
     isOnlineGame = true;
     showScreen(timeControlScreen);
 });
+
 btnCloseAfterLeave.addEventListener("click", function () {
     opponentLeftModal.classList.add("hidden");
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
@@ -1795,7 +2074,9 @@ btnCloseAfterLeave.addEventListener("click", function () {
         loadActiveRooms();
     }
 });
+
 // ===== МОДАЛКА "НЕТ ИГРЫ / НЕЛЬЗЯ ИГРАТЬ С СОБОЙ" =====
+
 btnInfoNewGame.addEventListener("click", function () {
     infoModal.classList.add("hidden");
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
@@ -1805,18 +2086,22 @@ btnInfoNewGame.addEventListener("click", function () {
     isOnlineGame = true;
     showScreen(timeControlScreen);
 });
+
 btnInfoClose.addEventListener("click", function () {
     infoModal.classList.add("hidden");
     showScreen(menuScreen);
     loadActiveRooms();
 });
+
 // ===== МОДАЛКА "СОПЕРНИК ОФЛАЙН" =====
+
 btnOfflinePlayBot.addEventListener("click", function () {
     offlineOpponentModal.classList.add("hidden");
     roomCode = null;
     showScreen(gameScreen);
     startOfflineGame();
 });
+
 btnOfflineInviteFriend.addEventListener("click", function () {
     offlineOpponentModal.classList.add("hidden");
     pendingTimeControlSeconds = 0;
@@ -1831,7 +2116,9 @@ btnOfflineInviteFriend.addEventListener("click", function () {
         }
     }, 500);
 });
+
 // ===== СТАТИСТИКА И РЕЙТИНГ =====
+
 function renderStatsRow(rank, name, wins, losses) {
     const row = document.createElement("div");
     row.className = "stats-row";
@@ -1848,11 +2135,13 @@ function renderStatsRow(rank, name, wins, losses) {
     row.appendChild(infoSpan);
     return row;
 }
+
 function openStatsModal() {
     statsMySummary.textContent = "Загрузка...";
     statsLeaderboard.innerHTML = "";
     if (statsLeaderboardLosses) statsLeaderboardLosses.innerHTML = "";
     statsModal.classList.remove("hidden");
+
     database.ref("stats/" + myTelegramId).once("value").then(function (snapshot) {
         const mine = snapshot.val();
         const wins = (mine && mine.wins) || 0;
@@ -1866,6 +2155,7 @@ function openStatsModal() {
     }).catch(function () {
         statsMySummary.textContent = "Не удалось загрузить статистику";
     });
+
     database.ref("stats").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
         const data = snapshot.val();
         statsLeaderboard.innerHTML = "";
@@ -1883,6 +2173,7 @@ function openStatsModal() {
     }).catch(function () {
         statsLeaderboard.textContent = "Не удалось загрузить рейтинг";
     });
+
     if (statsLeaderboardLosses) {
         database.ref("stats").orderByChild("losses").limitToLast(10).once("value").then(function (snapshot) {
             const data = snapshot.val();
@@ -1903,18 +2194,23 @@ function openStatsModal() {
         });
     }
 }
+
 if (btnShowStats) {
     btnShowStats.addEventListener("click", openStatsModal);
 }
+
 if (btnStatsClose) {
     btnStatsClose.addEventListener("click", function () {
         statsModal.classList.add("hidden");
     });
 }
+
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
+
 const me = getMyTelegramUser();
 myTelegramId = me.id;
 myTelegramName = me.name;
+
 const joinedViaLink = checkForInviteLink();
 if (!joinedViaLink) {
     loadActiveRooms();
