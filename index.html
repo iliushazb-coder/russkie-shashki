@@ -58,6 +58,7 @@
             <div class="captured-icons" id="player-bottom-captured"></div>
         </div>
 
+        <button id="btn-offer-draw" class="menu-button">🤝 Ничья</button>
         <button id="btn-resign" class="menu-button danger-button">🏳 Сдаться</button>
     </div>
 
@@ -107,6 +108,8 @@
             <div id="stats-my-summary" class="stats-summary">Загрузка...</div>
             <p class="section-title">Топ игроков по победам</p>
             <div id="stats-leaderboard" class="stats-leaderboard"></div>
+            <p class="section-title">Больше всего поражений</p>
+            <div id="stats-leaderboard-losses" class="stats-leaderboard"></div>
             <div class="modal-buttons">
                 <button id="btn-stats-close" class="menu-button">Закрыть</button>
             </div>
@@ -130,6 +133,16 @@
             <div class="modal-buttons">
                 <button id="btn-rematch-accept" class="menu-button">✅ Принять</button>
                 <button id="btn-rematch-decline" class="menu-button danger-button">❌ Отклонить</button>
+            </div>
+        </div>
+    </div>
+    <div id="draw-offer-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p id="draw-offer-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-draw-accept" class="menu-button">✅ Принять</button>
+                <button id="btn-draw-decline" class="menu-button danger-button">❌ Отклонить</button>
+                <button id="btn-draw-cancel" class="menu-button hidden">Отменить предложение</button>
             </div>
         </div>
     </div>
