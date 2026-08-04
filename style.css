@@ -317,7 +317,7 @@ h1 {
 }
 
 .dark {
-    background: linear-gradient(155deg, #6b4226 0%, #3e2415 100%);
+    background: linear-gradient(155deg, #8b5a2b 0%, #5a3a1a 100%);
     box-shadow:
         inset 0 0 15px rgba(50, 30, 15, 0.5),
         inset 0 0 4px rgba(0, 0, 0, 0.4);
@@ -368,28 +368,26 @@ h1 {
     pointer-events: none;
 }
 
-/* Тёмные шашки — реалистичное тёмное дерево (орех) */
+/* Тёмные шашки — с белым контуром (чёрный гранит) */
 .piece-dark {
     border-radius: 50% !important;
-    background: radial-gradient(circle at 35% 30%, #7a4a28 0%, #4a2f18 45%, #2a1808 90%);
-    border: 2px solid #1a0e04;
+    background: radial-gradient(circle at 30% 25%, #5a5a5a 0%, #2a2a2a 60%, #000000 100%);
+    border: 2px solid #ffffff !important; /* Белый кружок вокруг */
     box-shadow:
-        inset -6px -6px 12px rgba(0,0,0,0.6),
-        inset 5px 5px 12px rgba(180,120,80,0.2),
-        0 4px 8px rgba(0,0,0,0.5),
-        0 2px 0px #1a0e04;
+        inset -5px -5px 12px rgba(0,0,0,0.9),
+        inset 5px 5px 12px rgba(120,120,120,0.4),
+        0 4px 8px rgba(0,0,0,0.6);
 }
 
-/* Светлые шашки — реалистичное светлое дерево (клён) */
+/* Светлые шашки — с чёрным контуром (белый мрамор) */
 .piece-light {
     border-radius: 50% !important;
-    background: radial-gradient(circle at 35% 30%, #f8f0d8 0%, #e6d5a8 45%, #c9a96a 90%);
-    border: 2px solid #8a6a3a;
+    background: radial-gradient(circle at 30% 25%, #ffffff 0%, #ececec 60%, #b0b0b0 100%);
+    border: 2px solid #000000 !important; /* Чёрный кружок вокруг */
     box-shadow:
-        inset -6px -6px 12px rgba(100,70,30,0.3),
-        inset 5px 5px 12px rgba(255,250,230,0.7),
-        0 4px 8px rgba(0,0,0,0.4),
-        0 2px 0px #a0845c;
+        inset -5px -5px 12px rgba(100,100,100,0.3),
+        inset 5px 5px 12px rgba(255,255,255,0.9),
+        0 4px 8px rgba(0,0,0,0.4);
 }
 
 .labels {
@@ -712,7 +710,7 @@ h1 {
    ========================================================= */
 
 .king {
-    border-color: #d4af37 !important;
+    border-color: #d4af37 !important; /* Золотой ободок для дамки */
     border-width: 3px !important;
     transform: scale(1.05) !important;
     box-shadow:
@@ -723,11 +721,11 @@ h1 {
 }
 
 .piece-light.king {
-    background: radial-gradient(circle at 35% 30%, #fff8e7 0%, #f0e0b0 45%, #d4b88a 90%) !important;
+    background: radial-gradient(circle at 30% 25%, #ffffff 0%, #fff0c0 60%, #d4b88a 100%) !important;
 }
 
 .piece-dark.king {
-    background: radial-gradient(circle at 35% 30%, #8a5a30 0%, #5c3a1e 45%, #3a2410 90%) !important;
+    background: radial-gradient(circle at 30% 25%, #5a5a5a 0%, #1a1a1a 60%, #000000 100%) !important;
 }
 
 .king::before {
