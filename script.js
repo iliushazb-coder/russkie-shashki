@@ -189,7 +189,6 @@ let matchmakingQueueRef = null;
 let activeMatchRef = null;
 let isBotGame = false;
 const BOT_COLOR = "dark";
-let isBotThinking = false;
 
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -935,14 +934,6 @@ function renderBoard() {
     renderLastMoveArrow();
     checkRematchProposal();
     checkDrawProposal();
-
-    if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR && !isBotThinking) {
-        isBotThinking = true;
-        setTimeout(function() {
-            triggerBotMove();
-            isBotThinking = false;
-        }, 500); 
-    }
 }
 
 function renderLastMoveArrow() {
@@ -1345,6 +1336,11 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
             playSoundForMoveType(result.moveType, movingPieceWasKing);
             renderBoard();
+
+            // --- ИСПРАВЛЕНИЕ: Триггер для хода бота (включая продолжение серии взятий) ---
+            if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR) {
+                setTimeout(triggerBotMove, 500);
+            }
         }
     }
 }
@@ -2388,26 +2384,27 @@ function findBestMove(state, color, depth) {
         const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, color);
         if (!newState) continue;
 
-        const score = minimax(newState, depth - 1, -Infinity, Infinity, false, color);
+        const score = minimax(newState, depth - 1, -Infinity, Infinity, color);
         
         if (score > bestScore) {
             bestScore = score;
-            bestMoves = [move]; // Нашли ход лучше - сбрасываем массив
+            bestMoves = [move];
         } else if (score === bestScore) {
-            bestMoves.push(move); // Ход такой же по силе - добавляем в массив для случайного выбора
+            bestMoves.push(move);
         }
     }
     
-    // Случайный выбор среди лучших ходов, чтобы бот не играл одинаково каждую партию
     return bestMoves[Math.floor(Math.random() * bestMoves.length)];
 }
 
-function minimax(state, depth, alpha, beta, isMaximizing, botColor) {
+function minimax(state, depth, alpha, beta, botColor) {
     if (depth === 0 || state.winner) {
         return evaluateBoard(state, botColor);
     }
 
-    const currentColor = isMaximizing ? botColor : (botColor === "light" ? "dark" : "light");
+    // ИСПРАВЛЕНИЕ: Определяем чей ход напрямую из состояния, чтобы корректно обрабатывать серии взятий
+    const currentColor = state.turn;
+    const isMaximizing = (currentColor === botColor);
     const moves = getAllLegalMovesForBot(state, currentColor);
 
     if (moves.length === 0) return isMaximizing ? -100000 : 100000;
@@ -2417,7 +2414,7 @@ function minimax(state, depth, alpha, beta, isMaximizing, botColor) {
         for (const move of moves) {
             const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
             if (!newState) continue;
-            const evalScore = minimax(newState, depth - 1, alpha, beta, false, botColor);
+            const evalScore = minimax(newState, depth - 1, alpha, beta, botColor);
             maxEval = Math.max(maxEval, evalScore);
             alpha = Math.max(alpha, evalScore);
             if (beta <= alpha) break; 
@@ -2428,7 +2425,7 @@ function minimax(state, depth, alpha, beta, isMaximizing, botColor) {
         for (const move of moves) {
             const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
             if (!newState) continue;
-            const evalScore = minimax(newState, depth - 1, alpha, beta, true, botColor);
+            const evalScore = minimax(newState, depth - 1, alpha, beta, botColor);
             minEval = Math.min(minEval, evalScore);
             beta = Math.min(beta, evalScore);
             if (beta <= alpha) break;
@@ -2437,7 +2434,6 @@ function minimax(state, depth, alpha, beta, isMaximizing, botColor) {
     }
 }
 
-// Продвинутая оценка доски: учитывает позиции, центр, защиту и продвижение
 function evaluateBoard(state, botColor) {
     if (state.winner === botColor) return 100000;
     if (state.winner && state.winner !== botColor) return -100000;
@@ -2451,23 +2447,20 @@ function evaluateBoard(state, botColor) {
         const r = parseInt(parts[0]);
         const c = parseInt(parts[1]);
 
-        let pieceVal = p.king ? 300 : 100; // Дамка стоит в 3 раза дороже
+        let pieceVal = p.king ? 300 : 100;
 
         if (p.color === botColor) {
             score += pieceVal;
             if (!p.king) {
-                // Бонус за продвижение к полю превращения
                 if (botColor === "light") {
                     score += (7 - r) * 3; 
                 } else {
                     score += r * 3; 
                 }
-                // Бонус за защиту заднего ряда (чтобы не пускать в дамки)
                 if ((botColor === "light" && r === 7) || (botColor === "dark" && r === 0)) {
                     score += 5;
                 }
             }
-            // Бонус за контроль центра доски
             if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
                 score += 2;
             }
@@ -2493,6 +2486,21 @@ function evaluateBoard(state, botColor) {
 
 function getAllLegalMovesForBot(state, color) {
     const moves = [];
+    
+    // ИСПРАВЛЕНИЕ: Если мы в середине серии взятий, бот обязан ходить только этой шашкой
+    if (state.mustContinueFrom) {
+        const r = state.mustContinueFrom.row;
+        const c = state.mustContinueFrom.col;
+        const p = state.pieces[r + "_" + c];
+        if (p) {
+            const dests = getLegalDestinations(state.pieces, r, c, color, !!p.king, state.pendingRemovals);
+            for (const d of dests) {
+                moves.push({ from: { row: r, col: c }, to: d });
+            }
+        }
+        return moves;
+    }
+
     for (const key in state.pieces) {
         const p = state.pieces[key];
         if (p.color !== color) continue;
