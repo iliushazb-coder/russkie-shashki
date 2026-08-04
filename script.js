@@ -119,6 +119,10 @@ const menuScreen = document.getElementById("menu-screen");
 const timeControlScreen = document.getElementById("time-control-screen");
 const waitingScreen = document.getElementById("waiting-screen");
 const gameScreen = document.getElementById("game-screen");
+const matchmakingScreen = document.getElementById("matchmaking-screen");
+const btnPlayOnline = document.getElementById("btn-play-online");
+const btnCancelMatchmaking = document.getElementById("btn-cancel-matchmaking");
+const matchmakingCount = document.getElementById("matchmaking-count");
 const btnPlayFriend = document.getElementById("btn-play-friend");
 const btnPlayBot = document.getElementById("btn-play-bot");
 const inviteLinkBox = document.getElementById("invite-link-box");
@@ -178,8 +182,14 @@ let roomListenerRef = null;
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
-const STALE_MS = 45000; // ФИКС 1: Увеличено с 20 до 45 сек для защиты от ложных выходов при свернутом телефоне
+const STALE_MS = 45000; 
 const BOT_USERNAME = "russkie_shashki_bot/play";
+
+let matchmakingQueueRef = null;
+let activeMatchRef = null;
+let isBotGame = false;
+const BOT_COLOR = "dark";
+let isBotThinking = false;
 
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -193,6 +203,7 @@ function showScreen(screen) {
     timeControlScreen.classList.add("hidden");
     waitingScreen.classList.add("hidden");
     gameScreen.classList.add("hidden");
+    matchmakingScreen.classList.add("hidden");
     screen.classList.remove("hidden");
 }
 
@@ -747,7 +758,6 @@ function setupPresence() {
         presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }, 4000);
 
-    // ФИКС 1: Отслеживаем сворачивание приложения
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("blur", handleVisibilityChange);
     window.addEventListener("focus", handleVisibilityChange);
@@ -925,6 +935,15 @@ function renderBoard() {
     renderLastMoveArrow();
     checkRematchProposal();
     checkDrawProposal();
+
+    // Если игра с ботом и сейчас ход бота — заставляем его ходить
+    if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR && !isBotThinking) {
+        isBotThinking = true;
+        setTimeout(function() {
+            triggerBotMove();
+            isBotThinking = false;
+        }, 500); // Бот "думает" полсекунды
+    }
 }
 
 function renderLastMoveArrow() {
@@ -1010,7 +1029,7 @@ function clearMustCaptureHint() {
 function showMustCaptureHint() {
     mustCaptureHintTimer = null;
     if (!currentState || currentState.winner || selectedFrom) return;
-    const myTurnColor = isOnlineGame ? myColor : currentState.turn;
+    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? "light" : currentState.turn);
     if (currentState.turn !== myTurnColor) return;
     if (!hasMandatoryCapture(currentState.pieces, currentState.turn)) return;
 
@@ -1038,7 +1057,7 @@ function resetMustCaptureHintTimer() {
     clearMustCaptureHint();
 
     if (!currentState || currentState.winner || selectedFrom) return;
-    const myTurnColor = isOnlineGame ? myColor : currentState.turn;
+    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? "light" : currentState.turn);
     if (currentState.turn !== myTurnColor) return;
 
     mustCaptureHintTimer = setTimeout(showMustCaptureHint, MUST_CAPTURE_HINT_DELAY_MS);
@@ -1116,12 +1135,7 @@ function updateTimerDisplay() {
     }
     const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
     let remaining = currentState.timeControlSeconds - elapsed;
-    
-    // ФИКС 3: Предотвращаем показ времени больше положенного (например, 1:02 вместо 1:00)
-    if (remaining > currentState.timeControlSeconds) {
-        remaining = currentState.timeControlSeconds;
-    }
-    
+    if (remaining > currentState.timeControlSeconds) remaining = currentState.timeControlSeconds;
     const whoseTurn = currentState.turn === "light" ? "Белые" : "Чёрные";
     turnTimerDiv.textContent = "⏱ Ход: " + whoseTurn + " — осталось " + formatTime(remaining);
 }
@@ -1208,8 +1222,9 @@ function handleClick(row, col) {
     const state = currentState;
 
     if (isOnlineGame && state.turn !== myColor) return;
+    if (isBotGame && state.turn === BOT_COLOR) return; // Запрет хода за бота
 
-    const selectableColor = isOnlineGame ? myColor : state.turn;
+    const selectableColor = isOnlineGame ? myColor : (isBotGame ? "light" : state.turn);
     const pieceHere = pieceAt(state.pieces, row, col);
 
     if (pieceHere && pieceHere.color === state.turn && pieceHere.color === selectableColor) {
@@ -1347,6 +1362,7 @@ function computeGameSignature(state) {
 }
 
 function startOnlineGame() {
+    isBotGame = false; // Отключаем бота при онлайн-игре
     isOnlineGame = true;
     flipped = (myColor === "dark");
     lastSeenMoveCount = -1;
@@ -1464,6 +1480,8 @@ function startOfflineGame() {
     }
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    
+    const botName = isBotGame ? "Компьютер" : "Игрок 2";
     currentState = {
         pieces: createInitialPieces(),
         turn: "light",
@@ -1475,7 +1493,7 @@ function startOfflineGame() {
         lastMovePath: null,
         lastCapturedSquares: null,
         moveType: null,
-        players: { light: { name: "Игрок 1" }, dark: { name: "Игрок 2" } },
+        players: { light: { name: "Игрок 1" }, dark: { name: botName } },
         timeControlSeconds: 0,
         turnStartedAt: null,
         winner: null,
@@ -1585,7 +1603,17 @@ function loadActiveRooms() {
 
 // ===== КНОПКИ МЕНЮ =====
 
+btnPlayOnline.addEventListener("click", function () {
+    isBotGame = false;
+    startOnlineSearch();
+});
+
+btnCancelMatchmaking.addEventListener("click", function () {
+    cancelOnlineSearch();
+});
+
 btnPlayFriend.addEventListener("click", function () {
+    isBotGame = false;
     showScreen(timeControlScreen);
 });
 
@@ -1632,8 +1660,6 @@ function createRoomAndShowWaiting() {
 
         const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
         inviteLinkBox.textContent = link;
-        
-        // ФИКС 2: Сбрасываем текст ожидания, чтобы не зависало "Проверяем игру..."
         waitingText.textContent = "Ожидание подключения друга...";
         inviteLinkBox.classList.remove("hidden");
         btnShareLink.classList.remove("hidden");
@@ -1664,6 +1690,7 @@ btnShareLink.addEventListener("click", function () {
 });
 
 btnPlayBot.addEventListener("click", function () {
+    isBotGame = true;
     showScreen(gameScreen);
     startOfflineGame();
 });
@@ -1790,6 +1817,9 @@ function cleanupFinishedRoom() {
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
+    } else if (isBotGame) {
+        endGameModal.classList.add("hidden");
+        startOfflineGame();
     } else {
         endGameModal.classList.add("hidden");
         startOfflineGame();
@@ -2099,6 +2129,7 @@ btnOfflinePlayBot.addEventListener("click", function () {
     offlineOpponentModal.classList.add("hidden");
     roomCode = null;
     showScreen(gameScreen);
+    isBotGame = true;
     startOfflineGame();
 });
 
@@ -2203,6 +2234,238 @@ if (btnStatsClose) {
     btnStatsClose.addEventListener("click", function () {
         statsModal.classList.add("hidden");
     });
+}
+
+// ===== ИГРАТЬ ОНЛАЙН (МАТЧМЕЙКИНГ) =====
+
+function startOnlineSearch() {
+    showScreen(matchmakingScreen);
+    
+    matchmakingQueueRef = database.ref("matchmakingQueue");
+    matchmakingQueueRef.on("value", function(snapshot) {
+        const queue = snapshot.val() || {};
+        const queueSize = Object.keys(queue).length;
+        matchmakingCount.textContent = "Сейчас в поиске: " + queueSize + " игрок" + (queueSize === 1 ? "" : (queueSize > 1 && queueSize < 5 ? "а" : "ов"));
+        
+        if (!snapshot.hasChild(myTelegramId) && queueSize > 0) {
+            tryMatchOpponent(queue);
+        }
+    });
+
+    matchmakingQueueRef.once("value").then(function(snapshot) {
+        const queue = snapshot.val() || {};
+        const queueSize = Object.keys(queue).length;
+
+        if (queueSize === 0 || queue[myTelegramId]) {
+            addToMatchmakingQueue();
+        } else {
+            tryMatchOpponent(queue);
+        }
+    });
+
+    activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
+    activeMatchRef.on("value", function(snapshot) {
+        const matchedRoomCode = snapshot.val();
+        if (matchedRoomCode) {
+            if (matchmakingQueueRef) { 
+                matchmakingQueueRef.off("value"); 
+                matchmakingQueueRef = null; 
+            }
+            activeMatchRef.remove();
+            
+            roomCode = matchedRoomCode;
+            myColor = "dark"; 
+            isOnlineGame = true;
+            pendingTimeControlSeconds = 0;
+            
+            showScreen(gameScreen);
+            startOnlineGame();
+        }
+    });
+}
+
+function addToMatchmakingQueue() {
+    const myQueueRef = database.ref("matchmakingQueue/" + myTelegramId);
+    myQueueRef.set({ name: myTelegramName, timestamp: Date.now() });
+    myQueueRef.onDisconnect().remove(); 
+}
+
+function tryMatchOpponent(queue) {
+    const opponentIds = Object.keys(queue).filter(id => id !== myTelegramId);
+    if (opponentIds.length === 0) {
+        addToMatchmakingQueue();
+        return;
+    }
+
+    const opponentId = opponentIds[0];
+    const opponentData = queue[opponentId];
+    
+    database.ref("matchmakingQueue/" + opponentId).transaction(function(current) {
+        if (current === null) return null; 
+        return null; 
+    }, function(error, committed, snapshot) {
+        if (committed && snapshot.val() === null) {
+            if (matchmakingQueueRef) { 
+                matchmakingQueueRef.off("value"); 
+                matchmakingQueueRef = null; 
+            }
+            
+            roomCode = generateRoomCode();
+            myColor = "light"; 
+            isOnlineGame = true;
+            pendingTimeControlSeconds = 0;
+
+            const initialState = {
+                status: "active", 
+                turn: "light",
+                mustContinueFrom: null,
+                capturedDark: 0,
+                capturedLight: 0,
+                moveCount: 0,
+                lastMove: null,
+                lastMovePath: null,
+                lastCapturedSquares: null,
+                moveType: null,
+                pieces: createInitialPieces(),
+                players: { 
+                    light: { id: myTelegramId, name: myTelegramName }, 
+                    dark: { id: opponentId, name: opponentData.name } 
+                },
+                timeControlSeconds: 0,
+                turnStartedAt: Date.now(),
+                winner: null,
+                winReason: null
+            };
+
+            database.ref("rooms/" + roomCode).set(initialState).then(function() {
+                database.ref("users/" + opponentId + "/activeMatch").set(roomCode).then(function() {
+                    showScreen(gameScreen);
+                    startOnlineGame();
+                });
+            });
+        } else {
+            matchmakingQueueRef.once("value").then(function snap(s) {
+                const newQueue = s.val() || {};
+                if (Object.keys(newQueue).length > 0) tryMatchOpponent(newQueue);
+                else addToMatchmakingQueue();
+            });
+        }
+    });
+}
+
+function cancelOnlineSearch() {
+    if (matchmakingQueueRef) { 
+        matchmakingQueueRef.off("value"); 
+        matchmakingQueueRef = null; 
+    }
+    if (activeMatchRef) { 
+        activeMatchRef.off(); 
+        activeMatchRef = null; 
+    }
+    database.ref("matchmakingQueue/" + myTelegramId).remove();
+    showScreen(menuScreen);
+    loadActiveRooms();
+}
+
+// ===== ИСКУССТВЕННЫЙ ИНТЕЛЛЕКТ (БОТ) =====
+
+function triggerBotMove() {
+    if (!isBotGame || !currentState || currentState.turn !== BOT_COLOR || currentState.winner) return;
+
+    const bestMove = findBestMove(currentState, BOT_COLOR, 3); 
+    if (bestMove) {
+        performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
+    }
+}
+
+function findBestMove(state, color, depth) {
+    const moves = getAllLegalMovesForBot(state, color);
+    if (moves.length === 0) return null;
+
+    let bestScore = -Infinity;
+    let bestMove = null;
+
+    for (const move of moves) {
+        const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, color);
+        if (!newState) continue;
+
+        const score = minimax(newState, depth - 1, -Infinity, Infinity, false, color);
+        
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    }
+    return bestMove;
+}
+
+function minimax(state, depth, alpha, beta, isMaximizing, botColor) {
+    if (depth === 0 || state.winner) {
+        return evaluateBoard(state, botColor);
+    }
+
+    const currentColor = isMaximizing ? botColor : (botColor === "light" ? "dark" : "light");
+    const moves = getAllLegalMovesForBot(state, currentColor);
+
+    if (moves.length === 0) return isMaximizing ? -10000 : 10000;
+
+    if (isMaximizing) {
+        let maxEval = -Infinity;
+        for (const move of moves) {
+            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
+            if (!newState) continue;
+            const evalScore = minimax(newState, depth - 1, alpha, beta, false, botColor);
+            maxEval = Math.max(maxEval, evalScore);
+            alpha = Math.max(alpha, evalScore);
+            if (beta <= alpha) break; 
+        }
+        return maxEval;
+    } else {
+        let minEval = Infinity;
+        for (const move of moves) {
+            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
+            if (!newState) continue;
+            const evalScore = minimax(newState, depth - 1, alpha, beta, true, botColor);
+            minEval = Math.min(minEval, evalScore);
+            beta = Math.min(beta, evalScore);
+            if (beta <= alpha) break;
+        }
+        return minEval;
+    }
+}
+
+function evaluateBoard(state, botColor) {
+    if (state.winner === botColor) return 10000;
+    if (state.winner && state.winner !== botColor) return -10000;
+
+    let score = 0;
+    for (const key in state.pieces) {
+        const p = state.pieces[key];
+        const val = p.king ? 5 : 1;
+        if (p.color === botColor) {
+            score += val;
+            if (!p.king) {
+                score += botColor === "light" ? (7 - parseInt(key.split('_')[0])) * 0.1 : parseInt(key.split('_')[0]) * 0.1;
+            }
+        } else {
+            score -= val;
+        }
+    }
+    return score;
+}
+
+function getAllLegalMovesForBot(state, color) {
+    const moves = [];
+    for (const key in state.pieces) {
+        const p = state.pieces[key];
+        if (p.color !== color) continue;
+        const [r, c] = key.split('_').map(Number);
+        const dests = getLegalDestinations(state.pieces, r, c, color, !!p.king, state.pendingRemovals);
+        for (const d of dests) {
+            moves.push({ from: { row: r, col: c }, to: d });
+        }
+    }
+    return moves;
 }
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
