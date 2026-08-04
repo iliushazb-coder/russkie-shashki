@@ -187,9 +187,6 @@ const BOT_USERNAME = "russkie_shashki_bot/play";
 
 let matchmakingQueueRef = null;
 let activeMatchRef = null;
-let isBotGame = false;
-const BOT_COLOR = "dark";
-let isBotThinking = false;
 
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -935,15 +932,6 @@ function renderBoard() {
     renderLastMoveArrow();
     checkRematchProposal();
     checkDrawProposal();
-
-    // Если игра с ботом и сейчас ход бота — заставляем его ходить
-    if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR && !isBotThinking) {
-        isBotThinking = true;
-        setTimeout(function() {
-            triggerBotMove();
-            isBotThinking = false;
-        }, 500); // Бот "думает" полсекунды
-    }
 }
 
 function renderLastMoveArrow() {
@@ -1029,7 +1017,7 @@ function clearMustCaptureHint() {
 function showMustCaptureHint() {
     mustCaptureHintTimer = null;
     if (!currentState || currentState.winner || selectedFrom) return;
-    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? "light" : currentState.turn);
+    const myTurnColor = isOnlineGame ? myColor : currentState.turn;
     if (currentState.turn !== myTurnColor) return;
     if (!hasMandatoryCapture(currentState.pieces, currentState.turn)) return;
 
@@ -1057,7 +1045,7 @@ function resetMustCaptureHintTimer() {
     clearMustCaptureHint();
 
     if (!currentState || currentState.winner || selectedFrom) return;
-    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? "light" : currentState.turn);
+    const myTurnColor = isOnlineGame ? myColor : currentState.turn;
     if (currentState.turn !== myTurnColor) return;
 
     mustCaptureHintTimer = setTimeout(showMustCaptureHint, MUST_CAPTURE_HINT_DELAY_MS);
@@ -1222,9 +1210,8 @@ function handleClick(row, col) {
     const state = currentState;
 
     if (isOnlineGame && state.turn !== myColor) return;
-    if (isBotGame && state.turn === BOT_COLOR) return; // Запрет хода за бота
 
-    const selectableColor = isOnlineGame ? myColor : (isBotGame ? "light" : state.turn);
+    const selectableColor = isOnlineGame ? myColor : state.turn;
     const pieceHere = pieceAt(state.pieces, row, col);
 
     if (pieceHere && pieceHere.color === state.turn && pieceHere.color === selectableColor) {
@@ -1362,7 +1349,6 @@ function computeGameSignature(state) {
 }
 
 function startOnlineGame() {
-    isBotGame = false; // Отключаем бота при онлайн-игре
     isOnlineGame = true;
     flipped = (myColor === "dark");
     lastSeenMoveCount = -1;
@@ -1480,8 +1466,6 @@ function startOfflineGame() {
     }
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    
-    const botName = isBotGame ? "Компьютер" : "Игрок 2";
     currentState = {
         pieces: createInitialPieces(),
         turn: "light",
@@ -1493,7 +1477,7 @@ function startOfflineGame() {
         lastMovePath: null,
         lastCapturedSquares: null,
         moveType: null,
-        players: { light: { name: "Игрок 1" }, dark: { name: botName } },
+        players: { light: { name: "Игрок 1" }, dark: { name: "Игрок 2" } },
         timeControlSeconds: 0,
         turnStartedAt: null,
         winner: null,
@@ -1604,7 +1588,6 @@ function loadActiveRooms() {
 // ===== КНОПКИ МЕНЮ =====
 
 btnPlayOnline.addEventListener("click", function () {
-    isBotGame = false;
     startOnlineSearch();
 });
 
@@ -1613,7 +1596,6 @@ btnCancelMatchmaking.addEventListener("click", function () {
 });
 
 btnPlayFriend.addEventListener("click", function () {
-    isBotGame = false;
     showScreen(timeControlScreen);
 });
 
@@ -1690,7 +1672,6 @@ btnShareLink.addEventListener("click", function () {
 });
 
 btnPlayBot.addEventListener("click", function () {
-    isBotGame = true;
     showScreen(gameScreen);
     startOfflineGame();
 });
@@ -1817,9 +1798,6 @@ function cleanupFinishedRoom() {
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
-    } else if (isBotGame) {
-        endGameModal.classList.add("hidden");
-        startOfflineGame();
     } else {
         endGameModal.classList.add("hidden");
         startOfflineGame();
@@ -2129,7 +2107,6 @@ btnOfflinePlayBot.addEventListener("click", function () {
     offlineOpponentModal.classList.add("hidden");
     roomCode = null;
     showScreen(gameScreen);
-    isBotGame = true;
     startOfflineGame();
 });
 
@@ -2365,107 +2342,6 @@ function cancelOnlineSearch() {
     database.ref("matchmakingQueue/" + myTelegramId).remove();
     showScreen(menuScreen);
     loadActiveRooms();
-}
-
-// ===== ИСКУССТВЕННЫЙ ИНТЕЛЛЕКТ (БОТ) =====
-
-function triggerBotMove() {
-    if (!isBotGame || !currentState || currentState.turn !== BOT_COLOR || currentState.winner) return;
-
-    const bestMove = findBestMove(currentState, BOT_COLOR, 3); 
-    if (bestMove) {
-        performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
-    }
-}
-
-function findBestMove(state, color, depth) {
-    const moves = getAllLegalMovesForBot(state, color);
-    if (moves.length === 0) return null;
-
-    let bestScore = -Infinity;
-    let bestMove = null;
-
-    for (const move of moves) {
-        const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, color);
-        if (!newState) continue;
-
-        const score = minimax(newState, depth - 1, -Infinity, Infinity, false, color);
-        
-        if (score > bestScore) {
-            bestScore = score;
-            bestMove = move;
-        }
-    }
-    return bestMove;
-}
-
-function minimax(state, depth, alpha, beta, isMaximizing, botColor) {
-    if (depth === 0 || state.winner) {
-        return evaluateBoard(state, botColor);
-    }
-
-    const currentColor = isMaximizing ? botColor : (botColor === "light" ? "dark" : "light");
-    const moves = getAllLegalMovesForBot(state, currentColor);
-
-    if (moves.length === 0) return isMaximizing ? -10000 : 10000;
-
-    if (isMaximizing) {
-        let maxEval = -Infinity;
-        for (const move of moves) {
-            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
-            if (!newState) continue;
-            const evalScore = minimax(newState, depth - 1, alpha, beta, false, botColor);
-            maxEval = Math.max(maxEval, evalScore);
-            alpha = Math.max(alpha, evalScore);
-            if (beta <= alpha) break; 
-        }
-        return maxEval;
-    } else {
-        let minEval = Infinity;
-        for (const move of moves) {
-            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
-            if (!newState) continue;
-            const evalScore = minimax(newState, depth - 1, alpha, beta, true, botColor);
-            minEval = Math.min(minEval, evalScore);
-            beta = Math.min(beta, evalScore);
-            if (beta <= alpha) break;
-        }
-        return minEval;
-    }
-}
-
-function evaluateBoard(state, botColor) {
-    if (state.winner === botColor) return 10000;
-    if (state.winner && state.winner !== botColor) return -10000;
-
-    let score = 0;
-    for (const key in state.pieces) {
-        const p = state.pieces[key];
-        const val = p.king ? 5 : 1;
-        if (p.color === botColor) {
-            score += val;
-            if (!p.king) {
-                score += botColor === "light" ? (7 - parseInt(key.split('_')[0])) * 0.1 : parseInt(key.split('_')[0]) * 0.1;
-            }
-        } else {
-            score -= val;
-        }
-    }
-    return score;
-}
-
-function getAllLegalMovesForBot(state, color) {
-    const moves = [];
-    for (const key in state.pieces) {
-        const p = state.pieces[key];
-        if (p.color !== color) continue;
-        const [r, c] = key.split('_').map(Number);
-        const dests = getLegalDestinations(state.pieces, r, c, color, !!p.king, state.pendingRemovals);
-        for (const d of dests) {
-            moves.push({ from: { row: r, col: c }, to: d });
-        }
-    }
-    return moves;
 }
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
