@@ -34,7 +34,7 @@ h1 {
     text-shadow: 0 2px 14px rgba(0,0,0,0.6), 0 0 26px rgba(255, 195, 100, 0.35);
 }
 
-#menu-screen, #waiting-screen, #time-control-screen {
+#menu-screen, #waiting-screen, #time-control-screen, #matchmaking-screen {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -368,7 +368,7 @@ h1 {
     pointer-events: none;
 }
 
-/* Тёмные шашки — матовое тёмное дерево (орех) */
+/* Тёмные шашки — реалистичное тёмное дерево (орех) */
 .piece-dark {
     border-radius: 50% !important;
     background: radial-gradient(circle at 35% 30%, #7a4a28 0%, #4a2f18 45%, #2a1808 90%);
@@ -380,7 +380,7 @@ h1 {
         0 2px 0px #1a0e04;
 }
 
-/* Светлые шашки — матовое светлое дерево (клён) */
+/* Светлые шашки — реалистичное светлое дерево (клён) */
 .piece-light {
     border-radius: 50% !important;
     background: radial-gradient(circle at 35% 30%, #f8f0d8 0%, #e6d5a8 45%, #c9a96a 90%);
@@ -510,40 +510,6 @@ h1 {
 @keyframes lastMoveGlow {
     0%, 100% { opacity: 0.6; }
     50% { opacity: 1; }
-}
-
-.king::before {
-    content: "";
-    position: absolute;
-    top: 20% !important;
-    left: 20% !important;
-    width: 60% !important;
-    height: 60% !important;
-    inset: auto !important;
-    background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27goldGrad%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff6d0%27/%3E%3Cstop%20offset%3D%2735%25%27%20stop-color%3D%27%23ffd700%27/%3E%3Cstop%20offset%3D%2765%25%27%20stop-color%3D%27%23b8860b%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%235c440d%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M15%2C40%20L30%2C60%20L50%2C25%20L70%2C60%20L85%2C40%20L80%2C75%20L20%2C75%20Z%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%273%27%20stroke-linejoin%3D%27round%27/%3E%3Crect%20x%3D%2720%27%20y%3D%2765%27%20width%3D%2760%27%20height%3D%2710%27%20rx%3D%273%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2715%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2725%27%20r%3D%276%27%20fill%3D%27%234db8ff%27%20stroke%3D%27%23002a66%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2785%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2770%27%20r%3D%273.5%27%20fill%3D%27%234dff88%27%20stroke%3D%27%23003311%27%20stroke-width%3D%271%27/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: contain;
-    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6)) drop-shadow(0 0 8px rgba(255,215,120,0.9));
-    pointer-events: none;
-    z-index: 3;
-    animation: crownAppear 0.45s cubic-bezier(.34,1.56,.64,1), crownShimmer 2.6s ease-in-out 0.45s infinite;
-}
-
-@keyframes crownAppear {
-    0% { transform: scale(0.3) rotate(-20deg); opacity: 0; }
-    55% { transform: scale(1.18) rotate(6deg); opacity: 1; }
-    80% { transform: scale(0.95) rotate(-2deg); }
-    100% { transform: scale(1) rotate(0deg); opacity: 1; }
-}
-
-@keyframes crownShimmer {
-    0%, 100% {
-        filter: drop-shadow(0 0 7px rgba(255,215,120,0.9)) drop-shadow(0 1px 2px rgba(0,0,0,0.55)) brightness(1);
-    }
-    50% {
-        filter: drop-shadow(0 0 16px rgba(255,235,170,1)) drop-shadow(0 1px 2px rgba(0,0,0,0.55)) brightness(1.2);
-    }
 }
 
 .modal-overlay {
@@ -691,49 +657,6 @@ h1 {
 }
 
 /* =========================================================
-   ФИНАЛЬНЫЕ СТИЛИ ДАМОК (В КОНЦЕ ФАЙЛА, ПЕРЕБИВАЮТ ВСЁ)
-   ========================================================= */
-
-.king {
-    border-color: #d4af37 !important; /* Золотой ободок для дамки */
-    border-width: 3px !important;
-    transform: scale(1.05) !important;
-    box-shadow:
-        inset -4px -4px 8px rgba(0,0,0,0.4),
-        inset 4px 4px 8px rgba(255,240,200,0.4),
-        0 0 12px rgba(212, 175, 55, 0.4),
-        0 5px 10px rgba(0,0,0,0.5) !important;
-}
-
-.piece-light.king {
-    background: radial-gradient(circle at 35% 30%, #fff8e7 0%, #f0e0b0 45%, #d4b88a 90%) !important;
-}
-
-.piece-dark.king {
-    background: radial-gradient(circle at 35% 30%, #8a5a30 0%, #5c3a1e 45%, #3a2410 90%) !important;
-}
-
-.king::before {
-    content: "" !important;
-    position: absolute !important;
-    top: 15% !important;
-    left: 15% !important;
-    width: 70% !important;
-    height: 70% !important;
-    inset: auto !important;
-    
-    /* Объемная золотая корона с рубинами и сапфирами (как на картинке) */
-    background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27g%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff8d0%27/%3E%3Cstop%20offset%3D%2730%25%27%20stop-color%3D%27%23ffd700%27/%3E%3Cstop%20offset%3D%2770%25%27%20stop-color%3D%27%23b8860b%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%238f6a1c%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M10%2C45%20L25%2C65%20L40%2C30%20L50%2C55%20L60%2C30%20L75%2C65%20L90%2C45%20L85%2C80%20L15%2C80%20Z%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%235c440d%27%20stroke-width%3D%273%27%20stroke-linejoin%3D%27round%27/%3E%3Crect%20x%3D%2715%27%20y%3D%2778%27%20width%3D%2770%27%20height%3D%2710%27%20rx%3D%273%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%235c440d%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2710%27%20cy%3D%2745%27%20r%3D%275%27%20fill%3D%27%23d63b3b%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2725%27%20r%3D%276%27%20fill%3D%27%233b6fd6%27/%3E%3Ccircle%20cx%3D%2790%27%20cy%3D%2745%27%20r%3D%275%27%20fill%3D%27%23d63b3b%27/%3E%3C/svg%3E") !important;
-    background-repeat: no-repeat !important;
-    background-position: center !important;
-    background-size: contain !important;
-    filter: drop-shadow(0 3px 4px rgba(0,0,0,0.6)) drop-shadow(0 0 6px rgba(255,215,0,0.8)) !important;
-    pointer-events: none !important;
-    z-index: 3 !important;
-    animation: crownAppear 0.45s cubic-bezier(.34,1.56,.64,1), crownShimmer 2.6s ease-in-out 0.45s infinite !important;
-}
-
-/* =========================================================
    ЭКРАН ПОИСКА СОПЕРНИКА (МАТЧМЕЙКИНГ)
    ========================================================= */
 
@@ -782,4 +705,47 @@ h1 {
 @keyframes radarPulse {
     0% { transform: scale(0.8); opacity: 1; }
     100% { transform: scale(1.5); opacity: 0; }
+}
+
+/* =========================================================
+   ФИНАЛЬНЫЕ СТИЛИ ДАМОК (В КОНЦЕ ФАЙЛА, ПЕРЕБИВАЮТ ВСЁ)
+   ========================================================= */
+
+.king {
+    border-color: #d4af37 !important;
+    border-width: 3px !important;
+    transform: scale(1.05) !important;
+    box-shadow:
+        inset -4px -4px 8px rgba(0,0,0,0.4),
+        inset 4px 4px 8px rgba(255,240,200,0.4),
+        0 0 12px rgba(212, 175, 55, 0.4),
+        0 5px 10px rgba(0,0,0,0.5) !important;
+}
+
+.piece-light.king {
+    background: radial-gradient(circle at 35% 30%, #fff8e7 0%, #f0e0b0 45%, #d4b88a 90%) !important;
+}
+
+.piece-dark.king {
+    background: radial-gradient(circle at 35% 30%, #8a5a30 0%, #5c3a1e 45%, #3a2410 90%) !important;
+}
+
+.king::before {
+    content: "" !important;
+    position: absolute !important;
+    top: 15% !important;
+    left: 15% !important;
+    width: 70% !important;
+    height: 70% !important;
+    inset: auto !important;
+    
+    /* Объемная золотая корона с рубинами и сапфирами */
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27g%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff8d0%27/%3E%3Cstop%20offset%3D%2730%25%27%20stop-color%3D%27%23ffd700%27/%3E%3Cstop%20offset%3D%2770%25%27%20stop-color%3D%27%23b8860b%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%238f6a1c%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M10%2C45%20L25%2C65%20L40%2C30%20L50%2C55%20L60%2C30%20L75%2C65%20L90%2C45%20L85%2C80%20L15%2C80%20Z%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%235c440d%27%20stroke-width%3D%273%27%20stroke-linejoin%3D%27round%27/%3E%3Crect%20x%3D%2715%27%20y%3D%2778%27%20width%3D%2770%27%20height%3D%2710%27%20rx%3D%273%27%20fill%3D%27url%28%23g%29%27%20stroke%3D%27%235c440d%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2710%27%20cy%3D%2745%27%20r%3D%275%27%20fill%3D%27%23d63b3b%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2725%27%20r%3D%276%27%20fill%3D%27%233b6fd6%27/%3E%3Ccircle%20cx%3D%2790%27%20cy%3D%2745%27%20r%3D%275%27%20fill%3D%27%23d63b3b%27/%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: center !important;
+    background-size: contain !important;
+    filter: drop-shadow(0 3px 4px rgba(0,0,0,0.6)) drop-shadow(0 0 6px rgba(255,215,0,0.8)) !important;
+    pointer-events: none !important;
+    z-index: 3 !important;
+    animation: crownAppear 0.45s cubic-bezier(.34,1.56,.64,1), crownShimmer 2.6s ease-in-out 0.45s infinite !important;
 }
