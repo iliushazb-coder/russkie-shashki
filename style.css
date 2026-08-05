@@ -715,3 +715,67 @@ h1 {
         0 0 10px rgba(168, 85, 247, 0.45),
         0 5px 10px rgba(0,0,0,0.5) !important;
 }
+/* =========================================================
+   НОВЫЙ ДИЗАЙН: ФОТО-ШАШКИ И ДОСКА (ДОБАВЛЕНО В КОНЕЦ ФАЙЛА)
+   ========================================================= */
+
+#board {
+    background-image: url('assets/board.png');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+}
+
+.light,
+.dark {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.piece::before,
+.piece::after {
+    display: none !important;
+}
+
+.piece-dark {
+    background-image: url('assets/piece_dark.png') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.piece-light {
+    background-image: url('assets/piece_light.png') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.piece-dark.king {
+    background-image: url('assets/king_dark.png') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.piece-light.king {
+    background-image: url('assets/king_light.png') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.king::before {
+    display: none !important;
+}
+
+.piece-dark,
+.piece-light,
+.piece-dark.king,
+.piece-light.king {
+    box-shadow: none !important;
+}
+
+.piece-light,
+.piece-light.king {
+    filter: drop-shadow(0 3px 5px rgba(0,0,0,0.45));
+}
