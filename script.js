@@ -2362,12 +2362,19 @@ function cancelOnlineSearch() {
     loadActiveRooms();
 }
 
-// ===== ИСКУССТВЕННЫЙ ИНТЕЛЛЕКТ (СУПЕР УМНЫЙ БОТ) =====
+// ===== ИСКУССТВЕННЫЙ ИНТЕЛЛЕКТ (СУПЕР УМНЫЙ БОТ - ГРАНДМАСТЕР) =====
 
 function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== BOT_COLOR || currentState.winner) return;
 
-    const bestMove = findBestMove(currentState, BOT_COLOR, 4); // Глубина 4 хода вперёд
+    // Динамическая глубина: чем меньше шашек на доске, тем глубже бот просчитывает
+    const pieceCount = Object.keys(currentState.pieces).length;
+    let depth = 5; // Стандартная глубина
+    
+    if (pieceCount <= 12) depth = 6; // Середина игры
+    if (pieceCount <= 6) depth = 8;  // Эндшпиль - бот видит очень далеко
+    
+    const bestMove = findBestMove(currentState, BOT_COLOR, depth);
     if (bestMove) {
         performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
     }
@@ -2402,12 +2409,11 @@ function minimax(state, depth, alpha, beta, botColor) {
         return evaluateBoard(state, botColor);
     }
 
-    // ИСПРАВЛЕНИЕ: Определяем чей ход напрямую из состояния, чтобы корректно обрабатывать серии взятий
     const currentColor = state.turn;
     const isMaximizing = (currentColor === botColor);
     const moves = getAllLegalMovesForBot(state, currentColor);
 
-    if (moves.length === 0) return isMaximizing ? -100000 : 100000;
+    if (moves.length === 0) return isMaximizing ? -1000000 : 1000000;
 
     if (isMaximizing) {
         let maxEval = -Infinity;
@@ -2435,8 +2441,8 @@ function minimax(state, depth, alpha, beta, botColor) {
 }
 
 function evaluateBoard(state, botColor) {
-    if (state.winner === botColor) return 100000;
-    if (state.winner && state.winner !== botColor) return -100000;
+    if (state.winner === botColor) return 1000000;
+    if (state.winner && state.winner !== botColor) return -1000000;
 
     let score = 0;
     const opponentColor = botColor === "light" ? "dark" : "light";
@@ -2447,37 +2453,40 @@ function evaluateBoard(state, botColor) {
         const r = parseInt(parts[0]);
         const c = parseInt(parts[1]);
 
-        let pieceVal = p.king ? 300 : 100;
+        let pieceVal = p.king ? 450 : 100;
 
         if (p.color === botColor) {
             score += pieceVal;
             if (!p.king) {
-                if (botColor === "light") {
-                    score += (7 - r) * 3; 
-                } else {
-                    score += r * 3; 
+                let adv = (botColor === "dark" ? r : 7 - r);
+                score += adv * 4; 
+                
+                if ((botColor === "dark" && r === 6) || (botColor === "light" && r === 1)) {
+                    score += 60;
                 }
                 if ((botColor === "light" && r === 7) || (botColor === "dark" && r === 0)) {
-                    score += 5;
+                    score += 10;
                 }
             }
             if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
-                score += 2;
+                score += 4;
+                if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score += 2;
             }
         } else {
             score -= pieceVal;
             if (!p.king) {
-                if (opponentColor === "light") {
-                    score -= (7 - r) * 3;
-                } else {
-                    score -= r * 3;
+                let adv = (opponentColor === "dark" ? r : 7 - r);
+                score -= adv * 4;
+                if ((opponentColor === "dark" && r === 6) || (opponentColor === "light" && r === 1)) {
+                    score -= 60;
                 }
                 if ((opponentColor === "light" && r === 7) || (opponentColor === "dark" && r === 0)) {
-                    score -= 5;
+                    score -= 10;
                 }
             }
             if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
-                score -= 2;
+                score -= 4;
+                if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score -= 2;
             }
         }
     }
@@ -2487,7 +2496,6 @@ function evaluateBoard(state, botColor) {
 function getAllLegalMovesForBot(state, color) {
     const moves = [];
     
-    // ИСПРАВЛЕНИЕ: Если мы в середине серии взятий, бот обязан ходить только этой шашкой
     if (state.mustContinueFrom) {
         const r = state.mustContinueFrom.row;
         const c = state.mustContinueFrom.col;
@@ -2510,6 +2518,33 @@ function getAllLegalMovesForBot(state, color) {
             moves.push({ from: { row: r, col: c }, to: d });
         }
     }
+    
+    moves.sort((a, b) => {
+        let valA = 0, valB = 0;
+        const distA = Math.abs(a.to.row - a.from.row);
+        const distB = Math.abs(b.to.row - b.from.row);
+        
+        if (distA > 1) {
+            const dr = (a.to.row - a.from.row) / distA;
+            const dc = (a.to.col - a.from.col) / distA;
+            const capturedKey = (a.from.row + dr) + "_" + (a.from.col + dc);
+            const capPiece = state.pieces[capturedKey];
+            if (capPiece && capPiece.king) valA = 100;
+            else if (capPiece) valA = 50;
+        }
+        
+        if (distB > 1) {
+            const dr = (b.to.row - b.from.row) / distB;
+            const dc = (b.to.col - b.from.col) / distB;
+            const capturedKey = (b.from.row + dr) + "_" + (b.from.col + dc);
+            const capPiece = state.pieces[capturedKey];
+            if (capPiece && capPiece.king) valB = 100;
+            else if (capPiece) valB = 50;
+        }
+        
+        return valB - valA;
+    });
+
     return moves;
 }
 
@@ -2518,6 +2553,12 @@ function getAllLegalMovesForBot(state, color) {
 const me = getMyTelegramUser();
 myTelegramId = me.id;
 myTelegramName = me.name;
+
+const greetingNameSpan = document.getElementById("user-greeting-name");
+if (greetingNameSpan) {
+    let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName;
+    greetingNameSpan.textContent = displayName;
+}
 
 const joinedViaLink = checkForInviteLink();
 if (!joinedViaLink) {
