@@ -1304,9 +1304,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.lastCapturedSquares = optimisticResult.lastCapturedSquares;
         currentState.pendingRemovals = optimisticResult.pendingRemovals;
 
-        // ИСПРАВЛЕНИЕ 1: Локально обновляем таймер, чтобы он не считал время для соперника, пока сервер не ответил
         if (optimisticResult.mustContinueFrom === null && currentState.timeControlSeconds > 0) {
-            currentState.turnStartedAt = Date.now();
+            currentState.turnStartedAt = Date.now(); // Локально обновляем, чтобы UI сразу сбросил таймер
         }
 
         if (optimisticResult.winner) {
@@ -1340,7 +1339,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 };
 
                 const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
-                if (!result) return; // Транзакция отменяется, если ход невалиден на сервере
+                if (!result) return;
 
                 const newRoom = {};
                 for (const key in room) newRoom[key] = room[key];
@@ -1355,7 +1354,10 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 newRoom.lastMovePath = result.lastMovePath;
                 newRoom.lastCapturedSquares = result.lastCapturedSquares;
                 newRoom.pendingRemovals = result.pendingRemovals;
-                if (result.mustContinueFrom === null) newRoom.turnStartedAt = Date.now();
+                
+                // ИСПРАВЛЕНИЕ: Серверное время Firebase для абсолютной точности
+                if (result.mustContinueFrom === null) newRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+                
                 if (result.winner) {
                     newRoom.winner = result.winner;
                     newRoom.winReason = result.winReason;
@@ -1406,7 +1408,9 @@ function computeGameSignature(state) {
     const playersPart = JSON.stringify(state.players || null);
     const rematchPart = JSON.stringify(state.rematchProposal || null);
     const drawPart = JSON.stringify(state.drawProposal || null);
-    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart + "_" + rematchPart + "_" + drawPart;
+    // ФИКС: Добавили время в подпись, чтобы экран обновлялся при смене таймера
+    const turnStartedAtPart = state.turnStartedAt || 0; 
+    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart + "_" + rematchPart + "_" + drawPart + "_" + turnStartedAtPart;
 }
 
 function startOnlineGame() {
@@ -1694,7 +1698,7 @@ function createRoomAndShowWaiting() {
         pieces: createInitialPieces(),
         players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
         timeControlSeconds: pendingTimeControlSeconds,
-        turnStartedAt: Date.now(),
+        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
         winner: null,
         winReason: null
     };
@@ -1892,7 +1896,7 @@ function performRematchReset() {
         newRoom.winner = null;
         newRoom.winReason = null;
         newRoom.status = "active";
-        newRoom.turnStartedAt = Date.now();
+        newRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
         newRoom.rematchProposal = null;
         const oldLight = room.players ? room.players.light : null;
         const oldDark = room.players ? room.players.dark : null;
@@ -2088,7 +2092,7 @@ function checkForInviteLink() {
         database.ref("rooms/" + roomCode).update({
             status: "active",
             "players/dark": { id: myTelegramId, name: myTelegramName },
-            turnStartedAt: Date.now()
+            turnStartedAt: firebase.database.ServerValue.TIMESTAMP
         }).then(function () {
             settled = true;
             clearTimeout(timeoutId);
@@ -2380,7 +2384,7 @@ function tryMatchOpponent(queue) {
                     dark: { id: opponentId, name: opponentData.name } 
                 },
                 timeControlSeconds: 0,
-                turnStartedAt: Date.now(),
+                turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
                 winner: null,
                 winReason: null
             };
@@ -2420,12 +2424,11 @@ function cancelOnlineSearch() {
 function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== BOT_COLOR || currentState.winner) return;
 
-    // Динамическая глубина: чем меньше шашек на доске, тем глубже бот просчитывает
     const pieceCount = Object.keys(currentState.pieces).length;
-    let depth = 5; // Стандартная глубина
+    let depth = 5; 
     
-    if (pieceCount <= 12) depth = 6; // Середина игры
-    if (pieceCount <= 6) depth = 8;  // Эндшпиль - бот видит очень далеко
+    if (pieceCount <= 12) depth = 6; 
+    if (pieceCount <= 6) depth = 8;  
     
     const bestMove = findBestMove(currentState, BOT_COLOR, depth);
     if (bestMove) {
@@ -2506,26 +2509,21 @@ function evaluateBoard(state, botColor) {
         const r = parseInt(parts[0]);
         const c = parseInt(parts[1]);
 
-        // Дамка стоит почти в 5 раз дороже обычной шашки
         let pieceVal = p.king ? 450 : 100;
 
         if (p.color === botColor) {
             score += pieceVal;
             if (!p.king) {
-                // Бонус за продвижение (чем ближе к дамкам, тем лучше)
                 let adv = (botColor === "dark" ? r : 7 - r);
                 score += adv * 4; 
                 
-                // Огромный бонус, если до превращения в дамку остался 1 ход
                 if ((botColor === "dark" && r === 6) || (botColor === "light" && r === 1)) {
                     score += 60;
                 }
-                // Бонус за защиту заднего ряда (чтобы не пускать соперника)
                 if ((botColor === "light" && r === 7) || (botColor === "dark" && r === 0)) {
                     score += 10;
                 }
             }
-            // Бонус за контроль центра
             if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
                 score += 4;
                 if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score += 2;
@@ -2554,7 +2552,6 @@ function evaluateBoard(state, botColor) {
 function getAllLegalMovesForBot(state, color) {
     const moves = [];
     
-    // ИСПРАВЛЕНИЕ: Если мы в середине серии взятий, бот обязан ходить только этой шашкой
     if (state.mustContinueFrom) {
         const r = state.mustContinueFrom.row;
         const c = state.mustContinueFrom.col;
@@ -2578,8 +2575,6 @@ function getAllLegalMovesForBot(state, color) {
         }
     }
 
-    // Сортировка ходов: бот сначала проверяет взятия дамок, потом простые взятия, потом обычные ходы.
-    // Это радикально ускоряет работу алгоритма (Alpha-Beta Pruning)
     moves.sort((a, b) => {
         let valA = 0, valB = 0;
         const distA = Math.abs(a.to.row - a.from.row);
