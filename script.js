@@ -183,7 +183,8 @@ let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
 const STALE_MS = 45000; 
-const BOT_USERNAME = "russkie_shashki_bot/play";
+// ИСПРАВЛЕНИЕ 2: Убрано /play, чтобы ссылка открывалась на всех телефонах
+const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
 let activeMatchRef = null;
@@ -934,6 +935,10 @@ function renderBoard() {
     renderLastMoveArrow();
     checkRematchProposal();
     checkDrawProposal();
+
+    if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR) {
+        setTimeout(triggerBotMove, 500);
+    }
 }
 
 function renderLastMoveArrow() {
@@ -1240,6 +1245,46 @@ function handleClick(row, col) {
 
 let pendingSyncChain = Promise.resolve();
 
+// ИСПРАВЛЕНИЕ 1: Функция для принудительной синхронизации с сервером
+function forceResyncFromServer() {
+    if (!roomCode) return;
+    database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
+        const room = snapshot.val();
+        if (!room || !room.pieces) return;
+        const newState = {
+            pieces: room.pieces,
+            turn: room.turn,
+            mustContinueFrom: room.mustContinueFrom || null,
+            capturedDark: room.capturedDark || 0,
+            capturedLight: room.capturedLight || 0,
+            moveCount: room.moveCount || 0,
+            lastMove: room.lastMove || null,
+            moveType: room.moveType || null,
+            lastMovePath: room.lastMovePath || null,
+            lastCapturedSquares: room.lastCapturedSquares || null,
+            pendingRemovals: room.pendingRemovals || null,
+            players: room.players || null,
+            presence: room.presence || null,
+            timeControlSeconds: room.timeControlSeconds || 0,
+            turnStartedAt: room.turnStartedAt || null,
+            winner: room.winner || null,
+            winReason: room.winReason || null,
+            rematchProposal: room.rematchProposal || null,
+            drawProposal: room.drawProposal || null
+        };
+        currentState = newState;
+        if (currentState.turn === myColor && currentState.mustContinueFrom) {
+            selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
+        } else {
+            selectedFrom = null;
+        }
+        lastRenderedSignature = computeGameSignature(currentState);
+        renderBoard();
+    }).catch(function(err) {
+        console.error("Resync error", err);
+    });
+}
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame) {
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
@@ -1258,6 +1303,12 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.lastMovePath = optimisticResult.lastMovePath;
         currentState.lastCapturedSquares = optimisticResult.lastCapturedSquares;
         currentState.pendingRemovals = optimisticResult.pendingRemovals;
+
+        // ИСПРАВЛЕНИЕ 1: Локально обновляем таймер, чтобы он не считал время для соперника, пока сервер не ответил
+        if (optimisticResult.mustContinueFrom === null && currentState.timeControlSeconds > 0) {
+            currentState.turnStartedAt = Date.now();
+        }
+
         if (optimisticResult.winner) {
             currentState.winner = optimisticResult.winner;
             currentState.winReason = optimisticResult.winReason;
@@ -1289,7 +1340,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 };
 
                 const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
-                if (!result) return;
+                if (!result) return; // Транзакция отменяется, если ход невалиден на сервере
 
                 const newRoom = {};
                 for (const key in room) newRoom[key] = room[key];
@@ -1311,8 +1362,15 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                     newRoom.status = "finished";
                 }
                 return newRoom;
+            }).then(function(result) {
+                // ИСПРАВЛЕНИЕ 1: Если транзакция отменена сервером, принудительно синхронизируем экран
+                if (!result.committed) {
+                    console.log("Move rejected by server, resyncing...");
+                    forceResyncFromServer();
+                }
             });
         }).catch(function () {
+            forceResyncFromServer();
         });
     } else {
         const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
@@ -1336,11 +1394,6 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
             playSoundForMoveType(result.moveType, movingPieceWasKing);
             renderBoard();
-
-            // --- ИСПРАВЛЕНИЕ: Триггер для хода бота (включая продолжение серии взятий) ---
-            if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR) {
-                setTimeout(triggerBotMove, 500);
-            }
         }
     }
 }
@@ -2453,21 +2506,26 @@ function evaluateBoard(state, botColor) {
         const r = parseInt(parts[0]);
         const c = parseInt(parts[1]);
 
+        // Дамка стоит почти в 5 раз дороже обычной шашки
         let pieceVal = p.king ? 450 : 100;
 
         if (p.color === botColor) {
             score += pieceVal;
             if (!p.king) {
+                // Бонус за продвижение (чем ближе к дамкам, тем лучше)
                 let adv = (botColor === "dark" ? r : 7 - r);
                 score += adv * 4; 
                 
+                // Огромный бонус, если до превращения в дамку остался 1 ход
                 if ((botColor === "dark" && r === 6) || (botColor === "light" && r === 1)) {
                     score += 60;
                 }
+                // Бонус за защиту заднего ряда (чтобы не пускать соперника)
                 if ((botColor === "light" && r === 7) || (botColor === "dark" && r === 0)) {
                     score += 10;
                 }
             }
+            // Бонус за контроль центра
             if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
                 score += 4;
                 if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score += 2;
@@ -2496,6 +2554,7 @@ function evaluateBoard(state, botColor) {
 function getAllLegalMovesForBot(state, color) {
     const moves = [];
     
+    // ИСПРАВЛЕНИЕ: Если мы в середине серии взятий, бот обязан ходить только этой шашкой
     if (state.mustContinueFrom) {
         const r = state.mustContinueFrom.row;
         const c = state.mustContinueFrom.col;
@@ -2518,7 +2577,9 @@ function getAllLegalMovesForBot(state, color) {
             moves.push({ from: { row: r, col: c }, to: d });
         }
     }
-    
+
+    // Сортировка ходов: бот сначала проверяет взятия дамок, потом простые взятия, потом обычные ходы.
+    // Это радикально ускоряет работу алгоритма (Alpha-Beta Pruning)
     moves.sort((a, b) => {
         let valA = 0, valB = 0;
         const distA = Math.abs(a.to.row - a.from.row);
@@ -2550,17 +2611,28 @@ function getAllLegalMovesForBot(state, color) {
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
 
-const me = getMyTelegramUser();
-myTelegramId = me.id;
-myTelegramName = me.name;
+function startApp() {
+    const me = getMyTelegramUser();
+    myTelegramId = me.id;
+    myTelegramName = me.name;
 
-const greetingNameSpan = document.getElementById("user-greeting-name");
-if (greetingNameSpan) {
-    let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName;
-    greetingNameSpan.textContent = displayName;
+    const greetingNameSpan = document.getElementById("user-greeting-name");
+    if (greetingNameSpan) {
+        let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName;
+        greetingNameSpan.textContent = displayName;
+    }
+
+    const joinedViaLink = checkForInviteLink();
+    if (!joinedViaLink) {
+        loadActiveRooms();
+    }
 }
 
-const joinedViaLink = checkForInviteLink();
-if (!joinedViaLink) {
-    loadActiveRooms();
+// ИСПРАВЛЕНИЕ 2: Ждём загрузки Telegram WebApp, чтобы стартовый параметр точно считался
+if (window.Telegram && window.Telegram.WebApp) {
+    Telegram.WebApp.ready();
+    Telegram.WebApp.expand();
+    setTimeout(startApp, 100); // Даём 100мс на инициализацию данных
+} else {
+    startApp();
 }
