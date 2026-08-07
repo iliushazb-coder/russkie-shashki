@@ -2665,7 +2665,6 @@ if (window.Telegram && window.Telegram.WebApp) {
 document.addEventListener('DOMContentLoaded', function() {
     const btnPlayGroup = document.getElementById("btn-play-group");
     const btnBackToMenu = document.getElementById("btn-back-to-menu");
-    const btnCreateGroupRoom = document.getElementById("btn-create-group-room");
 
     if (btnPlayGroup) {
         btnPlayGroup.addEventListener("click", function() {
@@ -2682,12 +2681,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             showScreen(menuScreen);
             loadActiveRooms();
-        });
-    }
-
-    if (btnCreateGroupRoom) {
-        btnCreateGroupRoom.addEventListener("click", function() {
-            createGroupRoom();
         });
     }
 });
@@ -2757,60 +2750,6 @@ function showGroupLobby() {
     });
 }
 
-// Функция создания комнаты прямо из лобби
-function createGroupRoom() {
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    stopPresenceHeartbeat();
-    
-    roomCode = generateRoomCode();
-    myColor = "light";
-    isOnlineGame = true;
-    isSpectator = false;
-
-    const initialState = {
-        status: "waiting",
-        turn: "light",
-        mustContinueFrom: null,
-        capturedDark: 0,
-        capturedLight: 0,
-        moveCount: 0,
-        lastMove: null,
-        lastMovePath: null,
-        lastCapturedSquares: null,
-        moveType: null,
-        pieces: createInitialPieces(),
-        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
-        timeControlSeconds: 0,
-        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
-        winner: null,
-        winReason: null,
-        groupId: GROUP_ID
-    };
-
-    database.ref("rooms/" + roomCode).set(initialState).then(function() {
-        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-            opponentName: "Ожидание из группы...",
-            myColor: "light"
-        });
-        setupPresence();
-
-        waitingText.textContent = "Ожидание соперника из группы...";
-        inviteLinkBox.classList.add("hidden");
-        btnShareLink.classList.add("hidden");
-        showScreen(waitingScreen);
-
-        database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
-            if (snapshot.val() === "active") {
-                database.ref("rooms/" + roomCode + "/status").off();
-                waitingText.textContent = "Соперник нашёлся! Начинаем игру.";
-                setTimeout(function () {
-                    showScreen(gameScreen);
-                    startOnlineGame();
-                }, 1000);
-            }
-        });
-    });
-}
 
 // Функция присоединения к открытой комнате
 function joinGroupRoom(code) {
