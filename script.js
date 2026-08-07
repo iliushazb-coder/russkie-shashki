@@ -2707,6 +2707,22 @@ function showGroupLobby() {
             // Не показываем завершенные игры
             if (room.status === "finished" || room.winner) continue;
 
+            // АВТО-ЧИСТКА: Если комната ждет соперника (waiting), но создатель пропал 
+            // (офлайн дольше RECONNECT_GRACE_MS), полностью удаляем её из базы данных.
+            // Активные игры (active) здесь не трогаем, у них своя система.
+            if (room.status === "waiting") {
+                const lightPresence = room.presence && room.presence.light;
+                const isCreatorStale = !lightPresence || lightPresence.online === false || (Date.now() - (lightPresence.lastSeen || 0)) > RECONNECT_GRACE_MS;
+                
+                if (isCreatorStale) {
+                    if (room.players && room.players.light && room.players.light.id) {
+                        database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
+                    }
+                    database.ref("rooms/" + code).remove();
+                    continue; // Пропускаем отрисовку этой комнаты, так как она удаляется
+                }
+            }
+
             hasRooms = true;
             const card = document.createElement("div");
             card.className = "group-room-card";
@@ -2732,7 +2748,7 @@ function showGroupLobby() {
         }
 
         if (!hasRooms) {
-            groupRoomsList.innerHTML = '<p class="section-title">Нет активных игр. Создай первую!</p>';
+            groupRoomsList.innerHTML = ''; // Если комнат нет, оставляем пусто
         }
 
         // Навешиваем обработчики на кнопки
