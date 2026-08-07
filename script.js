@@ -2354,7 +2354,8 @@ function startOnlineSearch() {
             activeMatchRef.remove();
             
             roomCode = matchedRoomCode;
-            myColor = "dark"; 
+            // Убрали myColor = "dark", так как создатель комнаты (who receives this signal) 
+            // уже имеет правильно установленный myColor = "light" из функции addToMatchmakingQueue.
             isOnlineGame = true;
             pendingTimeControlSeconds = 0;
             
@@ -2365,9 +2366,45 @@ function startOnlineSearch() {
 }
 
 function addToMatchmakingQueue() {
-    const myQueueRef = database.ref("matchmakingQueue/" + myTelegramId);
-    myQueueRef.set({ name: myTelegramName, timestamp: Date.now() });
-    myQueueRef.onDisconnect().remove(); 
+    // Генерируем комнату и сразу становимся "светлыми" (создателями)
+    roomCode = generateRoomCode();
+    myColor = "light";
+    isOnlineGame = true;
+    isSpectator = false;
+
+    const initialState = {
+        status: "waiting",
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
+        moveType: null,
+        pieces: createInitialPieces(),
+        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+        timeControlSeconds: 0,
+        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
+        winner: null,
+        winReason: null,
+        groupId: GROUP_ID // Привязываем к группе, чтобы было видно в лобби
+    };
+
+    // Создаём комнату в базе
+    database.ref("rooms/" + roomCode).set(initialState).then(function() {
+        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+            opponentName: "Поиск соперника...",
+            myColor: "light"
+        });
+        setupPresence(); // Включаем сердцебиение, чтобы комната не удалилась как зависшая
+
+        // Добавляем себя в очередь поиска, ПЕРЕДАВАЯ код созданной комнаты
+        const myQueueRef = database.ref("matchmakingQueue/" + myTelegramId);
+        myQueueRef.set({ name: myTelegramName, timestamp: Date.now(), roomCode: roomCode });
+        myQueueRef.onDisconnect().remove(); 
+    });
 }
 
 function tryMatchOpponent(queue) {
@@ -2380,6 +2417,7 @@ function tryMatchOpponent(queue) {
     const opponentId = opponentIds[0];
     const opponentData = queue[opponentId];
     
+    // Пытаемся "забрать" соперника из очереди
     database.ref("matchmakingQueue/" + opponentId).transaction(function(current) {
         if (current === null) return null; 
         return null; 
@@ -2390,41 +2428,49 @@ function tryMatchOpponent(queue) {
                 matchmakingQueueRef = null; 
             }
             
-            roomCode = generateRoomCode();
-            myColor = "light"; 
+            // Удаляем себя из очереди поиска
+            database.ref("matchmakingQueue/" + myTelegramId).remove();
+
+            // Берём код комнаты, которую соперник УЖЕ создал при своём поиске
+            const matchedRoomCode = opponentData.roomCode;
+            
+            if (!matchedRoomCode) {
+                showInfoModal("Ошибка: соперник не создал комнату.", false);
+                showScreen(menuScreen);
+                return;
+            }
+
+            // Если я успел создать свою комнату ожидания (например, гонки условий), удаляю её
+            if (roomCode && roomCode !== matchedRoomCode) {
+                database.ref("rooms/" + roomCode).remove();
+                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
+            }
+
+            // Я присоединяюсь к ЕГО комнате, значит я "тёмные"
+            roomCode = matchedRoomCode;
+            myColor = "dark"; 
             isOnlineGame = true;
             pendingTimeControlSeconds = 0;
 
-            const initialState = {
-                status: "active", 
-                turn: "light",
-                mustContinueFrom: null,
-                capturedDark: 0,
-                capturedLight: 0,
-                moveCount: 0,
-                lastMove: null,
-                lastMovePath: null,
-                lastCapturedSquares: null,
-                moveType: null,
-                pieces: createInitialPieces(),
-                players: { 
-                    light: { id: myTelegramId, name: myTelegramName }, 
-                    dark: { id: opponentId, name: opponentData.name } 
-                },
-                timeControlSeconds: 0,
-                turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
-                winner: null,
-                winReason: null,
-                groupId: GROUP_ID // Привязываем комнату к группе
-            };
-
-            database.ref("rooms/" + roomCode).set(initialState).then(function() {
+            // Обновляем ЕГО комнату до активной
+            database.ref("rooms/" + roomCode).update({
+                status: "active",
+                "players/dark": { id: myTelegramId, name: myTelegramName },
+                turnStartedAt: firebase.database.ServerValue.TIMESTAMP
+            }).then(function() {
+                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                    opponentName: opponentData.name,
+                    myColor: "dark"
+                });
+                
+                // Отправляем сигнал сопернику, чтобы он зашёл в игру
                 database.ref("users/" + opponentId + "/activeMatch").set(roomCode).then(function() {
                     showScreen(gameScreen);
                     startOnlineGame();
                 });
             });
         } else {
+            // Кто-то успел забрать соперника раньше, пробуем снова или встаём в очередь
             matchmakingQueueRef.once("value").then(function snap(s) {
                 const newQueue = s.val() || {};
                 if (Object.keys(newQueue).length > 0) tryMatchOpponent(newQueue);
@@ -2444,6 +2490,14 @@ function cancelOnlineSearch() {
         activeMatchRef = null; 
     }
     database.ref("matchmakingQueue/" + myTelegramId).remove();
+    
+    // Удаляем созданную нами комнату ожидания, чтобы она сразу пропала из лобби группы
+    if (roomCode) {
+        database.ref("rooms/" + roomCode).remove();
+        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
+        roomCode = null; // Сбрасываем, чтобы не удалить случайно чужую при следующей игре
+    }
+    
     showScreen(menuScreen);
     loadActiveRooms();
 }
