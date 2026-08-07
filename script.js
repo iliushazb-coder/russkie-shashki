@@ -652,7 +652,11 @@ function statusForColor(color) {
     }
     const isStale = (Date.now() - (presence.lastSeen || 0)) > STALE_MS;
     if (presence.online === false || isStale) {
-        return { text: ratingPrefix + "Оффлайн", cls: "status-left" };
+        // Считаем оставшееся время до конца "минуты форы"
+        const elapsed = Date.now() - (presence.lastSeen || Date.now());
+        let remaining = Math.ceil((RECONNECT_GRACE_MS - elapsed) / 1000);
+        if (remaining < 0) remaining = 0;
+        return { text: ratingPrefix + "Оффлайн (осталось " + remaining + "с)", cls: "status-left" };
     }
     return { text: ratingPrefix + "В игре", cls: "status-online" };
 }
@@ -761,9 +765,12 @@ function cleanupAbandonedRoom() {
 
 function handleVisibilityChange() {
     if (!myPresenceRef) return;
-    if (document.hidden || !document.hasFocus()) {
+    // Если приложение реально свёрнуто (document.hidden) — пишем offline сразу.
+    // Поле hasFocus() больше не используем, чтобы клавиатура и уведомления не ломали игру.
+    if (document.hidden) {
         myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     } else {
+        // Если приложение снова на экране — сразу бьём пульс, статус становится "В игре"
         myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }
 }
@@ -2882,6 +2889,11 @@ function joinGroupRoom(code) {
                 myColor: "dark"
             });
             
+            // Отправляем сигнал создателю комнаты (если он ждал в матчмейкинге)
+            database.ref("users/" + creatorId + "/activeMatch").set(roomCode);
+            // Безопасно убираем создателя из очереди матчмейкинга (если он там был)
+            database.ref("matchmakingQueue/" + creatorId).remove();
+
             if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
             showScreen(gameScreen);
             startOnlineGame();
