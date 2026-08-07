@@ -779,3 +779,78 @@ h1 {
 .piece-light.king {
     filter: drop-shadow(0 3px 5px rgba(0,0,0,0.45));
 }
+/* =========================================================
+   ЭКРАН ЛОББИ ГРУППЫ
+   ========================================================= */
+
+#group-lobby-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 350px;
+}
+
+#group-rooms-list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.group-room-card {
+    background: linear-gradient(160deg, rgba(255,225,170,0.10), rgba(255,225,170,0.02));
+    border: 1px solid rgba(255, 210, 130, 0.3);
+    border-radius: 16px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.group-room-info {
+    font-size: 15px;
+    font-weight: 700;
+    color: #f0d9ae;
+    text-align: center;
+}
+
+.group-room-info.active {
+    color: #7dffb0;
+}
+
+.group-room-info.waiting {
+    color: #ffd27a;
+}
+
+.group-join-btn {
+    background: linear-gradient(135deg, rgba(76,217,100,0.6), rgba(40,150,60,0.7));
+    border: 1px solid rgba(150,255,170,0.4);
+    color: #fff;
+    font-weight: 700;
+    padding: 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.group-join-btn:active {
+    transform: scale(0.96);
+}
+
+.group-watch-btn {
+    background: linear-gradient(135deg, rgba(100,150,255,0.5), rgba(50,80,180,0.6));
+    border: 1px solid rgba(150,180,255,0.4);
+    color: #fff;
+    font-weight: 700;
+    padding: 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.group-watch-btn:active {
+    transform: scale(0.96);
+}

@@ -191,6 +191,12 @@ let activeMatchRef = null;
 let isBotGame = false;
 const BOT_COLOR = "dark";
 
+// ПЕРЕМЕННЫЕ ДЛЯ ЛОББИ ГРУППЫ:
+let groupLobbyListener = null;
+let isSpectator = false;
+// Используем chat_instance для определения группы при открытии по прямой ссылке
+const GROUP_ID = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.chat_instance != null) ? Telegram.WebApp.initDataUnsafe.chat_instance.toString() : "private_chat";
+
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let code = "";
@@ -204,6 +210,10 @@ function showScreen(screen) {
     waitingScreen.classList.add("hidden");
     gameScreen.classList.add("hidden");
     matchmakingScreen.classList.add("hidden");
+    
+    const groupLobbyScreen = document.getElementById("group-lobby-screen");
+    if (groupLobbyScreen) groupLobbyScreen.classList.add("hidden");
+    
     screen.classList.remove("hidden");
 }
 
@@ -680,6 +690,16 @@ function renderPlayerPanels() {
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
 
+    // Скрываем кнопки управления для зрителей
+    const gameButtons = document.querySelectorAll('#game-screen .menu-button');
+    gameButtons.forEach(btn => {
+        if (isSpectator) {
+            btn.classList.add("hidden");
+        } else {
+            btn.classList.remove("hidden");
+        }
+    });
+
     checkOpponentAbsence();
 }
 
@@ -687,6 +707,10 @@ let opponentGraceTimer = null;
 const RECONNECT_GRACE_MS = 60000;
 
 function checkOpponentAbsence() {
+    // ВАЖНАЯ ЗАЩИТА: Если игрок — зритель, функция немедленно останавливается. 
+    // Зритель не может удалить игру, которую смотрит.
+    if (isSpectator) return; 
+    
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (opponentAbsenceHandled) return;
 
@@ -1216,6 +1240,9 @@ function handleClick(row, col) {
     if (!currentState || currentState.winner) return;
     const state = currentState;
 
+    // Если мы зритель, вообще запрещаем клики по доске
+    if (isSpectator) return; 
+
     if (isOnlineGame && state.turn !== myColor) return;
     if (isBotGame && state.turn === BOT_COLOR) return; 
 
@@ -1700,7 +1727,8 @@ function createRoomAndShowWaiting() {
         timeControlSeconds: pendingTimeControlSeconds,
         turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
         winner: null,
-        winReason: null
+        winReason: null,
+        groupId: GROUP_ID // Привязываем комнату к группе
     };
 
     database.ref("rooms/" + roomCode).set(initialState).then(function () {
@@ -2386,7 +2414,8 @@ function tryMatchOpponent(queue) {
                 timeControlSeconds: 0,
                 turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
                 winner: null,
-                winReason: null
+                winReason: null,
+                groupId: GROUP_ID // Привязываем комнату к группе
             };
 
             database.ref("rooms/" + roomCode).set(initialState).then(function() {
@@ -2630,4 +2659,245 @@ if (window.Telegram && window.Telegram.WebApp) {
     setTimeout(startApp, 100); // Даём 100мс на инициализацию данных
 } else {
     startApp();
+}
+// ===== ЛОББИ ГРУППЫ (Список комнат) =====
+
+document.addEventListener('DOMContentLoaded', function() {
+    const btnPlayGroup = document.getElementById("btn-play-group");
+    const btnBackToMenu = document.getElementById("btn-back-to-menu");
+    const btnCreateGroupRoom = document.getElementById("btn-create-group-room");
+
+    if (btnPlayGroup) {
+        btnPlayGroup.addEventListener("click", function() {
+            isBotGame = false;
+            showGroupLobby();
+        });
+    }
+
+    if (btnBackToMenu) {
+        btnBackToMenu.addEventListener("click", function() {
+            if (groupLobbyListener) { 
+                groupLobbyListener.off(); 
+                groupLobbyListener = null; 
+            }
+            showScreen(menuScreen);
+            loadActiveRooms();
+        });
+    }
+
+    if (btnCreateGroupRoom) {
+        btnCreateGroupRoom.addEventListener("click", function() {
+            createGroupRoom();
+        });
+    }
+});
+
+function showGroupLobby() {
+    const groupLobbyScreen = document.getElementById("group-lobby-screen");
+    const groupRoomsList = document.getElementById("group-rooms-list");
+    
+    if (!groupLobbyScreen || !groupRoomsList) return;
+    
+    showScreen(groupLobbyScreen);
+    groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
+
+    // Слушаем ВСЕ комнаты, привязанные к этой группе
+    groupLobbyListener = database.ref("rooms").orderByChild("groupId").equalTo(GROUP_ID);
+    groupLobbyListener.on("value", function(snapshot) {
+        const rooms = snapshot.val() || {};
+        groupRoomsList.innerHTML = "";
+        
+        let hasRooms = false;
+
+        for (const code in rooms) {
+            const room = rooms[code];
+            // Не показываем завершенные игры
+            if (room.status === "finished" || room.winner) continue;
+
+            hasRooms = true;
+            const card = document.createElement("div");
+            card.className = "group-room-card";
+
+            const lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
+            const darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
+
+            if (room.status === "waiting") {
+                // Комната ожидает соперника (создана любым способом)
+                card.innerHTML = `
+                    <div class="group-room-info waiting">⏳ ${lightName} ждёт соперника...</div>
+                    <button class="group-join-btn" data-code="${code}">Присоединиться</button>
+                `;
+            } else if (room.status === "active") {
+                // Идет активная игра
+                card.innerHTML = `
+                    <div class="group-room-info active">♟️ ${lightName} vs ${darkName}</div>
+                    <button class="group-watch-btn" data-code="${code}">Смотреть партию</button>
+                `;
+            }
+
+            groupRoomsList.appendChild(card);
+        }
+
+        if (!hasRooms) {
+            groupRoomsList.innerHTML = '<p class="section-title">Нет активных игр. Создай первую!</p>';
+        }
+
+        // Навешиваем обработчики на кнопки
+        groupRoomsList.querySelectorAll('.group-join-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                joinGroupRoom(this.getAttribute('data-code'));
+            });
+        });
+
+        groupRoomsList.querySelectorAll('.group-watch-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                watchGroupRoom(this.getAttribute('data-code'));
+            });
+        });
+    });
+}
+
+// Функция создания комнаты прямо из лобби
+function createGroupRoom() {
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    stopPresenceHeartbeat();
+    
+    roomCode = generateRoomCode();
+    myColor = "light";
+    isOnlineGame = true;
+    isSpectator = false;
+
+    const initialState = {
+        status: "waiting",
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
+        moveType: null,
+        pieces: createInitialPieces(),
+        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+        timeControlSeconds: 0,
+        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
+        winner: null,
+        winReason: null,
+        groupId: GROUP_ID
+    };
+
+    database.ref("rooms/" + roomCode).set(initialState).then(function() {
+        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+            opponentName: "Ожидание из группы...",
+            myColor: "light"
+        });
+        setupPresence();
+
+        waitingText.textContent = "Ожидание соперника из группы...";
+        inviteLinkBox.classList.add("hidden");
+        btnShareLink.classList.add("hidden");
+        showScreen(waitingScreen);
+
+        database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
+            if (snapshot.val() === "active") {
+                database.ref("rooms/" + roomCode + "/status").off();
+                waitingText.textContent = "Соперник нашёлся! Начинаем игру.";
+                setTimeout(function () {
+                    showScreen(gameScreen);
+                    startOnlineGame();
+                }, 1000);
+            }
+        });
+    });
+}
+
+// Функция присоединения к открытой комнате
+function joinGroupRoom(code) {
+    roomCode = code;
+    myColor = "dark";
+    isOnlineGame = true;
+    isSpectator = false;
+
+    database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
+        const room = snapshot.val();
+        if (!room || room.status !== "waiting") {
+            showInfoModal("Комната уже занята или не существует.", false);
+            return;
+        }
+
+        const creatorId = room.players.light.id;
+        const creatorName = room.players.light.name;
+
+        database.ref("rooms/" + roomCode).update({
+            status: "active",
+            "players/dark": { id: myTelegramId, name: myTelegramName },
+            turnStartedAt: firebase.database.ServerValue.TIMESTAMP
+        }).then(function() {
+            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                opponentName: creatorName,
+                myColor: "dark"
+            });
+            
+            if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
+            showScreen(gameScreen);
+            startOnlineGame();
+        });
+    });
+}
+
+// Функция просмотра чужой игры (Наблюдатель)
+function watchGroupRoom(code) {
+    roomCode = code;
+    myColor = null; // У наблюдателя нет цвета
+    isOnlineGame = true;
+    isSpectator = true; // ВАЖНО: Режим наблюдателя
+
+    if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
+    showScreen(gameScreen);
+    
+    // Запускаем слушатель игры без установки Presence
+    if (roomListenerRef) roomListenerRef.off();
+    roomListenerRef = database.ref("rooms/" + roomCode);
+    roomListenerRef.on("value", function (snapshot) {
+        const room = snapshot.val();
+        if (!room || !room.pieces) {
+            if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+            showScreen(menuScreen);
+            showInfoModal("Игра была завершена или закрыта.", false);
+            return;
+        }
+
+        const newState = {
+            pieces: room.pieces,
+            turn: room.turn,
+            mustContinueFrom: room.mustContinueFrom || null,
+            capturedDark: room.capturedDark || 0,
+            capturedLight: room.capturedLight || 0,
+            moveCount: room.moveCount || 0,
+            lastMove: room.lastMove || null,
+            moveType: room.moveType || null,
+            lastMovePath: room.lastMovePath || null,
+            lastCapturedSquares: room.lastCapturedSquares || null,
+            pendingRemovals: room.pendingRemovals || null,
+            players: room.players || null,
+            presence: room.presence || null,
+            timeControlSeconds: room.timeControlSeconds || 0,
+            turnStartedAt: room.turnStartedAt || null,
+            winner: room.winner || null,
+            winReason: room.winReason || null,
+            rematchProposal: room.rematchProposal || null,
+            drawProposal: room.drawProposal || null
+        };
+
+        currentState = newState;
+        selectedFrom = null; // Зритель не может выбирать шашки
+        renderBoard();
+        
+        if (currentState.winner) {
+             renderEndGameModal();
+        } else {
+             endGameModal.classList.add("hidden");
+        }
+    });
 }
