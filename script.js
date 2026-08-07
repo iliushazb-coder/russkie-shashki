@@ -2758,24 +2758,52 @@ function showGroupLobby() {
 
         for (const code in rooms) {
             const room = rooms[code];
+
+            const isPlayerStale = function(color) {
+                const p = room.presence && room.presence[color];
+                return !p || p.online === false || (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
+            };
+
+            // АВТО-ЧИСТКА: зависшее предложение реванша — проверяем ДО фильтра "finished",
+            // т.к. после конца игры status ещё "finished", пока реванш не примут.
+            if (room.rematchProposal) {
+                const proposerColor = room.rematchProposal.by;
+                const answererColor = proposerColor === "light" ? "dark" : "light";
+                if (isPlayerStale(answererColor)) {
+                    database.ref("rooms/" + code + "/rematchProposal").remove();
+                    room.rematchProposal = null;
+                }
+            }
+
             // Не показываем завершенные игры
             if (room.status === "finished" || room.winner) continue;
 
-            // АВТО-ЧИСТКА: Если комната ждет соперника (waiting), но создатель пропал 
-            // (офлайн дольше RECONNECT_GRACE_MS), полностью удаляем её из базы данных.
-            // Активные игры (active) здесь не трогаем, у них своя система.
-            if (room.status === "waiting") {
-                const lightPresence = room.presence && room.presence.light;
-                const isCreatorStale = !lightPresence || lightPresence.online === false || (Date.now() - (lightPresence.lastSeen || 0)) > RECONNECT_GRACE_MS;
-                
-                if (isCreatorStale) {
-                    if (room.players && room.players.light && room.players.light.id) {
-                        database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
-                    }
-                    database.ref("rooms/" + code).remove();
-                    continue; // Пропускаем отрисовку этой комнаты, так как она удаляется
+            const lightIsStale = isPlayerStale("light");
+            const darkIsStale = isPlayerStale("dark");
+            let roomDeleted = false;
+
+            // АВТО-ЧИСТКА: комната ждёт соперника (waiting), но создатель пропал -> удаляем
+            if (room.status === "waiting" && lightIsStale) {
+                if (room.players && room.players.light && room.players.light.id) {
+                    database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
                 }
+                database.ref("rooms/" + code).remove();
+                roomDeleted = true;
             }
+
+            // АВТО-ЧИСТКА: брошенная активная игра (включая после принятого реванша) -> удаляем
+            if (!roomDeleted && room.status === "active" && lightIsStale && darkIsStale) {
+                if (room.players && room.players.light && room.players.light.id) {
+                    database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
+                }
+                if (room.players && room.players.dark && room.players.dark.id) {
+                    database.ref("users/" + room.players.dark.id + "/rooms/" + code).remove();
+                }
+                database.ref("rooms/" + code).remove();
+                roomDeleted = true;
+            }
+
+            if (roomDeleted) continue;
 
             hasRooms = true;
             const card = document.createElement("div");
