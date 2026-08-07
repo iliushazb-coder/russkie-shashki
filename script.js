@@ -2829,6 +2829,12 @@ function joinGroupRoom(code) {
         const creatorId = room.players.light.id;
         const creatorName = room.players.light.name;
 
+        // ПРОВЕРКА: Защита от игры против самого себя
+        if (creatorId && creatorId === myTelegramId) {
+            showInfoModal("Нельзя играть против самого себя", false);
+            return;
+        }
+
         database.ref("rooms/" + roomCode).update({
             status: "active",
             "players/dark": { id: myTelegramId, name: myTelegramName },
