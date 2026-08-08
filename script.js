@@ -2829,7 +2829,11 @@ function showGroupLobby() {
     groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
 
     // Слушаем ВСЕ комнаты, привязанные к этой группе
-    groupLobbyListener = database.ref("rooms").orderByChild("groupId").equalTo(GROUP_ID);
+    // Показываем ВСЕХ, кто играет, без привязки к коду группы —
+    // раньше здесь была фильтрация по GROUP_ID (Telegram chat_instance),
+    // но она оказалась ненадёжной и разные люди из одной и той же группы
+    // получали разные коды, из-за чего никто никого не видел.
+    groupLobbyListener = database.ref("rooms");
     groupLobbyListener.on("value", function(snapshot) {
         const rooms = snapshot.val() || {};
         groupRoomsList.innerHTML = "";
