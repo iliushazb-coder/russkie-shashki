@@ -1692,9 +1692,62 @@ function loadActiveRooms() {
 
 // ===== КНОПКИ МЕНЮ =====
 
+function createOnlineRoom() {
+    roomCode = generateRoomCode();
+    myColor = "light";
+    isOnlineGame = true;
+    isSpectator = false;
+
+    const initialState = {
+        status: "waiting",
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
+        moveType: null,
+        pieces: createInitialPieces(),
+        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+        timeControlSeconds: 0,
+        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
+        winner: null,
+        winReason: null,
+        groupId: GROUP_ID
+    };
+
+    database.ref("rooms/" + roomCode).set(initialState).then(function () {
+        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+            opponentName: "Ожидание соперника...",
+            myColor: "light"
+        });
+        setupPresence();
+
+        // Слушаем сигнал "тебя нашли" — сработает, когда кто-то нажмёт "Присоединиться"
+        activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
+        activeMatchRef.on("value", function (snapshot) {
+            const matchedRoomCode = snapshot.val();
+            if (matchedRoomCode) {
+                activeMatchRef.off();
+                activeMatchRef.remove();
+                roomCode = matchedRoomCode;
+                isOnlineGame = true;
+                pendingTimeControlSeconds = 0;
+                showScreen(gameScreen);
+                startOnlineGame();
+            }
+        });
+
+        // Сразу показываем список "Кто играет?" — там видно и свою запись, и остальных
+        showGroupLobby();
+    });
+}
+
 btnPlayOnline.addEventListener("click", function () {
     isBotGame = false;
-    startOnlineSearch();
+    createOnlineRoom();
 });
 
 btnCancelMatchmaking.addEventListener("click", function () {
