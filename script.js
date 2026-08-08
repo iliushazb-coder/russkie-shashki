@@ -186,13 +186,11 @@ let roomListenerRef = null;
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
-const STALE_MS = 10000; 
+const STALE_MS = 45000; 
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
-let myPendingOnlineRoom = null; // код комнаты, которую я создал через "Играть онлайн" и ещё жду соперника
 let activeMatchRef = null;
-let matchmakingDecisionMade = false; // защита от гонки условий: решение "создать/присоединиться" принимается один раз
 let isBotGame = false;
 const BOT_COLOR = "dark";
 
@@ -660,7 +658,6 @@ function statusForColor(color) {
     }
     const isStale = (Date.now() - (presence.lastSeen || 0)) > STALE_MS;
     if (presence.online === false || isStale) {
-        // Считаем оставшееся время до конца "минуты форы"
         const elapsed = Date.now() - (presence.lastSeen || Date.now());
         let remaining = Math.ceil((RECONNECT_GRACE_MS - elapsed) / 1000);
         if (remaining < 0) remaining = 0;
@@ -702,7 +699,6 @@ function renderPlayerPanels() {
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
 
-    // Скрываем кнопки управления для зрителей
     const gameButtons = document.querySelectorAll('#game-screen .menu-button');
     gameButtons.forEach(btn => {
         if (isSpectator) {
@@ -719,8 +715,6 @@ let opponentGraceTimer = null;
 const RECONNECT_GRACE_MS = 60000;
 
 function checkOpponentAbsence() {
-    // ВАЖНАЯ ЗАЩИТА: Если игрок — зритель, функция немедленно останавливается. 
-    // Зритель не может удалить игру, которую смотрит.
     if (isSpectator) return; 
     
     if (!isOnlineGame || !currentState || currentState.winner) return;
@@ -773,12 +767,9 @@ function cleanupAbandonedRoom() {
 
 function handleVisibilityChange() {
     if (!myPresenceRef) return;
-    // Если приложение реально свёрнуто (document.hidden) — пишем offline сразу.
-    // Поле hasFocus() больше не используем, чтобы клавиатура и уведомления не ломали игру.
     if (document.hidden) {
         myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     } else {
-        // Если приложение снова на экране — сразу бьём пульс, статус становится "В игре"
         myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }
 }
@@ -1255,7 +1246,6 @@ function handleClick(row, col) {
     if (!currentState || currentState.winner) return;
     const state = currentState;
 
-    // Если мы зритель, вообще запрещаем клики по доске
     if (isSpectator) return; 
 
     if (isOnlineGame && state.turn !== myColor) return;
@@ -1693,74 +1683,9 @@ function loadActiveRooms() {
 
 // ===== КНОПКИ МЕНЮ =====
 
-function createOnlineRoom() {
-    // Если у меня уже была своя незавершённая комната ожидания (например, я
-    // вышел и нажал "Играть онлайн" ещё раз) — сначала удаляем старую,
-    // чтобы не копились "призраки" вроде "Илюша ждёт соперника" по пять раз.
-    if (myPendingOnlineRoom) {
-        database.ref("rooms/" + myPendingOnlineRoom).remove();
-        database.ref("users/" + myTelegramId + "/rooms/" + myPendingOnlineRoom).remove();
-        myPendingOnlineRoom = null;
-    }
-
-    roomCode = generateRoomCode();
-    myColor = "light";
-    isOnlineGame = true;
-    isSpectator = false;
-
-    const initialState = {
-        status: "waiting",
-        turn: "light",
-        mustContinueFrom: null,
-        capturedDark: 0,
-        capturedLight: 0,
-        moveCount: 0,
-        lastMove: null,
-        lastMovePath: null,
-        lastCapturedSquares: null,
-        moveType: null,
-        pieces: createInitialPieces(),
-        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
-        timeControlSeconds: 0,
-        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
-        winner: null,
-        winReason: null,
-        groupId: GROUP_ID
-    };
-
-    database.ref("rooms/" + roomCode).set(initialState).then(function () {
-        myPendingOnlineRoom = roomCode;
-
-        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-            opponentName: "Ожидание соперника...",
-            myColor: "light"
-        });
-        setupPresence();
-
-        // Слушаем сигнал "тебя нашли" — сработает, когда кто-то нажмёт "Присоединиться"
-        activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
-        activeMatchRef.on("value", function (snapshot) {
-            const matchedRoomCode = snapshot.val();
-            if (matchedRoomCode) {
-                activeMatchRef.off();
-                activeMatchRef.remove();
-                myPendingOnlineRoom = null;
-                roomCode = matchedRoomCode;
-                isOnlineGame = true;
-                pendingTimeControlSeconds = 0;
-                showScreen(gameScreen);
-                startOnlineGame();
-            }
-        });
-
-        // Сразу показываем список "Кто играет?" — там видно и свою запись, и остальных
-        showGroupLobby();
-    });
-}
-
 btnPlayOnline.addEventListener("click", function () {
     isBotGame = false;
-    createOnlineRoom();
+    startOnlineSearch();
 });
 
 btnCancelMatchmaking.addEventListener("click", function () {
@@ -2396,7 +2321,7 @@ if (btnStatsClose) {
 
 function startOnlineSearch() {
     showScreen(matchmakingScreen);
-    isMatchmakingResolved = false;
+    isMatchmakingResolved = false; // Сбрасываем флаг при старте нового поиска
 
     // 1. Сначала создаём свою комнату и встаём в очередь.
     // ЖДЁМ полного завершения записи в базу (Promise), чтобы избежать гонки условий.
@@ -2504,7 +2429,6 @@ function addToMatchmakingQueue() {
 }
 
 function tryMatchOpponent(opponentId, opponentData) {
-    // Если мы уже нашли матч или нас уже нашли — выходим
     if (isMatchmakingResolved) return;
 
     // ДЕТЕРМИНИРОВАННЫЙ ВЫБОР: Игрок с МЕНЬШИМ ID (как число) — всегда "создатель" (ждёт).
@@ -2513,16 +2437,15 @@ function tryMatchOpponent(opponentId, opponentData) {
     const oppNumericId = parseInt(opponentId.replace("tg_", ""), 10);
 
     if (myNumericId < oppNumericId) {
-        // Я создатель, я просто жду, пока меня найдёт соперник с большим ID.
-        return;
+        return; // Я создатель, просто жду
     }
 
     const matchedRoomCode = opponentData.roomCode;
     if (!matchedRoomCode) return;
 
-    // Я — присоединяющийся (myNumericId > oppNumericId). Пытаюсь "забрать" комнату создателя.
+    // Я — joiner. Пытаюсь "забрать" комнату создателя.
     database.ref("rooms/" + matchedRoomCode).transaction(function(room) {
-        if (!room || room.status !== "waiting") return; // Abort if room gone or not waiting
+        if (!room || room.status !== "waiting") return; 
         room.status = "active";
         room.players = room.players || {};
         room.players.dark = { id: myTelegramId, name: myTelegramName };
@@ -2530,24 +2453,20 @@ function tryMatchOpponent(opponentId, opponentData) {
         return room;
     }).then(function(result) {
         if (result.committed) {
-            // Успех! Мы победили в гонке — мы JOINER (присоединившийся)
             isMatchmakingResolved = true;
             if (matchmakingQueueRef) { 
                 matchmakingQueueRef.off("value"); 
                 matchmakingQueueRef = null; 
             }
             
-            // Удаляем себя и соперника из очереди
             database.ref("matchmakingQueue/" + myTelegramId).remove();
             database.ref("matchmakingQueue/" + opponentId).remove();
 
-            // Удаляем свою комнату ожидания (которую создали в addToMatchmakingQueue)
             if (roomCode && roomCode !== matchedRoomCode) {
                 database.ref("rooms/" + roomCode).remove();
                 database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
             }
 
-            // Переходим в ЕГО комнату, значит мы "тёмные"
             roomCode = matchedRoomCode;
             myColor = "dark"; 
             isOnlineGame = true;
@@ -2558,17 +2477,20 @@ function tryMatchOpponent(opponentId, opponentData) {
                 myColor: "dark"
             });
             
-            // Отправляем сигнал создателю комнаты, чтобы он зашёл в игру
             database.ref("users/" + opponentId + "/activeMatch").set(roomCode).then(function() {
                 showScreen(gameScreen);
                 startOnlineGame();
             });
+        } else {
+            // Транзакция не удалась (комната уже занята или удалена).
+            // Удаляем "призрака" из очереди, чтобы он не мешал другим.
+            database.ref("matchmakingQueue/" + opponentId).remove();
         }
     });
 }
 
 function cancelOnlineSearch() {
-    isMatchmakingResolved = true; // Останавливаем любые фоновые попытки матчмейкинга
+    isMatchmakingResolved = true; 
     if (matchmakingQueueRef) { 
         matchmakingQueueRef.off("value"); 
         matchmakingQueueRef = null; 
@@ -2579,11 +2501,10 @@ function cancelOnlineSearch() {
     }
     database.ref("matchmakingQueue/" + myTelegramId).remove();
     
-    // Удаляем созданную нами комнату ожидания, чтобы она сразу пропала из лобби группы
     if (roomCode) {
         database.ref("rooms/" + roomCode).remove();
         database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
-        roomCode = null; // Сбрасываем, чтобы не удалить случайно чужую при следующей игре
+        roomCode = null; 
     }
     
     showScreen(menuScreen);
@@ -2828,12 +2749,7 @@ function showGroupLobby() {
     showScreen(groupLobbyScreen);
     groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
 
-    // Слушаем ВСЕ комнаты, привязанные к этой группе
-    // Показываем ВСЕХ, кто играет, без привязки к коду группы —
-    // раньше здесь была фильтрация по GROUP_ID (Telegram chat_instance),
-    // но она оказалась ненадёжной и разные люди из одной и той же группы
-    // получали разные коды, из-за чего никто никого не видел.
-    groupLobbyListener = database.ref("rooms");
+    groupLobbyListener = database.ref("rooms").orderByChild("groupId").equalTo(GROUP_ID);
     groupLobbyListener.on("value", function(snapshot) {
         const rooms = snapshot.val() || {};
         groupRoomsList.innerHTML = "";
@@ -2843,50 +2759,11 @@ function showGroupLobby() {
         for (const code in rooms) {
             const room = rooms[code];
 
-            const isPlayerStale = function(color) {
-                const p = room.presence && room.presence[color];
-                return !p || p.online === false || (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
-            };
-
-            // АВТО-ЧИСТКА: зависшее предложение реванша
-            if (room.rematchProposal) {
-                const proposerColor = room.rematchProposal.by;
-                const answererColor = proposerColor === "light" ? "dark" : "light";
-                if (isPlayerStale(answererColor)) {
-                    database.ref("rooms/" + code + "/rematchProposal").remove();
-                    room.rematchProposal = null;
-                }
-            }
+            // СТРОГО ТОЛЬКО ЧТЕНИЕ: лобби не удаляет комнаты!
+            // Удалять комнаты могут только сами игроки (через onDisconnect, "Отменить" или "Сдаться").
 
             // Не показываем завершенные игры
             if (room.status === "finished" || room.winner) continue;
-
-            const lightIsStale = isPlayerStale("light");
-            const darkIsStale = isPlayerStale("dark");
-            let roomDeleted = false;
-
-            // АВТО-ЧИСТКА: комната ждёт соперника (waiting), но создатель пропал -> удаляем
-            if (room.status === "waiting" && lightIsStale) {
-                if (room.players && room.players.light && room.players.light.id) {
-                    database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
-                }
-                database.ref("rooms/" + code).remove();
-                roomDeleted = true;
-            }
-
-            // АВТО-ЧИСТКА: брошенная активная игра (включая после принятого реванша) -> удаляем
-            if (!roomDeleted && room.status === "active" && lightIsStale && darkIsStale) {
-                if (room.players && room.players.light && room.players.light.id) {
-                    database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
-                }
-                if (room.players && room.players.dark && room.players.dark.id) {
-                    database.ref("users/" + room.players.dark.id + "/rooms/" + code).remove();
-                }
-                database.ref("rooms/" + code).remove();
-                roomDeleted = true;
-            }
-
-            if (roomDeleted) continue;
 
             hasRooms = true;
             const card = document.createElement("div");
@@ -2896,13 +2773,11 @@ function showGroupLobby() {
             const darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
 
             if (room.status === "waiting") {
-                // Комната ожидает соперника (создана любым способом)
                 card.innerHTML = `
                     <div class="group-room-info waiting">⏳ ${lightName} ждёт соперника...</div>
                     <button class="group-join-btn" data-code="${code}">Присоединиться</button>
                 `;
             } else if (room.status === "active") {
-                // Идет активная игра
                 card.innerHTML = `
                     <div class="group-room-info active">♟️ ${lightName} vs ${darkName}</div>
                     <button class="group-watch-btn" data-code="${code}">Смотреть партию</button>
@@ -2913,10 +2788,9 @@ function showGroupLobby() {
         }
 
         if (!hasRooms) {
-            groupRoomsList.innerHTML = ''; // Если комнат нет, оставляем пусто
+            groupRoomsList.innerHTML = ''; 
         }
 
-        // Навешиваем обработчики на кнопки
         groupRoomsList.querySelectorAll('.group-join-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 joinGroupRoom(this.getAttribute('data-code'));
@@ -2931,7 +2805,6 @@ function showGroupLobby() {
     });
 }
 
-// Функция присоединения к открытой комнате
 function joinGroupRoom(code) {
     roomCode = code;
     myColor = "dark";
@@ -2948,15 +2821,13 @@ function joinGroupRoom(code) {
         const creatorId = room.players.light.id;
         const creatorName = room.players.light.name;
 
-        // ПРОВЕРКА: Защита от игры против самого себя
         if (creatorId && creatorId === myTelegramId) {
             showInfoModal("Нельзя играть против самого себя", false);
             return;
         }
 
-        // ИСПОЛЬЗУЕМ ТРАНЗАКЦИЮ: гарантируем, что комната не удалена и имеет pieces
         database.ref("rooms/" + roomCode).transaction(function(currentRoom) {
-            if (!currentRoom || !currentRoom.pieces || currentRoom.status !== "waiting") return; // Отмена, если комната битая/удалена
+            if (!currentRoom || !currentRoom.pieces || currentRoom.status !== "waiting") return; 
             currentRoom.status = "active";
             currentRoom.players = currentRoom.players || {};
             currentRoom.players.dark = { id: myTelegramId, name: myTelegramName };
@@ -2972,9 +2843,7 @@ function joinGroupRoom(code) {
                 myColor: "dark"
             });
             
-            // Отправляем сигнал создателю комнаты (если он ждал в матчмейкинге)
             database.ref("users/" + creatorId + "/activeMatch").set(roomCode);
-            // Безопасно убираем создателя из очереди матчмейкинга (если он там был)
             database.ref("matchmakingQueue/" + creatorId).remove();
 
             if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
@@ -2984,17 +2853,15 @@ function joinGroupRoom(code) {
     });
 }
 
-// Функция просмотра чужой игры (Наблюдатель)
 function watchGroupRoom(code) {
     roomCode = code;
-    myColor = null; // У наблюдателя нет цвета
+    myColor = null; 
     isOnlineGame = true;
-    isSpectator = true; // ВАЖНО: Режим наблюдателя
+    isSpectator = true; 
 
     if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
     showScreen(gameScreen);
     
-    // Запускаем слушатель игры без установки Presence
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
     roomListenerRef.on("value", function (snapshot) {
@@ -3029,7 +2896,7 @@ function watchGroupRoom(code) {
         };
 
         currentState = newState;
-        selectedFrom = null; // Зритель не может выбирать шашки
+        selectedFrom = null; 
         renderBoard();
         
         if (currentState.winner) {
@@ -3044,7 +2911,7 @@ function watchGroupRoom(code) {
 if (window.Telegram && window.Telegram.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
-    setTimeout(startApp, 100); // Даём 100мс на инициализацию данных
+    setTimeout(startApp, 100); 
 } else {
     startApp();
 }
