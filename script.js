@@ -182,11 +182,12 @@ let roomListenerRef = null;
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
-const STALE_MS = 45000; 
+const STALE_MS = 10000; 
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
 let activeMatchRef = null;
+let matchmakingDecisionMade = false; // защита от гонки условий: решение "создать/присоединиться" принимается один раз
 let isBotGame = false;
 const BOT_COLOR = "dark";
 
