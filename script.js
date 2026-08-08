@@ -2736,6 +2736,8 @@ function showGroupLobby() {
     const groupRoomsList = document.getElementById("group-rooms-list");
     
     if (!groupLobbyScreen || !groupRoomsList) return;
+
+    alert("Мой ID группы: " + GROUP_ID); // ВРЕМЕННО, для диагностики — потом уберём
     
     showScreen(groupLobbyScreen);
     groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
