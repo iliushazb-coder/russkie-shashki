@@ -2429,10 +2429,17 @@ function tryMatchOpponent(opponentId, opponentData) {
     // Если мы уже нашли матч или нас уже нашли — выходим
     if (isMatchmakingResolved) return;
 
+    // ДЕТЕРМИНИРОВАННЫЙ ВЫБОР: Игрок с МЕНЬШИМ ID — всегда "создатель" (ждёт).
+    // Игрок с БОЛЬШИМ ID — всегда "присоединяющийся" (joiner).
+    // Это полностью исключает гонку: только один из двух пытается захватить комнату.
+    if (myTelegramId < opponentId) {
+        return;
+    }
+
     const matchedRoomCode = opponentData.roomCode;
     if (!matchedRoomCode) return;
 
-    // Пытаемся "забрать" комнату соперника (транзакция работает как замок)
+    // Я — присоединяющийся (myTelegramId > opponentId). Пытаюсь "забрать" комнату создателя.
     database.ref("rooms/" + matchedRoomCode).transaction(function(room) {
         if (!room || room.status !== "waiting") return; // Abort if room gone or not waiting
         room.status = "active";
