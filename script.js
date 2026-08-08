@@ -190,6 +190,7 @@ const STALE_MS = 10000;
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
+let myPendingOnlineRoom = null; // код комнаты, которую я создал через "Играть онлайн" и ещё жду соперника
 let activeMatchRef = null;
 let matchmakingDecisionMade = false; // защита от гонки условий: решение "создать/присоединиться" принимается один раз
 let isBotGame = false;
@@ -1693,6 +1694,15 @@ function loadActiveRooms() {
 // ===== КНОПКИ МЕНЮ =====
 
 function createOnlineRoom() {
+    // Если у меня уже была своя незавершённая комната ожидания (например, я
+    // вышел и нажал "Играть онлайн" ещё раз) — сначала удаляем старую,
+    // чтобы не копились "призраки" вроде "Илюша ждёт соперника" по пять раз.
+    if (myPendingOnlineRoom) {
+        database.ref("rooms/" + myPendingOnlineRoom).remove();
+        database.ref("users/" + myTelegramId + "/rooms/" + myPendingOnlineRoom).remove();
+        myPendingOnlineRoom = null;
+    }
+
     roomCode = generateRoomCode();
     myColor = "light";
     isOnlineGame = true;
@@ -1719,6 +1729,8 @@ function createOnlineRoom() {
     };
 
     database.ref("rooms/" + roomCode).set(initialState).then(function () {
+        myPendingOnlineRoom = roomCode;
+
         database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
             opponentName: "Ожидание соперника...",
             myColor: "light"
@@ -1732,6 +1744,7 @@ function createOnlineRoom() {
             if (matchedRoomCode) {
                 activeMatchRef.off();
                 activeMatchRef.remove();
+                myPendingOnlineRoom = null;
                 roomCode = matchedRoomCode;
                 isOnlineGame = true;
                 pendingTimeControlSeconds = 0;
