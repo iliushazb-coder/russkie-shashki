@@ -2429,17 +2429,20 @@ function tryMatchOpponent(opponentId, opponentData) {
     // Если мы уже нашли матч или нас уже нашли — выходим
     if (isMatchmakingResolved) return;
 
-    // ДЕТЕРМИНИРОВАННЫЙ ВЫБОР: Игрок с МЕНЬШИМ ID — всегда "создатель" (ждёт).
+    // ДЕТЕРМИНИРОВАННЫЙ ВЫБОР: Игрок с МЕНЬШИМ ID (как число) — всегда "создатель" (ждёт).
     // Игрок с БОЛЬШИМ ID — всегда "присоединяющийся" (joiner).
-    // Это полностью исключает гонку: только один из двух пытается захватить комнату.
-    if (myTelegramId < opponentId) {
+    const myNumericId = parseInt(myTelegramId.replace("tg_", ""), 10);
+    const oppNumericId = parseInt(opponentId.replace("tg_", ""), 10);
+
+    if (myNumericId < oppNumericId) {
+        // Я создатель, я просто жду, пока меня найдёт соперник с большим ID.
         return;
     }
 
     const matchedRoomCode = opponentData.roomCode;
     if (!matchedRoomCode) return;
 
-    // Я — присоединяющийся (myTelegramId > opponentId). Пытаюсь "забрать" комнату создателя.
+    // Я — присоединяющийся (myNumericId > oppNumericId). Пытаюсь "забрать" комнату создателя.
     database.ref("rooms/" + matchedRoomCode).transaction(function(room) {
         if (!room || room.status !== "waiting") return; // Abort if room gone or not waiting
         room.status = "active";
@@ -2743,8 +2746,6 @@ function showGroupLobby() {
     const groupRoomsList = document.getElementById("group-rooms-list");
     
     if (!groupLobbyScreen || !groupRoomsList) return;
-
-    alert("Мой ID группы: " + GROUP_ID); // ВРЕМЕННО, для диагностики — потом уберём
     
     showScreen(groupLobbyScreen);
     groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
