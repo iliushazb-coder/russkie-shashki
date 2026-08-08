@@ -16,6 +16,10 @@ const firebaseConfig = {
 };
 
 firebase.initializeApp(firebaseConfig);
+
+const appCheck = firebase.appCheck();
+appCheck.activate('6LdveXstAAAAAEH1UUtHVPTzlUOx-b82D5eWDXNw', true);
+
 const database = firebase.database();
 
 // ===== ЗВУКИ =====
