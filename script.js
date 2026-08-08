@@ -2342,8 +2342,11 @@ function startOnlineSearch() {
         const queueSize = Object.keys(queue).length;
         matchmakingCount.textContent = "Сейчас в поиске: " + queueSize + " игрок" + (queueSize === 1 ? "" : (queueSize > 1 && queueSize < 5 ? "а" : "ов"));
         
-        // Если мы ещё не нашли матч и в очереди есть кто-то кроме нас
-        if (!isMatchmakingResolved && queueSize > 1) {
+        // Если мы ещё не нашли матч — проверяем напрямую, есть ли кто-то кроме нас
+        // (раньше здесь была проверка queueSize > 1, но в момент, когда наша
+        // собственная запись в очереди ещё не долетела до базы, это давало
+        // ложное "queueSize == 1" даже при живом сопернике в очереди)
+        if (!isMatchmakingResolved) {
             const opponentIds = Object.keys(queue).filter(id => id !== myTelegramId);
             if (opponentIds.length > 0) {
                 tryMatchOpponent(opponentIds[0], queue[opponentIds[0]]);
