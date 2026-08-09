@@ -26,6 +26,16 @@ const database = firebase.database();
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
+// Современные браузеры блокируют звук, пока человек не коснётся экрана —
+// это разблокирует звуковую систему при самом первом касании/клике.
+function unlockAudioContext() {
+    if (audioContext.state === "suspended") {
+        audioContext.resume();
+    }
+}
+document.addEventListener("touchstart", unlockAudioContext, { once: true });
+document.addEventListener("click", unlockAudioContext, { once: true });
+
 function playTone(frequency, duration, volume) {
     const oscillator = audioContext.createOscillator();
     const gainNode = audioContext.createGain();
