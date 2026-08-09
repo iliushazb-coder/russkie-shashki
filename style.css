@@ -138,6 +138,14 @@ h1 {
     width: 100%;
 }
 
+#spectators-list {
+    font-size: 12px;
+    color: #b3a184;
+    text-align: center;
+    margin: 0 0 6px;
+    max-width: 90vw;
+}
+
 .player-panel {
     display: flex;
     align-items: center;

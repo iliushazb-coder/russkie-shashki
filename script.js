@@ -693,6 +693,24 @@ function applyStatusToElement(el, panelEl, statusInfo) {
     }
 }
 
+function renderSpectatorsList() {
+    const el = document.getElementById("spectators-list");
+    if (!el) return;
+    if (isSpectator || !currentState || !currentState.spectators) {
+        el.classList.add("hidden");
+        el.textContent = "";
+        return;
+    }
+    const names = Object.values(currentState.spectators).filter(Boolean);
+    if (names.length === 0) {
+        el.classList.add("hidden");
+        el.textContent = "";
+        return;
+    }
+    el.textContent = "👁 Смотрят: " + names.join(", ");
+    el.classList.remove("hidden");
+}
+
 function renderPlayerPanels() {
     if (!currentState) return;
     const lightName = (currentState.players && currentState.players.light && currentState.players.light.name) || "Белые";
@@ -981,6 +999,7 @@ function renderBoard() {
     ensureBoardBuilt();
     updateBoardPieces();
     renderPlayerPanels();
+    renderSpectatorsList();
     renderEndGameModal();
     showMoveHints(selectedFrom);
     resetMustCaptureHintTimer();
@@ -1319,6 +1338,7 @@ function forceResyncFromServer() {
             pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
+            spectators: room.spectators || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
@@ -1508,6 +1528,7 @@ function startOnlineGame() {
             pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
+            spectators: room.spectators || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
@@ -3137,7 +3158,7 @@ function watchGroupRoom(code) {
     // и сразу настраиваем автоматическое удаление при закрытии приложения.
     if (myTelegramId) {
         const myWatchRef = database.ref("rooms/" + roomCode + "/spectators/" + myTelegramId);
-        myWatchRef.set(true);
+        myWatchRef.set(myTelegramName);
         myWatchRef.onDisconnect().remove();
         myCurrentSpectatorRef = myWatchRef;
     }
@@ -3171,6 +3192,7 @@ function watchGroupRoom(code) {
             pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
+            spectators: room.spectators || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
