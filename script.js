@@ -2928,6 +2928,14 @@ function showGroupLobby() {
     showScreen(groupLobbyScreen);
     groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
 
+    // Важно: отключаем предыдущую "слежку" за списком, если она ещё была
+    // активна (например, при повторном входе) — иначе они накапливаются
+    // одна поверх другой и начинают работать непредсказуемо.
+    if (groupLobbyListener) {
+        groupLobbyListener.off();
+        groupLobbyListener = null;
+    }
+
     // Показываем ВСЕХ, кто играет, без привязки к коду группы —
     // раньше здесь была фильтрация по GROUP_ID (Telegram chat_instance),
     // но она оказалась ненадёжной и разные люди получали разные коды,
