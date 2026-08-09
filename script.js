@@ -3147,6 +3147,19 @@ function joinGroupRoom(code) {
 
 // Функция просмотра чужой игры (Наблюдатель)
 function watchGroupRoom(code) {
+    // Если я сам ждал соперника через "Играть онлайн" и решил пойти
+    // посмотреть чужую партию вместо этого — убираем свою старую заявку,
+    // чтобы она не висела в списке как будто я всё ещё жду.
+    if (myPendingOnlineRoom) {
+        const roomToRemove = myPendingOnlineRoom;
+        database.ref("rooms/" + roomToRemove).remove();
+        database.ref("users/" + myTelegramId + "/rooms/" + roomToRemove).remove();
+        if (activeMatchRef) { activeMatchRef.off(); activeMatchRef = null; }
+        myPendingOnlineRoom = null;
+        stopPresenceHeartbeat();
+        myPresenceRef = null;
+    }
+
     roomCode = code;
     myColor = null; // У наблюдателя нет цвета
     isOnlineGame = true;
