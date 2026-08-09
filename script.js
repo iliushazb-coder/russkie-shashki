@@ -1595,6 +1595,10 @@ function startBotSpectateRoom() {
     };
     database.ref("rooms/" + botSpectateRoomCode).set(initialState);
 
+    // Если приложение закроется полностью (потеря связи с Firebase) —
+    // комната должна удалиться сама, а не остаться висеть навсегда.
+    database.ref("rooms/" + botSpectateRoomCode).onDisconnect().remove();
+
     // Периодически подтверждаем "присутствие" за обе стороны, чтобы комната
     // не считалась заброшенной и автоматически не удалилась во время игры.
     botSpectatePresenceInterval = setInterval(function () {
@@ -1613,6 +1617,7 @@ function stopBotSpectateRoom() {
         botSpectatePresenceInterval = null;
     }
     if (botSpectateRoomCode) {
+        database.ref("rooms/" + botSpectateRoomCode).onDisconnect().cancel();
         database.ref("rooms/" + botSpectateRoomCode).remove();
         botSpectateRoomCode = null;
     }
