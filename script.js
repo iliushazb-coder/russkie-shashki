@@ -2597,10 +2597,10 @@ function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== BOT_COLOR || currentState.winner) return;
 
     const pieceCount = Object.keys(currentState.pieces).length;
-    let depth = 5; 
+    let depth = 7; 
     
-    if (pieceCount <= 12) depth = 6; 
-    if (pieceCount <= 6) depth = 8;  
+    if (pieceCount <= 12) depth = 8; 
+    if (pieceCount <= 6) depth = 10;  
     
     const bestMove = findBestMove(currentState, BOT_COLOR, depth);
     if (bestMove) {
