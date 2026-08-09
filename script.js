@@ -202,6 +202,8 @@ let isMatchmakingResolved = false;
 // ПЕРЕМЕННЫЕ ДЛЯ ЛОББИ ГРУППЫ:
 let groupLobbyListener = null;
 let myCurrentSpectatorRef = null; // ссылка на мою собственную запись "я смотрю эту партию"
+let botSpectateRoomCode = null; // код "зеркальной" комнаты для игры с ботом, чтобы её было видно в "Играть онлайн"
+let botSpectatePresenceInterval = null;
 let isSpectator = false;
 // Используем chat_instance для определения группы при открытии по прямой ссылке
 const GROUP_ID = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.chat_instance != null) ? Telegram.WebApp.initDataUnsafe.chat_instance.toString() : "private_chat";
@@ -1436,6 +1438,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
             playSoundForMoveType(result.moveType, movingPieceWasKing);
             renderBoard();
+            if (isBotGame) syncBotStateToFirebase();
         }
     }
 }
@@ -1551,6 +1554,79 @@ function startOnlineGame() {
     });
 }
 
+// ===== ЗЕРКАЛО ИГРЫ С БОТОМ (чтобы её было видно в "Играть онлайн") =====
+
+function startBotSpectateRoom() {
+    stopBotSpectateRoom(); // на случай, если предыдущая игра не была корректно закрыта
+
+    botSpectateRoomCode = generateRoomCode();
+    const initialState = {
+        status: "active",
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
+        moveType: null,
+        pieces: createInitialPieces(),
+        players: { light: { id: myTelegramId, name: myTelegramName }, dark: { id: "bot", name: "🤖 Компьютер" } },
+        timeControlSeconds: 0,
+        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
+        winner: null,
+        winReason: null,
+        groupId: GROUP_ID,
+        presence: {
+            light: { online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP },
+            dark: { online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP }
+        }
+    };
+    database.ref("rooms/" + botSpectateRoomCode).set(initialState);
+
+    // Периодически подтверждаем "присутствие" за обе стороны, чтобы комната
+    // не считалась заброшенной и автоматически не удалилась во время игры.
+    botSpectatePresenceInterval = setInterval(function () {
+        if (!botSpectateRoomCode) return;
+        const now = firebase.database.ServerValue.TIMESTAMP;
+        database.ref("rooms/" + botSpectateRoomCode + "/presence").update({
+            light: { online: true, lastSeen: now },
+            dark: { online: true, lastSeen: now }
+        });
+    }, 4000);
+}
+
+function stopBotSpectateRoom() {
+    if (botSpectatePresenceInterval) {
+        clearInterval(botSpectatePresenceInterval);
+        botSpectatePresenceInterval = null;
+    }
+    if (botSpectateRoomCode) {
+        database.ref("rooms/" + botSpectateRoomCode).remove();
+        botSpectateRoomCode = null;
+    }
+}
+
+function syncBotStateToFirebase() {
+    if (!botSpectateRoomCode || !currentState) return;
+    database.ref("rooms/" + botSpectateRoomCode).update({
+        pieces: currentState.pieces,
+        turn: currentState.turn,
+        mustContinueFrom: currentState.mustContinueFrom,
+        capturedDark: currentState.capturedDark,
+        capturedLight: currentState.capturedLight,
+        moveCount: currentState.moveCount,
+        moveType: currentState.moveType,
+        lastMove: currentState.lastMove,
+        lastMovePath: currentState.lastMovePath,
+        lastCapturedSquares: currentState.lastCapturedSquares,
+        winner: currentState.winner || null,
+        winReason: currentState.winReason || null,
+        status: currentState.winner ? "finished" : "active"
+    });
+}
+
 function startOfflineGame() {
     isOnlineGame = false;
     myColor = "light";
@@ -1591,6 +1667,12 @@ function startOfflineGame() {
         winReason: null
     };
     renderBoard();
+
+    if (isBotGame) {
+        startBotSpectateRoom();
+    } else {
+        stopBotSpectateRoom();
+    }
 }
 
 // ===== АКТИВНЫЕ ИГРЫ =====
@@ -1880,6 +1962,7 @@ btnResignYes.addEventListener("click", function () {
         currentState.winner = currentState.turn === "light" ? "dark" : "light";
         currentState.winReason = "resign";
         renderBoard();
+        if (isBotGame) syncBotStateToFirebase();
     }
 });
 
@@ -1954,6 +2037,9 @@ btnCloseGame.addEventListener("click", function () {
     markMyselfLeftExplicitly();
     if (isOnlineGame) {
         cleanupFinishedRoom();
+    }
+    if (isBotGame) {
+        stopBotSpectateRoom();
     }
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
 });
