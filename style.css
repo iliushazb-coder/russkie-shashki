@@ -825,6 +825,13 @@ h1 {
     color: #ffd27a;
 }
 
+.group-room-spectators {
+    font-size: 12px;
+    color: #b8a888;
+    text-align: center;
+    opacity: 0.85;
+}
+
 .group-join-btn {
     background: linear-gradient(135deg, rgba(76,217,100,0.6), rgba(40,150,60,0.7));
     border: 1px solid rgba(150,255,170,0.4);
