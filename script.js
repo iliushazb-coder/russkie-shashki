@@ -2934,7 +2934,7 @@ function showGroupLobby() {
             finalHtml += '<p class="section-title" style="margin-top: 15px;">Идут игры</p>' + activeHtml;
         }
         if (!finalHtml) {
-            finalHtml = '<p class="section-title">Пока никто не играет. Нажми "Играть онлайн", чтобы стать первым!</p>';
+            finalHtml = '<p class="section-title">Пока никто не играет</p>';
         }
         groupRoomsList.innerHTML = finalHtml;
 
