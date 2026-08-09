@@ -2814,6 +2814,19 @@ document.addEventListener('DOMContentLoaded', function() {
                 groupLobbyListener.off(); 
                 groupLobbyListener = null; 
             }
+            // Если я сам ждал соперника через "Играть онлайн" — убираем свою
+            // запись СРАЗУ ЖЕ при явном выходе, чтобы у остальных она не
+            // висела лишнее время. Аварийный выход (закрытие приложения,
+            // потеря сети) по-прежнему обрабатывается через onDisconnect/presence.
+            if (myPendingOnlineRoom) {
+                const roomToRemove = myPendingOnlineRoom;
+                database.ref("rooms/" + roomToRemove).remove();
+                database.ref("users/" + myTelegramId + "/rooms/" + roomToRemove).remove();
+                if (activeMatchRef) { activeMatchRef.off(); activeMatchRef = null; }
+                myPendingOnlineRoom = null;
+                stopPresenceHeartbeat();
+                myPresenceRef = null;
+            }
             showScreen(menuScreen);
             loadActiveRooms();
         });
@@ -2823,7 +2836,6 @@ document.addEventListener('DOMContentLoaded', function() {
 function showGroupLobby() {
     const groupLobbyScreen = document.getElementById("group-lobby-screen");
     const groupRoomsList = document.getElementById("group-rooms-list");
-    const lobbySummary = document.getElementById("lobby-summary");
     
     if (!groupLobbyScreen || !groupRoomsList) return;
     
@@ -2839,9 +2851,6 @@ function showGroupLobby() {
         const rooms = snapshot.val() || {};
         groupRoomsList.innerHTML = "";
 
-        let waitingCount = 0;
-        let activeGamesCount = 0;
-        let spectatorsCount = 0;
         let waitingHtml = "";
         let activeHtml = "";
 
@@ -2895,44 +2904,31 @@ function showGroupLobby() {
 
             const lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
             const darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
-            const roomSpectatorCount = room.spectators ? Object.keys(room.spectators).length : 0;
 
             if (room.status === "waiting") {
-                waitingCount++;
                 // Не показываем в списке доступных соперников самого себя
                 const isMine = room.players && room.players.light && room.players.light.id === myTelegramId;
                 if (!isMine) {
                     waitingHtml += `
                         <div class="group-room-card">
-                            <div class="group-room-info waiting">🟡 ${lightName} ждёт соперника...</div>
+                            <div class="group-room-info waiting">🟡 ${lightName}</div>
                             <button class="group-join-btn" data-code="${code}">Играть</button>
                         </div>
                     `;
                 }
             } else if (room.status === "active") {
-                activeGamesCount++;
-                spectatorsCount += roomSpectatorCount;
                 activeHtml += `
                     <div class="group-room-card">
-                        <div class="group-room-info active">⚫ ${lightName}<br>vs<br>⚪ ${darkName}</div>
-                        <div class="group-room-spectators">👁 ${roomSpectatorCount} ${roomSpectatorCount === 1 ? "зритель" : "зрителей"}</div>
+                        <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
                         <button class="group-watch-btn" data-code="${code}">Смотреть</button>
                     </div>
                 `;
             }
         }
 
-        const totalOnline = waitingCount + activeGamesCount * 2;
-        if (lobbySummary) {
-            lobbySummary.textContent = "👥 Сейчас онлайн: " + totalOnline +
-                "  🟡 Ждут: " + waitingCount +
-                "  🎮 Играют: " + (activeGamesCount * 2) +
-                "  👁 Смотрят: " + spectatorsCount;
-        }
-
         let finalHtml = "";
         if (waitingHtml) {
-            finalHtml += '<p class="section-title">Ждут соперника</p>' + waitingHtml;
+            finalHtml += '<p class="section-title">Ждут игру</p>' + waitingHtml;
         }
         if (activeHtml) {
             finalHtml += '<p class="section-title" style="margin-top: 15px;">Идут игры</p>' + activeHtml;
