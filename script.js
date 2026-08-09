@@ -186,7 +186,7 @@ let roomListenerRef = null;
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
-const STALE_MS = 10000; 
+const STALE_MS = 20000; 
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
