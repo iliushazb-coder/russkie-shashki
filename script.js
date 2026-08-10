@@ -1207,8 +1207,8 @@ function renderEndGameModal() {
             const loserColor = winnerColor === "light" ? "dark" : "light";
             const winnerName = (currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].name) || (winnerColor === "light" ? "Белые" : "Чёрные");
             const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? "Белые" : "Чёрные");
-            const winnerIcon = winnerColor === "light" ? "⚪" : "⚫";
-            const loserIcon = loserColor === "light" ? "⚪" : "⚫";
+            const winnerIcon = "✅";
+            const loserIcon = "❌";
 
             let reasonText = "";
             if (currentState.winReason === "no_pieces") reasonText = "у соперника закончились шашки";
@@ -1216,7 +1216,7 @@ function renderEndGameModal() {
             else if (currentState.winReason === "resign") reasonText = "соперник сдался";
             else if (currentState.winReason === "timeout") reasonText = "закончилось время на ход";
 
-            let text = "🏆 Победитель: " + winnerName + " " + winnerIcon + "\nПроиграл: " + loserName + " " + loserIcon;
+            let text = winnerIcon + " " + winnerName + "\n" + loserIcon + " " + loserName;
             if (reasonText) text += "\n(" + reasonText + ")";
 
             endGameText.textContent = text;
@@ -1711,8 +1711,8 @@ function startOfflineGame() {
         lastCapturedSquares: null,
         moveType: null,
         players: { 
-            light: { name: botColor === "light" ? botName : "Игрок 1" }, 
-            dark: { name: botColor === "dark" ? botName : "Игрок 1" } 
+            light: { name: botColor === "light" ? botName : (myTelegramName || "Игрок") }, 
+            dark: { name: botColor === "dark" ? botName : (myTelegramName || "Игрок") } 
         },
         timeControlSeconds: 0,
         turnStartedAt: null,
