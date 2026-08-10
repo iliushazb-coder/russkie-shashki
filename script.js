@@ -1722,6 +1722,10 @@ function startOfflineGame() {
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     
+    // Сохраняем список зрителей перед пересозданием объекта состояния,
+    // чтобы при реванше с ботом строчка "Смотрят: ..." не пропадала.
+    const existingSpectators = (currentState && currentState.spectators) ? currentState.spectators : null;
+    
     const botName = isBotGame ? "Компьютер" : "Игрок 2";
     currentState = {
         pieces: createInitialPieces(),
@@ -1741,7 +1745,8 @@ function startOfflineGame() {
         timeControlSeconds: 0,
         turnStartedAt: null,
         winner: null,
-        winReason: null
+        winReason: null,
+        spectators: existingSpectators // Переносим зрителей в новую партию
     };
     renderBoard();
 
