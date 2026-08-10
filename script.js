@@ -1087,7 +1087,7 @@ function clearMustCaptureHint() {
 function showMustCaptureHint() {
     mustCaptureHintTimer = null;
     if (!currentState || currentState.winner || selectedFrom) return;
-    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? "light" : currentState.turn);
+    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? myColor : currentState.turn);
     if (currentState.turn !== myTurnColor) return;
     if (!hasMandatoryCapture(currentState.pieces, currentState.turn)) return;
 
@@ -1115,7 +1115,7 @@ function resetMustCaptureHintTimer() {
     clearMustCaptureHint();
 
     if (!currentState || currentState.winner || selectedFrom) return;
-    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? "light" : currentState.turn);
+    const myTurnColor = isOnlineGame ? myColor : (isBotGame ? myColor : currentState.turn);
     if (currentState.turn !== myTurnColor) return;
 
     mustCaptureHintTimer = setTimeout(showMustCaptureHint, MUST_CAPTURE_HINT_DELAY_MS);
@@ -1291,7 +1291,7 @@ function handleClick(row, col) {
     if (isOnlineGame && state.turn !== myColor) return;
     if (isBotGame && state.turn === botColor) return; 
 
-    const selectableColor = isOnlineGame ? myColor : (isBotGame ? "light" : state.turn);
+    const selectableColor = isOnlineGame ? myColor : (isBotGame ? myColor : state.turn);
     const pieceHere = pieceAt(state.pieces, row, col);
 
     if (pieceHere && pieceHere.color === state.turn && pieceHere.color === selectableColor) {
