@@ -1592,6 +1592,13 @@ function startBotSpectateRoom() {
         botSpectateRoomCode = generateRoomCode();
     }
 
+    // Динамически назначаем цвета в зависимости от того, кем играет бот в текущей партии
+    const botPlayer = { id: "bot", name: "🤖 Компьютер" };
+    const humanPlayer = { id: myTelegramId, name: myTelegramName };
+    const playersObj = botColor === "light" 
+        ? { light: botPlayer, dark: humanPlayer } 
+        : { light: humanPlayer, dark: botPlayer };
+
     const initialState = {
         status: "active",
         turn: "light",
@@ -1604,7 +1611,7 @@ function startBotSpectateRoom() {
         lastCapturedSquares: null,
         moveType: null,
         pieces: createInitialPieces(),
-        players: { light: { id: myTelegramId, name: myTelegramName }, dark: { id: "bot", name: "🤖 Компьютер" } },
+        players: playersObj,
         timeControlSeconds: 0,
         turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
         winner: null,
