@@ -747,7 +747,12 @@ function checkOpponentAbsence() {
     // Зритель не может удалить игру, которую смотрит.
     if (isSpectator) return; 
     
-    if (!isOnlineGame || !currentState || currentState.winner) return;
+    if (!isOnlineGame || !currentState) return;
+    
+    // Если игра закончилась, мы продолжаем проверять присутствие ТОЛЬКО если мы 
+    // ожидаем ответа на реванш. В остальных случаях выходим.
+    if (currentState.winner && !(currentState.rematchProposal && currentState.rematchProposal.by === myColor)) return;
+    
     if (opponentAbsenceHandled) return;
 
     const oppColor = myColor === "light" ? "dark" : "light";
@@ -757,18 +762,29 @@ function checkOpponentAbsence() {
         if (!opponentGraceTimer) {
             opponentGraceTimer = setTimeout(function () {
                 opponentGraceTimer = null;
-                if (!isOnlineGame || !currentState || currentState.winner || opponentAbsenceHandled) return;
+                if (!isOnlineGame || !currentState || opponentAbsenceHandled) return;
+                // Если игра закончилась, продолжаем только если ждём ответа на реванш
+                if (currentState.winner && !(currentState.rematchProposal && currentState.rematchProposal.by === myColor)) return;
 
                 const stillInfo = statusForColor(oppColor);
                 if (stillInfo.cls === "status-left") {
                     opponentAbsenceHandled = true;
-                    const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || "Соперник";
-                    const reasonText = stillInfo.text.indexOf("потерял соединение") !== -1
-                        ? (oppName + " потерял соединение 📡")
-                        : (oppName + " покинул игру 👋");
-                    opponentLeftText.textContent = reasonText + "\nПартия завершена.";
-                    opponentLeftModal.classList.remove("hidden");
-                    cleanupAbandonedRoom();
+                    if (currentState.winner && currentState.rematchProposal) {
+                        // Если соперник пропал во время ожидания ответа на реванш
+                        showInfoModal("Соперник не ответил на реванш (пропал).", false);
+                        showScreen(menuScreen);
+                        loadActiveRooms();
+                        cleanupAbandonedRoom();
+                    } else {
+                        // Обычный уход во время игры
+                        const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || "Соперник";
+                        const reasonText = stillInfo.text.indexOf("потерял соединение") !== -1
+                            ? (oppName + " потерял соединение 📡")
+                            : (oppName + " покинул игру 👋");
+                        opponentLeftText.textContent = reasonText + "\nПартия завершена.";
+                        opponentLeftModal.classList.remove("hidden");
+                        cleanupAbandonedRoom();
+                    }
                 }
             }, RECONNECT_GRACE_MS);
         }
@@ -1218,13 +1234,17 @@ function renderEndGameModal() {
         
         endGameModal.classList.remove("hidden");
         
-        // Скрываем кнопки для зрителей
+        // Настраиваем кнопки: зритель видит только "В меню", игрок видит обе
         const buttonsRow = endGameModal.querySelector(".modal-buttons");
         if (buttonsRow) {
             if (isSpectator) {
-                buttonsRow.classList.add("hidden");
+                btnNewGame.classList.add("hidden");
+                btnCloseGame.classList.remove("hidden");
+                btnCloseGame.textContent = "В меню";
             } else {
-                buttonsRow.classList.remove("hidden");
+                btnNewGame.classList.remove("hidden");
+                btnCloseGame.classList.remove("hidden");
+                btnCloseGame.textContent = "Закрыть";
             }
         }
 
@@ -1508,7 +1528,19 @@ function startOnlineGame() {
     roomListenerRef = database.ref("rooms/" + roomCode);
     roomListenerRef.on("value", function (snapshot) {
         const room = snapshot.val();
-        if (!room || !room.pieces) return;
+        if (!room || !room.pieces) {
+            // Если комната была удалена (соперник закрыл игру или отменил реванш)
+            if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+            stopPresenceHeartbeat();
+            showScreen(menuScreen);
+            loadActiveRooms();
+            // Показываем сообщение, только если игра ещё не была завершена нормально, 
+            // либо если мы ждали реванша. Если игра завершена и мы не ждём реванша — просто выходим.
+            if (!currentState || !currentState.winner || currentState.rematchProposal) {
+                showInfoModal("Соперник покинул игру.", false);
+            }
+            return;
+        }
 
         const newState = {
             pieces: room.pieces,
@@ -2152,9 +2184,19 @@ if (btnDrawCancel) {
 
 btnCloseGame.addEventListener("click", function () {
     endGameModal.classList.add("hidden");
+    
+    // Если мы зритель — просто отписываемся от комнаты и выходим в меню
+    if (isSpectator) {
+        if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+        if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
+        showScreen(menuScreen);
+        loadActiveRooms();
+        return;
+    }
+
     markMyselfLeftExplicitly();
     if (isOnlineGame) {
-        cleanupFinishedRoom();
+        cleanupFinishedRoom(); // Это удалит комнату, и соперник/зритель автоматически увидят закрытие
     }
     if (isBotGame) {
         stopBotSpectateRoom();
@@ -2233,7 +2275,12 @@ function checkRematchProposal() {
         rematchRequestModal.classList.add("hidden");
         if (currentState.winner) {
             endGameText.textContent = endGameText.textContent.split("\n\n⏳")[0] + "\n\n⏳ Ждём ответа соперника на реванш...";
-            if (buttonsRow) buttonsRow.classList.add("hidden");
+            if (buttonsRow) {
+                buttonsRow.classList.remove("hidden");
+                btnNewGame.classList.add("hidden"); // Прячем "Новая игра"
+                btnCloseGame.classList.remove("hidden"); // Показываем "Закрыть"
+                btnCloseGame.textContent = "Отменить"; // Меняем текст
+            }
         }
     } else {
         rematchRequestText.textContent = (proposal.name || "Соперник") + " предлагает сыграть ещё раз";
