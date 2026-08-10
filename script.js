@@ -22,6 +22,20 @@ appCheck.activate('6LdveXstAAAAAEH1UUtHVPTzlUOx-b82D5eWDXNw', true);
 
 const database = firebase.database();
 
+// ===== ГЛОБАЛЬНЫЙ СЛУШАТЕЛЬ ПЕРЕПОДКЛЮЧЕНИЯ FIREBASE =====
+// Решает проблему ложных статусов "Офлайн" при кратковременных морганиях сети.
+// Когда сеть возвращается, мы мгновенно бьём пульс присутствия (online: true),
+// не дожидаясь ближайшего интервала (4 секунды). Это сбрасывает таймер 
+// "checkOpponentAbsence" у соперника и не даёт комнате удалиться.
+const connectedRef = database.ref(".info/connected");
+connectedRef.on("value", function(snap) {
+    if (snap.val() === true) {
+        if (myPresenceRef) {
+            myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+        }
+    }
+});
+
 // ===== ЗВУКИ =====
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -204,7 +218,7 @@ let myPendingOnlineRoom = null; // код комнаты, которую я со
 let activeMatchRef = null;
 let matchmakingDecisionMade = false; // защита от гонки условий: решение "создать/присоединиться" принимается один раз
 let isBotGame = false;
-const BOT_COLOR = "dark";
+let botColor = "dark"; // Больше не константа, меняется от игры к игре
 
 // Флаг для защиты от гонки условий в матчмейкинге
 let isMatchmakingResolved = false;
@@ -373,33 +387,11 @@ function maxCaptureChainLength(pieces, row, col, color, king) {
 }
 
 function filterJumpsByMajorityRule(pieces, row, col, color, king, jumps) {
-    if (jumps.length <= 1) return jumps;
-
-    let bestLen = -1;
-    const lens = [];
-    for (let i = 0; i < jumps.length; i++) {
-        const j = jumps[i];
-        const newPieces = {};
-        for (const k in pieces) newPieces[k] = pieces[k];
-        newPieces[j.capturedRow + "_" + j.capturedCol] = { color: "blocked", king: false };
-        delete newPieces[row + "_" + col];
-
-        let newKing = king;
-        if (!king) {
-            if ((color === "light" && j.toRow === 0) || (color === "dark" && j.toRow === 7)) newKing = true;
-        }
-        newPieces[j.toRow + "_" + j.toCol] = { color: color, king: newKing };
-
-        const len = 1 + maxCaptureChainLength(newPieces, j.toRow, j.toCol, color, newKing);
-        lens.push(len);
-        if (len > bestLen) bestLen = len;
-    }
-
-    const filtered = [];
-    for (let i = 0; i < jumps.length; i++) {
-        if (lens[i] === bestLen) filtered.push(jumps[i]);
-    }
-    return filtered;
+    // В русских шашках (в отличие от международных) нет правила
+    // "обязан бить максимум" — выбор направления взятия свободный,
+    // независимо от того, сколько шашек собьёт каждый вариант.
+    // Поэтому здесь просто возвращаем все варианты без фильтрации.
+    return jumps;
 }
 
 function canMoveNormally(pieces, row, col, color, king) {
@@ -1007,7 +999,7 @@ function renderBoard() {
     checkRematchProposal();
     checkDrawProposal();
 
-    if (isBotGame && currentState && !currentState.winner && currentState.turn === BOT_COLOR) {
+    if (isBotGame && currentState && !currentState.winner && currentState.turn === botColor) {
         setTimeout(triggerBotMove, 500);
     }
 }
@@ -1210,33 +1202,39 @@ function renderEndGameModal() {
     if (currentState && currentState.winner) {
         if (currentState.winner === "draw") {
             endGameText.textContent = "🤝 Ничья!\nОба игрока согласились закончить партию.";
-            endGameModal.classList.remove("hidden");
-            const marker = (roomCode || "offline") + "_" + currentState.moveCount + "_draw";
-            if (endGameShownForRoom !== marker) {
-                playWinSound();
-                endGameShownForRoom = marker;
-            }
-            return;
+        } else {
+            const winnerColor = currentState.winner;
+            const loserColor = winnerColor === "light" ? "dark" : "light";
+            const winnerName = (currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].name) || (winnerColor === "light" ? "Белые" : "Чёрные");
+            const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? "Белые" : "Чёрные");
+            const winnerIcon = winnerColor === "light" ? "⚪" : "⚫";
+            const loserIcon = loserColor === "light" ? "⚪" : "⚫";
+
+            let reasonText = "";
+            if (currentState.winReason === "no_pieces") reasonText = "у соперника закончились шашки";
+            else if (currentState.winReason === "no_moves") reasonText = "у соперника нет допустимых ходов";
+            else if (currentState.winReason === "resign") reasonText = "соперник сдался";
+            else if (currentState.winReason === "timeout") reasonText = "закончилось время на ход";
+
+            let text = "🏆 Победитель: " + winnerName + " " + winnerIcon + "\nПроиграл: " + loserName + " " + loserIcon;
+            if (reasonText) text += "\n(" + reasonText + ")";
+
+            endGameText.textContent = text;
         }
-        const winnerColor = currentState.winner;
-        const loserColor = winnerColor === "light" ? "dark" : "light";
-        const winnerName = (currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].name) || (winnerColor === "light" ? "Белые" : "Чёрные");
-        const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? "Белые" : "Чёрные");
-        const winnerIcon = winnerColor === "light" ? "⚪" : "⚫";
-        const loserIcon = loserColor === "light" ? "⚪" : "⚫";
-
-        let reasonText = "";
-        if (currentState.winReason === "no_pieces") reasonText = "у соперника закончились шашки";
-        else if (currentState.winReason === "no_moves") reasonText = "у соперника нет допустимых ходов";
-        else if (currentState.winReason === "resign") reasonText = "соперник сдался";
-        else if (currentState.winReason === "timeout") reasonText = "закончилось время на ход";
-
-        let text = "🏆 Победитель: " + winnerName + " " + winnerIcon + "\nПроиграл: " + loserName + " " + loserIcon;
-        if (reasonText) text += "\n(" + reasonText + ")";
-
-        endGameText.textContent = text;
+        
         endGameModal.classList.remove("hidden");
-        const marker = (roomCode || "offline") + "_" + currentState.moveCount;
+        
+        // Скрываем кнопки для зрителей
+        const buttonsRow = endGameModal.querySelector(".modal-buttons");
+        if (buttonsRow) {
+            if (isSpectator) {
+                buttonsRow.classList.add("hidden");
+            } else {
+                buttonsRow.classList.remove("hidden");
+            }
+        }
+
+        const marker = (roomCode || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "");
         if (endGameShownForRoom !== marker) {
             playWinSound();
             endGameShownForRoom = marker;
@@ -1291,7 +1289,7 @@ function handleClick(row, col) {
     if (isSpectator) return; 
 
     if (isOnlineGame && state.turn !== myColor) return;
-    if (isBotGame && state.turn === BOT_COLOR) return; 
+    if (isBotGame && state.turn === botColor) return; 
 
     const selectableColor = isOnlineGame ? myColor : (isBotGame ? "light" : state.turn);
     const pieceHere = pieceAt(state.pieces, row, col);
@@ -1670,13 +1668,24 @@ function syncBotStateToFirebase() {
 
 function startOfflineGame() {
     isOnlineGame = false;
-    myColor = "light";
-    flipped = false;
+    
+    // Чередование цвета: читаем из памяти, меняем на противоположный
+    let lastBotColor = localStorage.getItem("shashki_last_bot_color");
+    if (lastBotColor === "dark") {
+        botColor = "light";
+    } else {
+        botColor = "dark";
+    }
+    localStorage.setItem("shashki_last_bot_color", botColor);
+    
+    myColor = botColor === "light" ? "dark" : "light";
+    flipped = (myColor === "dark"); // Переворачиваем доску, если я играю чёрными
+    
     selectedFrom = null;
     endGameShownForRoom = null;
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
-    boardBuilt = false;
+    boardBuilt = false; // Обязательно перестраиваем доску при перевороте
     pendingSyncChain = Promise.resolve();
     if (opponentGraceTimer) {
         clearTimeout(opponentGraceTimer);
@@ -1692,7 +1701,7 @@ function startOfflineGame() {
     const botName = isBotGame ? "Компьютер" : "Игрок 2";
     currentState = {
         pieces: createInitialPieces(),
-        turn: "light",
+        turn: "light", // Белые всегда ходят первыми!
         mustContinueFrom: null,
         capturedDark: 0,
         capturedLight: 0,
@@ -1701,7 +1710,10 @@ function startOfflineGame() {
         lastMovePath: null,
         lastCapturedSquares: null,
         moveType: null,
-        players: { light: { name: "Игрок 1" }, dark: { name: botName } },
+        players: { 
+            light: { name: botColor === "light" ? botName : "Игрок 1" }, 
+            dark: { name: botColor === "dark" ? botName : "Игрок 1" } 
+        },
         timeControlSeconds: 0,
         turnStartedAt: null,
         winner: null,
@@ -1711,6 +1723,10 @@ function startOfflineGame() {
 
     if (isBotGame) {
         startBotSpectateRoom();
+        // Если бот играет белыми, он должен сделать первый ход
+        if (botColor === "light" && currentState.turn === "light") {
+            setTimeout(triggerBotMove, 500);
+        }
     } else {
         stopBotSpectateRoom();
     }
@@ -2721,7 +2737,7 @@ function cancelOnlineSearch() {
 // ===== ИСКУССТВЕННЫЙ ИНТЕЛЛЕКТ (СУПЕР УМНЫЙ БОТ - ГРАНДМАСТЕР) =====
 
 function triggerBotMove() {
-    if (!isBotGame || !currentState || currentState.turn !== BOT_COLOR || currentState.winner) return;
+    if (!isBotGame || !currentState || currentState.turn !== botColor || currentState.winner) return;
 
     const pieceCount = Object.keys(currentState.pieces).length;
     let depth = 7; 
@@ -2729,7 +2745,7 @@ function triggerBotMove() {
     if (pieceCount <= 12) depth = 8; 
     if (pieceCount <= 6) depth = 10;  
     
-    const bestMove = findBestMove(currentState, BOT_COLOR, depth);
+    const bestMove = findBestMove(currentState, botColor, depth);
     if (bestMove) {
         performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
     }
