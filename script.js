@@ -1245,13 +1245,17 @@ function renderEndGameModal() {
 let statsRecordedForRoom = null;
 
 function recordGameResult() {
-    if (!isOnlineGame || !currentState || !currentState.winner) return;
+    if (!isOnlineGame && !isBotGame) return; // Если это не онлайн и не бот — выходим
+    if (!currentState || !currentState.winner) return;
     if (currentState.winner === "draw") return;
     if (!myTelegramId) return;
 
     const didIWin = currentState.winner === myColor;
+    
+    // Если игра с ботом — пишем в отдельную ветку statsBot
+    const statsPath = isBotGame ? "statsBot" : "stats";
 
-    database.ref("stats/" + myTelegramId).transaction(function (current) {
+    database.ref(statsPath + "/" + myTelegramId).transaction(function (current) {
         const result = current || { wins: 0, losses: 0, name: myTelegramName };
         result.name = myTelegramName;
         if (didIWin) {
@@ -2056,8 +2060,36 @@ btnResignYes.addEventListener("click", function () {
 
 if (btnOfferDraw) {
     btnOfferDraw.addEventListener("click", function () {
-        if (!isOnlineGame || !currentState || currentState.winner) return;
-        database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
+        if (!currentState || currentState.winner) return;
+        
+        if (isOnlineGame) {
+            database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
+        } else if (isBotGame) {
+            // Определяем глубину расчёта в зависимости от количества шашек на доске.
+            // Так как это разовая проверка при нажатии на кнопку, можно позволить себе 
+            // считать глубже, чем при обычном ходе, чтобы быть железно уверенным в оценке.
+            const pieceCount = Object.keys(currentState.pieces).length;
+            let evalDepth = 9; 
+            if (pieceCount <= 12) evalDepth = 10; 
+            if (pieceCount <= 6) evalDepth = 12;  
+            
+            // Оцениваем позицию от лица того, чей сейчас ход
+            const score = evaluatePositionForDraw(currentState, currentState.turn, evalDepth, -Infinity, Infinity, botColor);
+            
+            // Если оценка <= 50, значит у бота нет серьёзного перевеса 
+            // (или он даже проигрывает). В этом случае бот соглашается на ничью.
+            // Если оценка > 50 (перевес больше, чем половина шашки), бот отказывается.
+            if (score <= 50) {
+                currentState.winner = "draw";
+                currentState.winReason = "draw";
+                renderBoard();
+                if (botSpectateRoomCode) {
+                    syncBotStateToFirebase();
+                }
+            } else {
+                showInfoModal("🤖 Бот отклонил ничью. У него хорошее настроение!", false);
+            }
+        }
     });
 }
 
@@ -2500,8 +2532,15 @@ function openStatsModal() {
     statsMySummary.textContent = "Загрузка...";
     statsLeaderboard.innerHTML = "";
     if (statsLeaderboardLosses) statsLeaderboardLosses.innerHTML = "";
+    
+    const statsMyBotSummary = document.getElementById("stats-my-bot-summary");
+    const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
+    if (statsMyBotSummary) statsMyBotSummary.textContent = "Загрузка...";
+    if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
+
     statsModal.classList.remove("hidden");
 
+    // --- ОНЛАЙН СТАТИСТИКА ---
     database.ref("stats/" + myTelegramId).once("value").then(function (snapshot) {
         const mine = snapshot.val();
         const wins = (mine && mine.wins) || 0;
@@ -2551,6 +2590,43 @@ function openStatsModal() {
             });
         }).catch(function () {
             statsLeaderboardLosses.textContent = "Не удалось загрузить рейтинг";
+        });
+    }
+
+    // --- СТАТИСТИКА ПРОТИВ БОТА ---
+    database.ref("statsBot/" + myTelegramId).once("value").then(function (snapshot) {
+        const mine = snapshot.val();
+        const wins = (mine && mine.wins) || 0;
+        const losses = (mine && mine.losses) || 0;
+        const total = wins + losses;
+        if (statsMyBotSummary) {
+            if (total === 0) {
+                statsMyBotSummary.textContent = "Ты ещё не сыграл ни одной партии с ботом";
+            } else {
+                statsMyBotSummary.textContent = "🏆 Побед: " + wins + "   ❌ Поражений: " + losses + "   Всего: " + total;
+            }
+        }
+    }).catch(function () {
+        if (statsMyBotSummary) statsMyBotSummary.textContent = "Не удалось загрузить статистику";
+    });
+
+    if (statsLeaderboardBot) {
+        database.ref("statsBot").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
+            const data = snapshot.val();
+            statsLeaderboardBot.innerHTML = "";
+            if (!data) {
+                statsLeaderboardBot.textContent = "Пока никто не играл с ботом";
+                return;
+            }
+            const entries = Object.keys(data).map(function (key) {
+                return { name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
+            });
+            entries.sort(function (a, b) { return b.wins - a.wins; });
+            entries.forEach(function (entry, index) {
+                statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
+            });
+        }).catch(function () {
+            if (statsLeaderboardBot) statsLeaderboardBot.textContent = "Не удалось загрузить рейтинг";
         });
     }
 }
@@ -2901,6 +2977,37 @@ function evaluateBoard(state, botColor) {
         }
     }
     return score;
+}
+
+function evaluatePositionForDraw(state, currentColor, depth, alpha, beta, botColor) {
+    if (depth === 0 || state.winner) {
+        return evaluateBoard(state, botColor);
+    }
+
+    const moves = getAllLegalMovesForBot(state, currentColor);
+    if (moves.length === 0) return currentColor === botColor ? -1000000 : 1000000;
+
+    const isMaximizing = (currentColor === botColor);
+    let bestScore = isMaximizing ? -Infinity : Infinity;
+
+    for (const move of moves) {
+        const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
+        if (!newState) continue;
+        
+        // Не уменьшаем глубину при цепочке взятий
+        const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
+        const evalScore = evaluatePositionForDraw(newState, newState.turn, nextDepth, alpha, beta, botColor);
+        
+        if (isMaximizing) {
+            bestScore = Math.max(bestScore, evalScore);
+            alpha = Math.max(alpha, evalScore);
+        } else {
+            bestScore = Math.min(bestScore, evalScore);
+            beta = Math.min(beta, evalScore);
+        }
+        if (beta <= alpha) break; 
+    }
+    return bestScore;
 }
 
 function getAllLegalMovesForBot(state, color) {
