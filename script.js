@@ -227,6 +227,7 @@ let isMatchmakingResolved = false;
 let groupLobbyListener = null;
 let myCurrentSpectatorRef = null; // ссылка на мою собственную запись "я смотрю эту партию"
 let botSpectateRoomCode = null; // код "зеркальной" комнаты для игры с ботом, чтобы её было видно в "Играть онлайн"
+let botSpectateListenerRef = null; // Слушатель зрителей для игры с ботом
 let botSpectatePresenceInterval = null;
 let isSpectator = false;
 // Используем chat_instance для определения группы при открытии по прямой ссылке
@@ -1210,14 +1211,7 @@ function renderEndGameModal() {
             const winnerIcon = "✅";
             const loserIcon = "❌";
 
-            let reasonText = "";
-            if (currentState.winReason === "no_pieces") reasonText = "у соперника закончились шашки";
-            else if (currentState.winReason === "no_moves") reasonText = "у соперника нет допустимых ходов";
-            else if (currentState.winReason === "resign") reasonText = "соперник сдался";
-            else if (currentState.winReason === "timeout") reasonText = "закончилось время на ход";
-
             let text = winnerIcon + " " + winnerName + "\n" + loserIcon + " " + loserName;
-            if (reasonText) text += "\n(" + reasonText + ")";
 
             endGameText.textContent = text;
         }
@@ -1591,9 +1585,13 @@ function startOnlineGame() {
 // ===== ЗЕРКАЛО ИГРЫ С БОТОМ (чтобы её было видно в "Играть онлайн") =====
 
 function startBotSpectateRoom() {
-    stopBotSpectateRoom(); // на случай, если предыдущая игра не была корректно закрыта
+    // Если кода ещё нет (первая игра) — генерируем.
+    // Если уже есть (реванш) — переиспользуем СТАРЫЙ код, чтобы зрители
+    // не потеряли комнату и автоматически "переехали" в новую партию.
+    if (!botSpectateRoomCode) {
+        botSpectateRoomCode = generateRoomCode();
+    }
 
-    botSpectateRoomCode = generateRoomCode();
     const initialState = {
         status: "active",
         turn: "light",
@@ -1617,28 +1615,47 @@ function startBotSpectateRoom() {
             dark: { online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP }
         }
     };
-    database.ref("rooms/" + botSpectateRoomCode).set(initialState);
+    // Используем update() вместо set(), чтобы при перезапуске комнаты (реванше)
+    // не стирались данные о зрителях (spectators), которые уже могли быть в базе.
+    database.ref("rooms/" + botSpectateRoomCode).update(initialState);
 
     // Если приложение закроется полностью (потеря связи с Firebase) —
     // комната должна удалиться сама, а не остаться висеть навсегда.
     database.ref("rooms/" + botSpectateRoomCode).onDisconnect().remove();
 
-    // Периодически подтверждаем "присутствие" за обе стороны, чтобы комната
-    // не считалась заброшенной и автоматически не удалилась во время игры.
-    botSpectatePresenceInterval = setInterval(function () {
-        if (!botSpectateRoomCode) return;
-        const now = firebase.database.ServerValue.TIMESTAMP;
-        database.ref("rooms/" + botSpectateRoomCode + "/presence").update({
-            light: { online: true, lastSeen: now },
-            dark: { online: true, lastSeen: now }
+    if (!botSpectatePresenceInterval) {
+        // Периодически подтверждаем "присутствие" за обе стороны, чтобы комната
+        // не считалась заброшенной и автоматически не удалилась во время игры.
+        botSpectatePresenceInterval = setInterval(function () {
+            if (!botSpectateRoomCode) return;
+            const now = firebase.database.ServerValue.TIMESTAMP;
+            database.ref("rooms/" + botSpectateRoomCode + "/presence").update({
+                light: { online: true, lastSeen: now },
+                dark: { online: true, lastSeen: now }
+            });
+        }, 4000);
+    }
+
+    // Слушатель зрителей: обновляет список зрителей на экране игрока
+    // без влияния на локальную логику игры с ботом.
+    if (!botSpectateListenerRef) {
+        botSpectateListenerRef = database.ref("rooms/" + botSpectateRoomCode + "/spectators");
+        botSpectateListenerRef.on("value", function(snapshot) {
+            if (!currentState) return;
+            currentState.spectators = snapshot.val() || {};
+            renderSpectatorsList();
         });
-    }, 4000);
+    }
 }
 
 function stopBotSpectateRoom() {
     if (botSpectatePresenceInterval) {
         clearInterval(botSpectatePresenceInterval);
         botSpectatePresenceInterval = null;
+    }
+    if (botSpectateListenerRef) {
+        botSpectateListenerRef.off();
+        botSpectateListenerRef = null;
     }
     if (botSpectateRoomCode) {
         database.ref("rooms/" + botSpectateRoomCode).onDisconnect().cancel();
