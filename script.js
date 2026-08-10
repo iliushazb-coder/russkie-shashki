@@ -2762,7 +2762,13 @@ function findBestMove(state, color, depth) {
         const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, color);
         if (!newState) continue;
 
-        const score = minimax(newState, depth - 1, -Infinity, Infinity, color);
+        // ВАЖНО: Если после хода ход не передан сопернику (newState.turn === color),
+        // значит это промежуточный прыжок в цепочке взятия (mustContinueFrom).
+        // В этом случае мы НЕ уменьшаем глубину поиска (depth), чтобы минимакс
+        // мог бесплатно "досчитать" всю цепочку взятия до конца и правильно
+        // сравнить разные клетки приземления (например, c7 и d8).
+        const nextDepth = (newState.turn === color) ? depth : depth - 1;
+        const score = minimax(newState, nextDepth, -Infinity, Infinity, color);
         
         if (score > bestScore) {
             bestScore = score;
@@ -2791,7 +2797,9 @@ function minimax(state, depth, alpha, beta, botColor) {
         for (const move of moves) {
             const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
             if (!newState) continue;
-            const evalScore = minimax(newState, depth - 1, alpha, beta, botColor);
+            // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
+            const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
+            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor);
             maxEval = Math.max(maxEval, evalScore);
             alpha = Math.max(alpha, evalScore);
             if (beta <= alpha) break; 
@@ -2802,7 +2810,9 @@ function minimax(state, depth, alpha, beta, botColor) {
         for (const move of moves) {
             const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
             if (!newState) continue;
-            const evalScore = minimax(newState, depth - 1, alpha, beta, botColor);
+            // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
+            const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
+            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor);
             minEval = Math.min(minEval, evalScore);
             beta = Math.min(beta, evalScore);
             if (beta <= alpha) break;
