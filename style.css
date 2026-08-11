@@ -751,6 +751,10 @@ h1 {
     background-size: contain !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
+    /* Выделяем тёмные шашки в отдельный слой видеокарты (как это уже происходит
+       у светлых шашек благодаря filter: drop-shadow), чтобы анимация выделения
+       не заставляла браузер каждый раз перерисовывать фон доски под шашкой */
+    will-change: transform;
 }
 
 .piece-light {
