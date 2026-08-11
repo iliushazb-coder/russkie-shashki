@@ -2858,51 +2858,89 @@ function cancelOnlineSearch() {
 function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== botColor || currentState.winner) return;
 
-    const pieceCount = Object.keys(currentState.pieces).length;
-    // Увеличиваем глубину расчёта для усиления игры бота.
-    // В эндшпиле считаем максимально глубоко (12), так как мало вариантов и узлы дешёвые.
-    let depth = 8; 
-    
-    if (pieceCount <= 12) depth = 9; 
-    if (pieceCount <= 6) depth = 12;  
-    
-    const bestMove = findBestMove(currentState, botColor, depth);
+    // Передаем максимальную глубину 20. Бот сам остановится по лимиту времени.
+    // Это спасает от зависаний в позициях с дамками, где дерево вариантов огромно.
+    const bestMove = findBestMove(currentState, botColor, 20);
     if (bestMove) {
         performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
     }
 }
 
-function findBestMove(state, color, depth) {
+// ===== УПРАВЛЕНИЕ ВРЕМЕНЕМ БОТА =====
+let botStartTime = 0;
+let botNodesSearched = 0;
+let botSearchCancelled = false;
+// 5 секунд — идеальный компромисс: бот успевает глубоко просчитать 
+// сложные позиции с дамками, но интерфейс не зависает настолько, 
+// чтобы пользователь подумал, что приложение сломалось.
+const BOT_MAX_THINK_TIME_MS = 5000; 
+
+function findBestMove(state, color, maxDepth) {
     const moves = getAllLegalMovesForBot(state, color);
     if (moves.length === 0) return null;
 
-    let bestScore = -Infinity;
-    let bestMoves = [];
+    let bestMove = moves[0]; // Запасной ход на случай, если время выйдет сразу
+    botStartTime = Date.now();
+    botNodesSearched = 0;
+    botSearchCancelled = false;
 
-    for (const move of moves) {
-        const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, color);
-        if (!newState) continue;
+    // Итеративное углубление: считаем сначала на глубину 1, потом 2, 3... 
+    // пока не кончится время. Это гарантирует, что у бота всегда есть ход.
+    for (let depth = 1; depth <= maxDepth; depth++) {
+        let currentBestMove = null;
+        let currentBestScore = -Infinity;
+        let alpha = -Infinity;
+        let beta = Infinity;
 
-        // ВАЖНО: Если после хода ход не передан сопернику (newState.turn === color),
-        // значит это промежуточный прыжок в цепочке взятия (mustContinueFrom).
-        // В этом случае мы НЕ уменьшаем глубину поиска (depth), чтобы минимакс
-        // мог бесплатно "досчитать" всю цепочку взятия до конца и правильно
-        // сравнить разные клетки приземления (например, c7 и d8).
-        const nextDepth = (newState.turn === color) ? depth : depth - 1;
-        const score = minimax(newState, nextDepth, -Infinity, Infinity, color);
-        
-        if (score > bestScore) {
-            bestScore = score;
-            bestMoves = [move];
-        } else if (score === bestScore) {
-            bestMoves.push(move);
+        // Ставим лучший ход с прошлой глубины в начало списка (для лучшего отсечения)
+        if (bestMove) {
+            const idx = moves.indexOf(bestMove);
+            if (idx > 0) {
+                moves.splice(idx, 1);
+                moves.unshift(bestMove);
+            }
         }
+
+        for (const move of moves) {
+            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, color);
+            if (!newState) continue;
+
+            // Если цепочка взятия не закончена, глубину не уменьшаем
+            const nextDepth = (newState.turn === color) ? depth : depth - 1;
+            const score = minimax(newState, nextDepth, alpha, beta, color);
+
+            if (botSearchCancelled) break; // Время вышло, прерываем текущую глубину
+
+            if (score > currentBestScore) {
+                currentBestScore = score;
+                currentBestMove = move;
+            }
+            alpha = Math.max(alpha, score);
+        }
+
+        if (!botSearchCancelled) {
+            bestMove = currentBestMove; // Сохраняем лучший ход с завершенной глубины
+        } else {
+            break; // Прерываем цикл углубления
+        }
+        
+        // Если найден гарантированный выигрыш — нет смысла считать глубже
+        if (currentBestScore >= 1000000) break;
     }
     
-    return bestMoves[Math.floor(Math.random() * bestMoves.length)];
+    return bestMove;
 }
 
 function minimax(state, depth, alpha, beta, botColor) {
+    // Проверка лимита времени (каждые 2048 узлов, чтобы не тратить время на Date.now())
+    botNodesSearched++;
+    if (botNodesSearched % 2048 === 0) {
+        if (Date.now() - botStartTime > BOT_MAX_THINK_TIME_MS) {
+            botSearchCancelled = true;
+        }
+    }
+    if (botSearchCancelled) return 0; // Возвращаем 0, результат будет проигнорирован
+
     if (depth === 0 || state.winner) {
         return evaluateBoard(state, botColor);
     }
@@ -2918,9 +2956,13 @@ function minimax(state, depth, alpha, beta, botColor) {
         for (const move of moves) {
             const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
             if (!newState) continue;
+            
             // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
             const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
             const evalScore = minimax(newState, nextDepth, alpha, beta, botColor);
+            
+            if (botSearchCancelled) return 0;
+            
             maxEval = Math.max(maxEval, evalScore);
             alpha = Math.max(alpha, evalScore);
             if (beta <= alpha) break; 
@@ -2931,9 +2973,13 @@ function minimax(state, depth, alpha, beta, botColor) {
         for (const move of moves) {
             const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
             if (!newState) continue;
+            
             // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
             const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
             const evalScore = minimax(newState, nextDepth, alpha, beta, botColor);
+            
+            if (botSearchCancelled) return 0;
+            
             minEval = Math.min(minEval, evalScore);
             beta = Math.min(beta, evalScore);
             if (beta <= alpha) break;
