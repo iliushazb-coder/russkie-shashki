@@ -2892,10 +2892,12 @@ function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== botColor || currentState.winner) return;
 
     const pieceCount = Object.keys(currentState.pieces).length;
-    let depth = 7; 
+    // Увеличиваем глубину расчёта для усиления игры бота.
+    // В эндшпиле считаем максимально глубоко (12), так как мало вариантов и узлы дешёвые.
+    let depth = 8; 
     
-    if (pieceCount <= 12) depth = 8; 
-    if (pieceCount <= 6) depth = 10;  
+    if (pieceCount <= 12) depth = 9; 
+    if (pieceCount <= 6) depth = 12;  
     
     const bestMove = findBestMove(currentState, botColor, depth);
     if (bestMove) {
