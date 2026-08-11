@@ -2134,7 +2134,9 @@ if (btnOfferDraw) {
             // Если расчёт был прерван по лимиту времени — считаем, что ничья не подтверждена.
             // Бот отказывается, чтобы случайно не согласиться на ничью в выигранной позиции.
             if (botSearchCancelled) {
-                showInfoModal("🤖 Бот отклонил ничью. Слишком сложная позиция!", false);
+                const msg = "🤖 Бот отклонил ничью. Слишком сложная позиция!";
+                if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.showAlert(msg);
+                else alert(msg);
             } else if (score <= 50) {
                 currentState.winner = "draw";
                 currentState.winReason = "draw";
@@ -2143,7 +2145,9 @@ if (btnOfferDraw) {
                     syncBotStateToFirebase();
                 }
             } else {
-                showInfoModal("🤖 Бот отклонил ничью. У него хорошее настроение!", false);
+                const msg = "🤖 Бот отклонил ничью. У него хорошее настроение!";
+                if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.showAlert(msg);
+                else alert(msg);
             }
         }
     });
