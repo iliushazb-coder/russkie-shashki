@@ -2893,6 +2893,9 @@ function findBestMove(state, color, maxDepth) {
     const moves = getAllLegalMovesForBot(state, color);
     if (moves.length === 0) return null;
 
+    // ОПТИМИЗАЦИЯ: Если доступен только один ход — нет смысла думать, играем его сразу.
+    if (moves.length === 1) return moves[0];
+
     let bestMove = moves[0]; // Запасной ход на случай, если время выйдет сразу
     botStartTime = Date.now();
     botNodesSearched = 0;
