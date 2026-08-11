@@ -2134,9 +2134,8 @@ if (btnOfferDraw) {
             // Если расчёт был прерван по лимиту времени — считаем, что ничья не подтверждена.
             // Бот отказывается, чтобы случайно не согласиться на ничью в выигранной позиции.
             if (botSearchCancelled) {
-                const msg = "🤖 Бот отклонил ничью. Слишком сложная позиция!";
-                if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.showAlert(msg);
-                else alert(msg);
+                // Третий параметр false — не возвращать в меню при закрытии
+                showInfoModal("🤖 Бот отклонил ничью. Слишком сложная позиция!", false, false);
             } else if (score <= 50) {
                 currentState.winner = "draw";
                 currentState.winReason = "draw";
@@ -2145,9 +2144,8 @@ if (btnOfferDraw) {
                     syncBotStateToFirebase();
                 }
             } else {
-                const msg = "🤖 Бот отклонил ничью. У него хорошее настроение!";
-                if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.showAlert(msg);
-                else alert(msg);
+                // Третий параметр false — не возвращать в меню при закрытии
+                showInfoModal("🤖 Бот отклонил ничью. У него хорошее настроение!", false, false);
             }
         }
     });
@@ -2375,7 +2373,12 @@ function checkTimeout() {
 
 // ===== ПРИСОЕДИНЕНИЕ ПО ССЫЛКЕ =====
 
-function showInfoModal(text, offerNewGame) {
+let infoModalShouldNavigate = true; // Флаг: возвращать ли в меню при закрытии
+
+function showInfoModal(text, offerNewGame, navigateToMenu) {
+    // Если параметр не передан — по умолчанию true (возвращаться в меню)
+    infoModalShouldNavigate = (navigateToMenu === undefined) ? true : navigateToMenu;
+    
     infoModalText.textContent = text;
     if (offerNewGame) {
         btnInfoNewGame.classList.remove("hidden");
@@ -2555,8 +2558,12 @@ btnInfoNewGame.addEventListener("click", function () {
 
 btnInfoClose.addEventListener("click", function () {
     infoModal.classList.add("hidden");
-    showScreen(menuScreen);
-    loadActiveRooms();
+    // Если флаг разрешает навигацию — возвращаемся в меню.
+    // Если нет (например, при отказе от ничьи) — просто остаемся на текущем экране.
+    if (infoModalShouldNavigate) {
+        showScreen(menuScreen);
+        loadActiveRooms();
+    }
 });
 
 // ===== МОДАЛКА "СОПЕРНИК ОФЛАЙН" =====
