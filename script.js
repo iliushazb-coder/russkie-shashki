@@ -2263,30 +2263,31 @@ btnNewGame.addEventListener("click", function () {
 });
 
 function performRematchReset() {
-    return database.ref("rooms/" + roomCode).transaction(function (room) {
-        if (!room) return;
-        const newRoom = {};
-        for (const key in room) newRoom[key] = room[key];
-        newRoom.pieces = createInitialPieces();
-        newRoom.turn = "light";
-        newRoom.mustContinueFrom = null;
-        newRoom.capturedDark = 0;
-        newRoom.capturedLight = 0;
-        newRoom.moveCount = 0;
-        newRoom.moveType = null;
-        newRoom.lastMove = null;
-        newRoom.lastMovePath = null;
-        newRoom.lastCapturedSquares = null;
-        newRoom.winner = null;
-        newRoom.winReason = null;
-        newRoom.status = "active";
-        newRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
-        newRoom.rematchProposal = null;
-        const oldLight = room.players ? room.players.light : null;
-        const oldDark = room.players ? room.players.dark : null;
-        newRoom.players = { light: oldDark, dark: oldLight };
-        return newRoom;
-    });
+    // Используем .update() вместо .transaction().
+    // Это избегает циклов retry, которые конфликтуют с App Check Enforce.
+    // Мы берем цвета игроков из локального состояния (они 100% точные).
+    const updates = {};
+    updates["pieces"] = createInitialPieces();
+    updates["turn"] = "light";
+    updates["mustContinueFrom"] = null;
+    updates["capturedDark"] = 0;
+    updates["capturedLight"] = 0;
+    updates["moveCount"] = 0;
+    updates["moveType"] = null;
+    updates["lastMove"] = null;
+    updates["lastMovePath"] = null;
+    updates["lastCapturedSquares"] = null;
+    updates["winner"] = null;
+    updates["winReason"] = null;
+    updates["status"] = "active";
+    updates["turnStartedAt"] = firebase.database.ServerValue.TIMESTAMP;
+    updates["rematchProposal"] = null;
+    
+    const oldLight = (currentState.players && currentState.players.light) ? currentState.players.light : null;
+    const oldDark = (currentState.players && currentState.players.dark) ? currentState.players.dark : null;
+    updates["players"] = { light: oldDark, dark: oldLight };
+    
+    return database.ref("rooms/" + roomCode).update(updates);
 }
 
 function checkRematchProposal() {
