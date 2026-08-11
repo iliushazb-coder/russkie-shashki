@@ -2979,6 +2979,11 @@ function evaluateBoard(state, botColor) {
 
     let score = 0;
     const opponentColor = botColor === "light" ? "dark" : "light";
+    
+    let botMaterial = 0;
+    let oppMaterial = 0;
+    let botMobility = 0;
+    let oppMobility = 0;
 
     for (const key in state.pieces) {
         const p = state.pieces[key];
@@ -2987,42 +2992,92 @@ function evaluateBoard(state, botColor) {
         const c = parseInt(parts[1]);
 
         let pieceVal = p.king ? 450 : 100;
+        let isBot = p.color === botColor;
 
-        if (p.color === botColor) {
+        if (isBot) {
+            botMaterial += pieceVal;
             score += pieceVal;
-            if (!p.king) {
-                let adv = (botColor === "dark" ? r : 7 - r);
-                score += adv * 4; 
-                
-                if ((botColor === "dark" && r === 6) || (botColor === "light" && r === 1)) {
-                    score += 60;
-                }
-                if ((botColor === "light" && r === 7) || (botColor === "dark" && r === 0)) {
-                    score += 10;
-                }
-            }
-            if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
-                score += 4;
-                if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score += 2;
+        } else {
+            oppMaterial += pieceVal;
+            score -= pieceVal;
+        }
+
+        // 1. Подвижность (Mobility) — считаем количество свободных диагоналей впереди
+        let mobility = 0;
+        if (!p.king) {
+            const dir = isBot ? (botColor === "light" ? -1 : 1) : (opponentColor === "light" ? -1 : 1);
+            if (r + dir >= 0 && r + dir <= 7) {
+                if (c - 1 >= 0 && !pieceAt(state.pieces, r + dir, c - 1)) mobility++;
+                if (c + 1 <= 7 && !pieceAt(state.pieces, r + dir, c + 1)) mobility++;
             }
         } else {
-            score -= pieceVal;
-            if (!p.king) {
-                let adv = (opponentColor === "dark" ? r : 7 - r);
-                score -= adv * 4;
-                if ((opponentColor === "dark" && r === 6) || (opponentColor === "light" && r === 1)) {
-                    score -= 60;
-                }
-                if ((opponentColor === "light" && r === 7) || (opponentColor === "dark" && r === 0)) {
-                    score -= 10;
-                }
+            // Для дамки считаем свободные клетки во всех 4 направлениях (по 1 шагу)
+            if (r - 1 >= 0) {
+                if (c - 1 >= 0 && !pieceAt(state.pieces, r - 1, c - 1)) mobility++;
+                if (c + 1 <= 7 && !pieceAt(state.pieces, r - 1, c + 1)) mobility++;
             }
-            if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
-                score -= 4;
-                if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score -= 2;
+            if (r + 1 <= 7) {
+                if (c - 1 >= 0 && !pieceAt(state.pieces, r + 1, c - 1)) mobility++;
+                if (c + 1 <= 7 && !pieceAt(state.pieces, r + 1, c + 1)) mobility++;
+            }
+        }
+        if (isBot) botMobility += mobility; else oppMobility += mobility;
+
+        const colorForEval = isBot ? botColor : opponentColor;
+        const sign = isBot ? 1 : -1;
+
+        // Базовая позиционная оценка (продвижение, центр)
+        if (!p.king) {
+            let adv = (colorForEval === "dark" ? r : 7 - r);
+            score += sign * adv * 4; 
+            
+            if ((colorForEval === "dark" && r === 6) || (colorForEval === "light" && r === 1)) {
+                score += sign * 60;
+            }
+            if ((colorForEval === "light" && r === 7) || (colorForEval === "dark" && r === 0)) {
+                score += sign * 10;
+            }
+        }
+        
+        if (r >= 2 && r <= 5 && c >= 2 && c <= 5) {
+            score += sign * 4;
+            if (r >= 3 && r <= 4 && c >= 3 && c <= 4) score += sign * 2;
+        }
+
+        // 5. Контроль "дорог" (длинные диагонали a1-h8 и h1-a8)
+        if (r === c || r + c === 7) {
+            score += sign * 6;
+        }
+
+        // 2 и 4. Безопасность крайних столбцов и штраф за застревание на краю
+        if (c === 0 || c === 7) {
+            if (!p.king) {
+                // Если на задней линии (защита) или предпоследней (вот-вот дамка) — бонус за безопасность
+                if ((colorForEval === "light" && r === 7) || (colorForEval === "dark" && r === 0) ||
+                    (colorForEval === "dark" && r === 6) || (colorForEval === "light" && r === 1)) {
+                    score += sign * 5; 
+                } else {
+                    // Если застряла на краю в середине (3-4 линии) — штраф за малоподвижность
+                    score -= sign * 5; 
+                }
             }
         }
     }
+    
+    // Добавляем оценку подвижности (за каждый лишний ход +3 очка)
+    score += (botMobility - oppMobility) * 3;
+
+    // 3. Логика размена (упрощение позиции при перевесе)
+    const materialDiff = botMaterial - oppMaterial;
+    const totalPiecesCount = Object.keys(state.pieces).length;
+    if (materialDiff > 0) {
+        // Бот выигрывает -> поощряем пустую доску (меньше фигур = больше очков)
+        score += (24 - totalPiecesCount) * 5; 
+    } else if (materialDiff < 0) {
+        // Бот проигрывает -> избегаем пустой доски (больше фигур = больше очков)
+        score -= (24 - totalPiecesCount) * 5;
+    }
+
     return score;
 }
 
