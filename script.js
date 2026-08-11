@@ -2897,6 +2897,8 @@ function findBestMove(state, color, maxDepth) {
     if (moves.length === 1) return moves[0];
 
     let bestMove = moves[0]; // Запасной ход на случай, если время выйдет сразу
+    let previousBestMove = null;
+    let stableIterations = 0; // Счётчик стабильности лучшего хода
     botStartTime = Date.now();
     botNodesSearched = 0;
     botSearchCancelled = false;
@@ -2936,6 +2938,18 @@ function findBestMove(state, color, maxDepth) {
         }
 
         if (!botSearchCancelled) {
+            // РАННИЙ ВЫХОД: Если глубина >= 4 (чтобы не пропустить тактику) 
+            // и лучший ход не менялся 2 итерации подряд — прерываем расчёт.
+            // Это спасает от "пустого" раздумья в простых позициях.
+            if (depth >= 4) {
+                if (currentBestMove === previousBestMove) {
+                    stableIterations++;
+                    if (stableIterations >= 2) break; 
+                } else {
+                    stableIterations = 0;
+                }
+            }
+            previousBestMove = currentBestMove;
             bestMove = currentBestMove; // Сохраняем лучший ход с завершенной глубины
         } else {
             break; // Прерываем цикл углубления
