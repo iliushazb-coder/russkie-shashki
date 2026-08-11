@@ -1362,7 +1362,21 @@ function forceResyncFromServer() {
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };
+        
+        // ЗАЩИТА ОТ УСТАРЕВШИХ ОТВЕТОВ: Если сервер вернул состояние, которое 
+        // МЕНЬШЕ того, что мы уже знаем (например, мы уже получили ход 6, а сервер 
+        // с опозданием вернул ход 5) — полностью игнорируем этот ответ.
+        if (newState.moveCount < lastSeenMoveCount) {
+            console.log("Force resync ignored stale state.");
+            return;
+        }
+
         currentState = newState;
+        
+        // ОБЯЗАТЕЛЬНО обновляем lastSeenMoveCount, чтобы основной слушатель 
+        // не сбился и не заблокировал будущие обновления.
+        lastSeenMoveCount = currentState.moveCount;
+        
         if (currentState.turn === myColor && currentState.mustContinueFrom) {
             selectedFrom = { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col };
         } else {
