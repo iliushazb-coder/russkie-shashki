@@ -444,26 +444,36 @@ h1 {
     height: clamp(32px, 10.2vw, 50px);
 }
 
+/* Анимация выделения работает только на transform (мгновенно для GPU) */
 .selected {
-    border-color: #4CD964 !important;
     transform: scale(1.1);
     animation: selectedPulse 1.1s ease-in-out infinite;
 }
-
+/* Свечение делаем через filter, он же включает GPU-слой для чёрных шашек */
+.piece-light.selected {
+    filter: drop-shadow(0 0 8px #4CD964) drop-shadow(0 3px 5px rgba(0,0,0,0.45));
+}
+.piece-dark.selected {
+    filter: drop-shadow(0 0 8px #4CD964);
+}
 @keyframes selectedPulse {
-    0%, 100% { box-shadow: inset -4px -4px 7px rgba(0,0,0,0.4), 0 0 12px #4CD964, 0 0 4px #4CD964; }
-    50% { box-shadow: inset -4px -4px 7px rgba(0,0,0,0.4), 0 0 24px #4CD964, 0 0 10px #4CD964; }
+    0%, 100% { transform: scale(1.1); }
+    50% { transform: scale(1.15); }
 }
 
 .king.selected {
-    border-color: #ff2d92 !important;
     transform: scale(1.18);
     animation: selectedPulseKing 1.1s ease-in-out infinite;
 }
-
+.piece-light.king.selected {
+    filter: drop-shadow(0 0 10px #ff2d92) drop-shadow(0 3px 5px rgba(0,0,0,0.45));
+}
+.piece-dark.king.selected {
+    filter: drop-shadow(0 0 10px #ff2d92);
+}
 @keyframes selectedPulseKing {
-    0%, 100% { box-shadow: inset -4px -4px 7px rgba(0,0,0,0.4), 0 0 12px #ff2d92, 0 0 4px #ff2d92; }
-    50% { box-shadow: inset -4px -4px 7px rgba(0,0,0,0.4), 0 0 26px #ff2d92, 0 0 11px #ff2d92; }
+    0%, 100% { transform: scale(1.18); }
+    50% { transform: scale(1.22); }
 }
 
 .square.move-hint::after {
