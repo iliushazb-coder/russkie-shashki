@@ -2932,9 +2932,10 @@ function findBestMove(state, color, maxDepth) {
 }
 
 function minimax(state, depth, alpha, beta, botColor) {
-    // Проверка лимита времени (каждые 2048 узлов, чтобы не тратить время на Date.now())
+    // Проверка лимита времени (каждые 128 узлов, чтобы минимизировать 
+    // отставание при просадках скорости или работе сборщика мусора)
     botNodesSearched++;
-    if (botNodesSearched % 2048 === 0) {
+    if (botNodesSearched % 128 === 0) {
         if (Date.now() - botStartTime > BOT_MAX_THINK_TIME_MS) {
             botSearchCancelled = true;
         }
