@@ -32,6 +32,7 @@
         <button class="menu-button time-option" data-seconds="120">2 минуты на ход</button>
         <button class="menu-button time-option" data-seconds="180">3 минуты на ход</button>
         <button class="menu-button time-option" data-seconds="300">5 минут на ход</button>
+        <button id="btn-back-from-time-control" class="menu-button danger-button" style="margin-top: 15px;">Назад</button>
     </div>
 
     <div id="matchmaking-screen" class="hidden">
@@ -120,22 +121,16 @@
 
    <div id="stats-modal" class="hidden modal-overlay">
         <div class="modal-box">
-            <p class="end-game-text">📊 Статистика (Онлайн)</p>
-            <div id="stats-my-summary" class="stats-summary">Загрузка...</div>
-            <p class="section-title">Топ игроков по победам</p>
+            <p class="end-game-text">📊 Топ игроков (Онлайн)</p>
             <div id="stats-leaderboard" class="stats-leaderboard"></div>
-            <p class="section-title">Больше всего поражений</p>
-            <div id="stats-leaderboard-losses" class="stats-leaderboard"></div>
             
             <hr style="width: 100%; border: 0; border-top: 1px solid rgba(255,210,130,0.2); margin: 20px 0;">
             
-            <p class="end-game-text">🤖 Статистика (Против бота)</p>
-            <div id="stats-my-bot-summary" class="stats-summary">Загрузка...</div>
-            <p class="section-title">Топ игроков против бота</p>
+            <p class="end-game-text">🤖 Топ игроков (Против бота)</p>
             <div id="stats-leaderboard-bot" class="stats-leaderboard"></div>
             
             <div class="modal-buttons">
-                <button id="btn-stats-close" class="menu-button">Закрыть</button>
+                <button id="btn-stats-close" class="menu-button">Назад</button>
             </div>
         </div>
     </div>
@@ -173,6 +168,6 @@
 
     <div id="credit-footer">Разработчик: Telegram @yliusha</div>
 
-    <script src="script.js?v=74"></script>
+    <script src="script.js?v=75"></script>
 </body>
 </html>
