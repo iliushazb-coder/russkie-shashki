@@ -945,6 +945,32 @@ function ensureBoardBuilt() {
 
     const arrowSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     arrowSvg.setAttribute("id", "last-move-arrow-svg");
+    
+    // Создаем SVG-фильтр свечения один раз при постройке доски, 
+    // чтобы не пересоздавать его на каждый ход.
+    const svgNS = "http://www.w3.org/2000/svg";
+    const defs = document.createElementNS(svgNS, "defs");
+    const filter = document.createElementNS(svgNS, "filter");
+    filter.setAttribute("id", "last-move-glow");
+    filter.setAttribute("x", "-60%");
+    filter.setAttribute("y", "-60%");
+    filter.setAttribute("width", "220%");
+    filter.setAttribute("height", "220%");
+    const blur = document.createElementNS(svgNS, "feGaussianBlur");
+    blur.setAttribute("stdDeviation", "2.4");
+    blur.setAttribute("result", "blurred");
+    const merge = document.createElementNS(svgNS, "feMerge");
+    const mergeBlur = document.createElementNS(svgNS, "feMergeNode");
+    mergeBlur.setAttribute("in", "blurred");
+    const mergeSource = document.createElementNS(svgNS, "feMergeNode");
+    mergeSource.setAttribute("in", "SourceGraphic");
+    merge.appendChild(mergeBlur);
+    merge.appendChild(mergeSource);
+    filter.appendChild(blur);
+    filter.appendChild(merge);
+    defs.appendChild(filter);
+    arrowSvg.appendChild(defs);
+    
     boardDiv.appendChild(arrowSvg);
 
     boardBuilt = true;
@@ -1024,7 +1050,10 @@ function renderBoard() {
 function renderLastMoveArrow() {
     const svg = document.getElementById("last-move-arrow-svg");
     if (!svg) return;
-    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    
+    // Очищаем только линии и круги, НЕ трогая <defs> с фильтром
+    const linesAndCircles = svg.querySelectorAll("line, circle");
+    linesAndCircles.forEach(function(el) { el.remove(); });
 
     const path = currentState && currentState.lastMovePath;
     if (!path || path.length < 2) return;
@@ -1040,28 +1069,6 @@ function renderLastMoveArrow() {
     }
 
     const svgNS = "http://www.w3.org/2000/svg";
-
-    const defs = document.createElementNS(svgNS, "defs");
-    const filter = document.createElementNS(svgNS, "filter");
-    filter.setAttribute("id", "last-move-glow");
-    filter.setAttribute("x", "-60%");
-    filter.setAttribute("y", "-60%");
-    filter.setAttribute("width", "220%");
-    filter.setAttribute("height", "220%");
-    const blur = document.createElementNS(svgNS, "feGaussianBlur");
-    blur.setAttribute("stdDeviation", "2.4");
-    blur.setAttribute("result", "blurred");
-    const merge = document.createElementNS(svgNS, "feMerge");
-    const mergeBlur = document.createElementNS(svgNS, "feMergeNode");
-    mergeBlur.setAttribute("in", "blurred");
-    const mergeSource = document.createElementNS(svgNS, "feMergeNode");
-    mergeSource.setAttribute("in", "SourceGraphic");
-    merge.appendChild(mergeBlur);
-    merge.appendChild(mergeSource);
-    filter.appendChild(blur);
-    filter.appendChild(merge);
-    defs.appendChild(filter);
-    svg.appendChild(defs);
 
     for (let i = 0; i < points.length - 1; i++) {
         const line = document.createElementNS(svgNS, "line");
