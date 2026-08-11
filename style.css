@@ -646,6 +646,21 @@ h1 {
     letter-spacing: 0.04em;
 }
 
+/* Стиль для ссылки на Telegram */
+#credit-footer a {
+    color: #e8c98a; /* Чуть ярче основного текста */
+    text-decoration: underline;
+    text-decoration-color: rgba(232, 201, 138, 0.4); /* Полупрозрачное подчёркивание */
+    text-underline-offset: 2px;
+    transition: color 0.2s, text-decoration-color 0.2s;
+}
+
+/* Эффект при нажатии (для телефонов) */
+#credit-footer a:active {
+    color: #fff3d6; /* Загорается ярко при тапе */
+    text-decoration-color: #fff3d6;
+}
+
 .stats-summary {
     font-size: 15px;
     font-weight: 700;
