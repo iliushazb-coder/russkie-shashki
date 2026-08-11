@@ -2324,6 +2324,9 @@ btnRematchAccept.addEventListener("click", function () {
             showScreen(gameScreen);
             startOnlineGame();
         });
+    }).catch(function(error) {
+        console.error("Rematch transaction failed:", error);
+        showInfoModal("Не удалось начать реванш. Возможно, потеряно соединение.", false);
     });
 });
 
