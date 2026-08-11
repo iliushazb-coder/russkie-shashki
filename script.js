@@ -2118,9 +2118,11 @@ if (btnOfferDraw) {
         if (isOnlineGame) {
             database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
         } else if (isBotGame) {
-            // Определяем глубину расчёта в зависимости от количества шашек на доске.
-            // Так как это разовая проверка при нажатии на кнопку, можно позволить себе 
-            // считать глубже, чем при обычном ходе, чтобы быть железно уверенным в оценке.
+            // Сбрасываем переменные времени перед началом оценки
+            botStartTime = Date.now();
+            botNodesSearched = 0;
+            botSearchCancelled = false;
+
             const pieceCount = Object.keys(currentState.pieces).length;
             let evalDepth = 9; 
             if (pieceCount <= 12) evalDepth = 10; 
@@ -2129,10 +2131,11 @@ if (btnOfferDraw) {
             // Оцениваем позицию от лица того, чей сейчас ход
             const score = evaluatePositionForDraw(currentState, currentState.turn, evalDepth, -Infinity, Infinity, botColor);
             
-            // Если оценка <= 50, значит у бота нет серьёзного перевеса 
-            // (или он даже проигрывает). В этом случае бот соглашается на ничью.
-            // Если оценка > 50 (перевес больше, чем половина шашки), бот отказывается.
-            if (score <= 50) {
+            // Если расчёт был прерван по лимиту времени — считаем, что ничья не подтверждена.
+            // Бот отказывается, чтобы случайно не согласиться на ничью в выигранной позиции.
+            if (botSearchCancelled) {
+                showInfoModal("🤖 Бот отклонил ничью. Слишком сложная позиция!", false);
+            } else if (score <= 50) {
                 currentState.winner = "draw";
                 currentState.winReason = "draw";
                 renderBoard();
@@ -3098,6 +3101,15 @@ function evaluateBoard(state, botColor) {
 }
 
 function evaluatePositionForDraw(state, currentColor, depth, alpha, beta, botColor) {
+    // Проверка лимита времени (каждые 128 узлов)
+    botNodesSearched++;
+    if (botNodesSearched % 128 === 0) {
+        if (Date.now() - botStartTime > BOT_MAX_THINK_TIME_MS) {
+            botSearchCancelled = true;
+        }
+    }
+    if (botSearchCancelled) return 0; // Прерываем расчёт, результат будет проигнорирован
+
     if (depth === 0 || state.winner) {
         return evaluateBoard(state, botColor);
     }
@@ -3116,6 +3128,8 @@ function evaluatePositionForDraw(state, currentColor, depth, alpha, beta, botCol
         const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
         const evalScore = evaluatePositionForDraw(newState, newState.turn, nextDepth, alpha, beta, botColor);
         
+        if (botSearchCancelled) return 0; // Прерываем цикл, если время вышло
+
         if (isMaximizing) {
             bestScore = Math.max(bestScore, evalScore);
             alpha = Math.max(alpha, evalScore);
