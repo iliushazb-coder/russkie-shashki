@@ -1999,6 +1999,13 @@ timeOptionButtons.forEach(function (btn) {
     });
 });
 
+const btnBackFromTimeControl = document.getElementById("btn-back-from-time-control");
+if (btnBackFromTimeControl) {
+    btnBackFromTimeControl.addEventListener("click", function() {
+        showScreen(menuScreen);
+    });
+}
+
 function createRoomAndShowWaiting() {
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
@@ -2590,32 +2597,14 @@ function renderStatsRow(rank, name, wins, losses) {
 }
 
 function openStatsModal() {
-    statsMySummary.textContent = "Загрузка...";
     statsLeaderboard.innerHTML = "";
-    if (statsLeaderboardLosses) statsLeaderboardLosses.innerHTML = "";
     
-    const statsMyBotSummary = document.getElementById("stats-my-bot-summary");
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
-    if (statsMyBotSummary) statsMyBotSummary.textContent = "Загрузка...";
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
 
     statsModal.classList.remove("hidden");
 
-    // --- ОНЛАЙН СТАТИСТИКА ---
-    database.ref("stats/" + myTelegramId).once("value").then(function (snapshot) {
-        const mine = snapshot.val();
-        const wins = (mine && mine.wins) || 0;
-        const losses = (mine && mine.losses) || 0;
-        const total = wins + losses;
-        if (total === 0) {
-            statsMySummary.textContent = "Ты ещё не сыграл ни одной онлайн-партии";
-        } else {
-            statsMySummary.textContent = "🏆 Побед: " + wins + "   ❌ Поражений: " + losses + "   Всего: " + total;
-        }
-    }).catch(function () {
-        statsMySummary.textContent = "Не удалось загрузить статистику";
-    });
-
+    // --- ОНЛАЙН РЕЙТИНГ ---
     database.ref("stats").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
         const data = snapshot.val();
         statsLeaderboard.innerHTML = "";
@@ -2634,43 +2623,7 @@ function openStatsModal() {
         statsLeaderboard.textContent = "Не удалось загрузить рейтинг";
     });
 
-    if (statsLeaderboardLosses) {
-        database.ref("stats").orderByChild("losses").limitToLast(10).once("value").then(function (snapshot) {
-            const data = snapshot.val();
-            statsLeaderboardLosses.innerHTML = "";
-            if (!data) {
-                statsLeaderboardLosses.textContent = "Пока никто не сыграл ни одной партии";
-                return;
-            }
-            const entries = Object.keys(data).map(function (key) {
-                return { name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
-            });
-            entries.sort(function (a, b) { return b.losses - a.losses; });
-            entries.forEach(function (entry, index) {
-                statsLeaderboardLosses.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
-            });
-        }).catch(function () {
-            statsLeaderboardLosses.textContent = "Не удалось загрузить рейтинг";
-        });
-    }
-
-    // --- СТАТИСТИКА ПРОТИВ БОТА ---
-    database.ref("statsBot/" + myTelegramId).once("value").then(function (snapshot) {
-        const mine = snapshot.val();
-        const wins = (mine && mine.wins) || 0;
-        const losses = (mine && mine.losses) || 0;
-        const total = wins + losses;
-        if (statsMyBotSummary) {
-            if (total === 0) {
-                statsMyBotSummary.textContent = "Ты ещё не сыграл ни одной партии с ботом";
-            } else {
-                statsMyBotSummary.textContent = "🏆 Побед: " + wins + "   ❌ Поражений: " + losses + "   Всего: " + total;
-            }
-        }
-    }).catch(function () {
-        if (statsMyBotSummary) statsMyBotSummary.textContent = "Не удалось загрузить статистику";
-    });
-
+    // --- РЕЙТИНГ ПРОТИВ БОТА ---
     if (statsLeaderboardBot) {
         database.ref("statsBot").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
             const data = snapshot.val();
