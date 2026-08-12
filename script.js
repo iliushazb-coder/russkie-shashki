@@ -204,6 +204,8 @@ const btnDrawCancel = document.getElementById("btn-draw-cancel");
 const reactionsRow = document.getElementById("reactions-row");
 const btnReactLaugh = document.getElementById("btn-react-laugh");
 const btnReactFire = document.getElementById("btn-react-fire");
+const btnReactShock = document.getElementById("btn-react-shock");
+const btnReactAngry = document.getElementById("btn-react-angry");
 const emojiBurstContainer = document.getElementById("emoji-burst-container");
 let lastReactionTs = 0;
 
@@ -2150,6 +2152,12 @@ if (btnReactLaugh) {
 }
 if (btnReactFire) {
     btnReactFire.addEventListener("click", function() { sendReaction("🔥"); });
+}
+if (btnReactShock) {
+    btnReactShock.addEventListener("click", function() { sendReaction("😱"); });
+}
+if (btnReactAngry) {
+    btnReactAngry.addEventListener("click", function() { sendReaction("😡"); });
 }
 
 function sendReaction(emoji) {
