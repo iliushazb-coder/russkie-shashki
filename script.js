@@ -2690,7 +2690,21 @@ function renderStatsRow(rank, name, wins, losses) {
     rankNumber.className = "stats-rank";
     rankNumber.textContent = rank + ".";
     rankSpan.appendChild(rankNumber);
-    rankSpan.appendChild(document.createTextNode(name));
+    
+    // Если имя начинается с "@", делаем из него кликабельную ссылку на Telegram
+    if (typeof name === 'string' && name.startsWith('@')) {
+        const link = document.createElement("a");
+        link.href = "https://t.me/" + name.substring(1);
+        link.textContent = name;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.className = "stats-user-link"; // Добавляем класс для стилизации
+        rankSpan.appendChild(link);
+    } else {
+        // Иначе оставляем обычный текст
+        rankSpan.appendChild(document.createTextNode(name));
+    }
+    
     const infoSpan = document.createElement("span");
     infoSpan.textContent = "🏆 " + wins + " · ❌ " + losses + " · " + total + " партий";
     row.appendChild(rankSpan);
