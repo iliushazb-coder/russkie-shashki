@@ -83,7 +83,8 @@ h1 {
     -webkit-backdrop-filter: blur(20px) saturate(180%);
     color: #fff3d6;
     cursor: pointer;
-    width: 270px;
+    width: 100%; /* Резиновая ширина */
+    max-width: 270px; /* Потолок */
     box-shadow:
         0 10px 28px rgba(0,0,0,0.55),
         inset 0 1.5px 0 rgba(255,225,170,0.4),
@@ -101,7 +102,8 @@ h1 {
 }
 
 .room-item-button {
-    width: 270px;
+    width: 100%; /* Резиновая ширина */
+    max-width: 270px; /* Потолок */
     font-size: 14px;
 }
 
