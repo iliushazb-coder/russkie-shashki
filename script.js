@@ -229,6 +229,7 @@ let myCurrentSpectatorRef = null; // ссылка на мою собственн
 let botSpectateRoomCode = null; // код "зеркальной" комнаты для игры с ботом, чтобы её было видно в "Играть онлайн"
 let botSpectateListenerRef = null; // Слушатель зрителей для игры с ботом
 let botSpectatePresenceInterval = null;
+let botMoveTimer = null; // Защита от накопления таймеров хода бота
 let isSpectator = false;
 // Используем chat_instance для определения группы при открытии по прямой ссылке
 const GROUP_ID = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.chat_instance != null) ? Telegram.WebApp.initDataUnsafe.chat_instance.toString() : "private_chat";
@@ -1043,7 +1044,15 @@ function renderBoard() {
     checkDrawProposal();
 
     if (isBotGame && currentState && !currentState.winner && currentState.turn === botColor) {
-        setTimeout(triggerBotMove, 500);
+        // Если таймер уже стоит — не ставим второй. 
+        // Задержка 150мс вместо 500мс, чтобы многоходовые взятия бота 
+        // не создавали иллюзию зависания (3 прыжка = 0.45с вместо 1.5с).
+        if (!botMoveTimer) {
+            botMoveTimer = setTimeout(function() {
+                botMoveTimer = null;
+                triggerBotMove();
+            }, 150);
+        }
     }
 }
 
@@ -1811,7 +1820,12 @@ function startOfflineGame() {
         startBotSpectateRoom();
         // Если бот играет белыми, он должен сделать первый ход
         if (botColor === "light" && currentState.turn === "light") {
-            setTimeout(triggerBotMove, 500);
+            if (!botMoveTimer) {
+                botMoveTimer = setTimeout(function() {
+                    botMoveTimer = null;
+                    triggerBotMove();
+                }, 150);
+            }
         }
     } else {
         stopBotSpectateRoom();
