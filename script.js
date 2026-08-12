@@ -248,6 +248,11 @@ function generateRoomCode() {
     return code;
 }
 
+function escapeHtml(name) {
+    const chars = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
+    return name.replace(/[&<>"']/g, function (ch) { return chars[ch]; });
+}
+
 function showScreen(screen) {
     menuScreen.classList.add("hidden");
     timeControlScreen.classList.add("hidden");
@@ -3417,8 +3422,10 @@ function showGroupLobby() {
 
             if (roomDeleted) continue;
 
-            const lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
-            const darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
+            let lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
+            let darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
+            lightName = escapeHtml(lightName);
+            darkName = escapeHtml(darkName);
 
             if (room.status === "waiting") {
                 // Не показываем в списке доступных соперников самого себя
