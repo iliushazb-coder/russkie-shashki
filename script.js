@@ -665,7 +665,12 @@ function fetchAndCacheStatsIfNeeded(id) {
         statsCache[id] = { wins: (val && val.wins) || 0, losses: (val && val.losses) || 0 };
         renderPlayerPanels();
     }).catch(function () {
-        statsCache[id] = { wins: 0, losses: 0 };
+        // При ошибке сети не обнуляем кэш, оставляем undefined для повторной попытки
+        statsCache[id] = undefined;
+        // Пробуем запросить ещё раз через 5 секунд
+        setTimeout(function() {
+            fetchAndCacheStatsIfNeeded(id);
+        }, 5000);
     });
 }
 
