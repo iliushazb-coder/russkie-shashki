@@ -902,21 +902,32 @@ h1 {
 }
 
 /* ===== ЭМОЦИИ (РЕАКЦИИ) ===== */
-.reactions-row {
+.reactions-wrapper {
     display: flex;
-    justify-content: space-between;
+    flex-direction: column;
+    align-items: center;
     width: 100%;
-    max-width: 320px;
     margin-top: 12px;
 }
 
+.action-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 320px;
+    margin-bottom: 10px;
+}
+
 .reaction-btn {
-    font-size: 28px;
+    font-size: 22px;
     background: rgba(255, 255, 255, 0.05);
     border: 1px solid rgba(255, 210, 130, 0.3);
     border-radius: 50%;
-    width: 60px;
-    height: 60px;
+    width: 45px;
+    height: 45px;
+    flex-shrink: 0; /* Запрещаем сжиматься */
     cursor: pointer;
     display: flex;
     justify-content: center;
