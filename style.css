@@ -900,3 +900,67 @@ h1 {
 .group-watch-btn:active {
     transform: scale(0.96);
 }
+
+/* ===== ЭМОЦИИ (РЕАКЦИИ) ===== */
+.reactions-row {
+    display: flex;
+    justify-content: space-between;
+    width: 100%;
+    max-width: 320px;
+    margin-top: 12px;
+}
+
+.reaction-btn {
+    font-size: 28px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 210, 130, 0.3);
+    border-radius: 50%;
+    width: 60px;
+    height: 60px;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: transform 0.1s ease, background 0.2s ease;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.reaction-btn:active {
+    transform: scale(0.85);
+    background: rgba(255, 210, 130, 0.2);
+}
+
+.emoji-burst-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none; /* Не блокируем клики по доске */
+    z-index: 9999;
+    overflow: hidden;
+}
+
+.burst-emoji {
+    position: absolute;
+    bottom: 15%; /* Начинают лететь снизу */
+    font-size: 28px;
+    will-change: transform, opacity; /* GPU ускорение */
+    animation: emojiFloatUp 2s ease-out forwards;
+}
+
+@keyframes emojiFloatUp {
+    0% { 
+        transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); 
+        opacity: 0; 
+    }
+    15% { 
+        transform: translate3d(var(--dx-mid), -50px, 0) scale(1.5) rotate(15deg); 
+        opacity: 1; 
+    }
+    100% { 
+        transform: translate3d(var(--dx-end), -80vh, 0) scale(0.8) rotate(-15deg); 
+        opacity: 0; 
+    }
+}
