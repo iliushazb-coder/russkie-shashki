@@ -73,7 +73,7 @@ h1 {
     position: relative;
     font-size: 16px;
     font-weight: 700;
-    padding: 16px 26px;
+    padding: 12px 26px;
     border-radius: 24px;
     border: 1px solid rgba(255, 210, 130, 0.4);
     background:
@@ -150,8 +150,8 @@ h1 {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 5px 0;
-    padding: 8px 16px;
+    margin: 4px 0;
+    padding: 6px 16px;
     border-radius: 18px;
     background: linear-gradient(160deg, rgba(255,225,170,0.10), rgba(255,225,170,0.02));
     backdrop-filter: blur(16px) saturate(170%);
@@ -254,7 +254,7 @@ h1 {
     font-size: clamp(13px, 3.4vw, 17px);
     font-weight: 700;
     color: #ffd27a;
-    margin: 6px 0;
+    margin: 4px 0;
     min-height: 20px;
     text-shadow: 0 0 16px rgba(255,190,90,0.6);
 }
@@ -637,7 +637,7 @@ h1 {
 }
 
 #credit-footer {
-    margin-top: 20px;
+    margin-top: 10px;
     font-size: 11px;
     font-weight: 500;
     color: #b3925a;
@@ -907,7 +907,7 @@ h1 {
     flex-direction: column;
     align-items: center;
     width: 100%;
-    margin-top: 12px;
+    margin-top: 8px;
 }
 
 .action-row {
@@ -917,7 +917,7 @@ h1 {
     gap: 12px;
     width: 100%;
     max-width: 320px;
-    margin-bottom: 10px;
+    margin-bottom: 0;
 }
 
 /* Делаем кнопки внутри ряда резиновыми, чтобы они ужимались 
