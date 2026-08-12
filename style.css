@@ -695,6 +695,21 @@ h1 {
     margin-right: 8px;
 }
 
+/* Стиль для кликабельного имени игрока в статистике */
+.stats-user-link {
+    color: #fff3d6;
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 210, 130, 0.4);
+    text-underline-offset: 2px;
+    transition: color 0.2s, text-decoration-color 0.2s;
+    word-break: break-all;
+}
+
+.stats-user-link:active {
+    color: #ffffff;
+    text-decoration-color: #ffffff;
+}
+
 .room-item-row {
     display: flex;
     align-items: center;
