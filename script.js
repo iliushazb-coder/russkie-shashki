@@ -364,30 +364,6 @@ function withPendingBlockers(pieces, pendingRemovals) {
     return blocked;
 }
 
-function maxCaptureChainLength(pieces, row, col, color, king) {
-    const jumps = getCaptureJumps(pieces, row, col, color, king);
-    if (jumps.length === 0) return 0;
-
-    let best = 0;
-    for (let i = 0; i < jumps.length; i++) {
-        const j = jumps[i];
-        const newPieces = {};
-        for (const k in pieces) newPieces[k] = pieces[k];
-        newPieces[j.capturedRow + "_" + j.capturedCol] = { color: "blocked", king: false };
-        delete newPieces[row + "_" + col];
-
-        let newKing = king;
-        if (!king) {
-            if ((color === "light" && j.toRow === 0) || (color === "dark" && j.toRow === 7)) newKing = true;
-        }
-        newPieces[j.toRow + "_" + j.toCol] = { color: color, king: newKing };
-
-        const sub = 1 + maxCaptureChainLength(newPieces, j.toRow, j.toCol, color, newKing);
-        if (sub > best) best = sub;
-    }
-    return best;
-}
-
 function filterJumpsByMajorityRule(pieces, row, col, color, king, jumps) {
     // В русских шашках (в отличие от международных) нет правила
     // "обязан бить максимум" — выбор направления взятия свободный,
@@ -1300,6 +1276,8 @@ function recordGameResult() {
             result.losses = (result.losses || 0) + 1;
         }
         return result;
+    }).catch(function(error) {
+        console.error("Stats write failed:", error);
     });
 }
 
@@ -1402,6 +1380,7 @@ function forceResyncFromServer() {
         renderBoard();
     }).catch(function(err) {
         console.error("Resync error", err);
+        showInfoModal("Потеряно соединение с сервером. Попробуйте перезайти в игру.", false);
     });
 }
 
@@ -1785,6 +1764,10 @@ function startOfflineGame() {
         clearTimeout(mustCaptureHintTimer);
         mustCaptureHintTimer = null;
     }
+    if (botMoveTimer) {
+        clearTimeout(botMoveTimer);
+        botMoveTimer = null;
+    }
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     
@@ -2121,6 +2104,12 @@ btnResignYes.addEventListener("click", function () {
             newRoom.winReason = "resign";
             newRoom.status = "finished";
             return newRoom;
+        }).then(function(result) {
+            if (!result.committed) {
+                showInfoModal("Не удалось сдаться. Попробуйте ещё раз.", false);
+            }
+        }).catch(function() {
+            showInfoModal("Ошибка соединения при сдаче.", false);
         });
     } else {
         currentState.winner = currentState.turn === "light" ? "dark" : "light";
@@ -2209,6 +2198,12 @@ if (btnDrawAccept) {
             newRoom.status = "finished";
             newRoom.drawProposal = null;
             return newRoom;
+        }).then(function(result) {
+            if (!result.committed) {
+                showInfoModal("Не удалось принять ничью. Возможно, игра уже завершена.", false);
+            }
+        }).catch(function() {
+            showInfoModal("Ошибка соединения при принятии ничьей.", false);
         });
     });
 }
@@ -2393,6 +2388,8 @@ function checkTimeout() {
         newRoom.winReason = "timeout";
         newRoom.status = "finished";
         return newRoom;
+    }).catch(function(error) {
+        console.error("Timeout transaction failed:", error);
     });
 }
 
@@ -2866,6 +2863,11 @@ function tryMatchOpponent(opponentId, opponentData) {
                 startOnlineGame();
             });
         }
+    }).catch(function(error) {
+        console.error("Matchmaking transaction failed:", error);
+        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
+        showScreen(menuScreen);
+        loadActiveRooms();
     });
 }
 
@@ -3273,15 +3275,7 @@ function startApp() {
 // ===== ЛОББИ ГРУППЫ (Список комнат) =====
 
 document.addEventListener('DOMContentLoaded', function() {
-    const btnPlayGroup = document.getElementById("btn-play-group");
     const btnBackToMenu = document.getElementById("btn-back-to-menu");
-
-    if (btnPlayGroup) {
-        btnPlayGroup.addEventListener("click", function() {
-            isBotGame = false;
-            showGroupLobby();
-        });
-    }
 
     if (btnBackToMenu) {
         btnBackToMenu.addEventListener("click", function() {
@@ -3494,6 +3488,11 @@ function joinGroupRoom(code) {
             if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
             showScreen(gameScreen);
             startOnlineGame();
+        }).catch(function(error) {
+            console.error("Join room transaction failed:", error);
+            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
+            showScreen(menuScreen);
+            loadActiveRooms();
         });
     });
 }
