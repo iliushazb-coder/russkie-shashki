@@ -920,6 +920,15 @@ h1 {
     margin-bottom: 10px;
 }
 
+/* Делаем кнопки внутри ряда резиновыми, чтобы они ужимались 
+   и оставляли место для круглых кнопок-эмодзи по краям */
+.action-row .menu-button {
+    width: auto;
+    flex: 1;
+    max-width: 220px;
+    margin: 0; /* Убираем дефолтные отступы, т.к. gap в action-row всё сделает */
+}
+
 .reaction-btn {
     font-size: 22px;
     background: rgba(255, 255, 255, 0.05);
