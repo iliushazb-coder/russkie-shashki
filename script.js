@@ -218,6 +218,7 @@ let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
 const STALE_MS = 20000; 
+const RECONNECT_GRACE_MS = 60000; // Перенесли наверх для порядка
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
@@ -759,7 +760,6 @@ function renderPlayerPanels() {
 }
 
 let opponentGraceTimer = null;
-const RECONNECT_GRACE_MS = 60000;
 
 function checkOpponentAbsence() {
     // ВАЖНАЯ ЗАЩИТА: Если игрок — зритель, функция немедленно останавливается. 
