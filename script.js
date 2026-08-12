@@ -2164,7 +2164,7 @@ function sendReaction(emoji) {
 
 function triggerEmojiBurst(emoji) {
     if (!emojiBurstContainer) return;
-    const count = 20;
+    const count = 5;
     for (let i = 0; i < count; i++) {
         const el = document.createElement("div");
         el.className = "burst-emoji";
