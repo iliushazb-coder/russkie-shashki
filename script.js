@@ -201,6 +201,11 @@ const drawOfferText = document.getElementById("draw-offer-text");
 const btnDrawAccept = document.getElementById("btn-draw-accept");
 const btnDrawDecline = document.getElementById("btn-draw-decline");
 const btnDrawCancel = document.getElementById("btn-draw-cancel");
+const reactionsRow = document.getElementById("reactions-row");
+const btnReactLaugh = document.getElementById("btn-react-laugh");
+const btnReactFire = document.getElementById("btn-react-fire");
+const emojiBurstContainer = document.getElementById("emoji-burst-container");
+let lastReactionTs = 0;
 
 let roomCode = null;
 let myColor = "light";
@@ -1532,6 +1537,9 @@ function startOnlineGame() {
     }
 
     setupPresence();
+    
+    // Показываем кнопки реакций только для онлайн-игр
+    if (reactionsRow) reactionsRow.classList.remove("hidden");
 
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
@@ -1573,6 +1581,12 @@ function startOnlineGame() {
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };
+
+        // Проверка реакции: если пришёл новый ts — запускаем анимацию
+        if (room.reaction && room.reaction.ts && room.reaction.ts !== lastReactionTs) {
+            lastReactionTs = room.reaction.ts;
+            triggerEmojiBurst(room.reaction.emoji);
+        }
 
         const newSignature = computeGameSignature(newState);
 
@@ -1770,6 +1784,9 @@ function startOfflineGame() {
     }
     stopPresenceHeartbeat();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    
+    // Прячем кнопки реакций в игре с ботом
+    if (reactionsRow) reactionsRow.classList.add("hidden");
     
     // Сохраняем список зрителей перед пересозданием объекта состояния,
     // чтобы при реванше с ботом строчка "Смотрят: ..." не пропадала.
@@ -2126,6 +2143,50 @@ if (btnOfferDraw) {
         if (!isOnlineGame || !currentState || currentState.winner) return;
         database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
     });
+}
+
+if (btnReactLaugh) {
+    btnReactLaugh.addEventListener("click", function() { sendReaction("😂"); });
+}
+if (btnReactFire) {
+    btnReactFire.addEventListener("click", function() { sendReaction("🔥"); });
+}
+
+function sendReaction(emoji) {
+    if (!isOnlineGame || !currentState || currentState.winner) return;
+    // ts: Date.now() гарантирует, что каждое нажатие уникально
+    database.ref("rooms/" + roomCode + "/reaction").set({
+        emoji: emoji,
+        from: myColor,
+        ts: Date.now()
+    }).catch(function(e) { console.error("Reaction send failed", e); });
+}
+
+function triggerEmojiBurst(emoji) {
+    if (!emojiBurstContainer) return;
+    const count = 20;
+    for (let i = 0; i < count; i++) {
+        const el = document.createElement("div");
+        el.className = "burst-emoji";
+        el.textContent = emoji;
+        
+        const startX = Math.random() * 100; // Случайная точка по ширине экрана
+        const dxMid = (Math.random() - 0.5) * 100; // Отклонение в сторону
+        const dxEnd = (Math.random() - 0.5) * 200; // Конечное отклонение
+        
+        el.style.left = startX + "vw";
+        el.style.setProperty('--dx-mid', dxMid + "px");
+        el.style.setProperty('--dx-end', dxEnd + "px");
+        el.style.animationDuration = (1.5 + Math.random() * 1.0) + "s"; // От 1.5 до 2.5 сек
+        el.style.animationDelay = (Math.random() * 0.3) + "s"; // Лёгкая рассинхронизация
+        
+        emojiBurstContainer.appendChild(el);
+        
+        // Удаляем элемент из DOM после окончания анимации
+        el.addEventListener("animationend", function() {
+            el.remove();
+        });
+    }
 }
 
 function checkDrawProposal() {
