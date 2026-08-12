@@ -335,6 +335,7 @@ function getCaptureJumps(pieces, row, col, color, king) {
         let foundRow = -1;
         let foundCol = -1;
         let foundOpponent = false;
+        let potentialLandings = []; // Клетки приземления дамки за одной побитой шашкой
         for (let dist = 1; dist <= maxDistance; dist++) {
             const r = row + dRow * dist;
             const c = col + dCol * dist;
@@ -350,11 +351,40 @@ function getCaptureJumps(pieces, row, col, color, king) {
                 }
             } else {
                 if (!p) {
-                    jumps.push({ toRow: r, toCol: c, capturedRow: foundRow, capturedCol: foundCol });
-                    if (!king) break;
+                    if (!king) {
+                        jumps.push({ toRow: r, toCol: c, capturedRow: foundRow, capturedCol: foundCol });
+                        break;
+                    } else {
+                        potentialLandings.push({ toRow: r, toCol: c, capturedRow: foundRow, capturedCol: foundCol });
+                    }
                 } else {
                     break;
                 }
+            }
+        }
+
+        // ПРАВИЛО РУССКИХ ШАШЕК: если дамка бьёт шашку, и за ней несколько свободных полей,
+        // с одного из которых можно продолжить бой, а с других нет — дамка обязана
+        // стать на то поле, с которого бой продолжается.
+        if (king && potentialLandings.length > 0) {
+            const validLandings = [];
+            for (const landing of potentialLandings) {
+                const tempPieces = {};
+                for (const k in pieces) tempPieces[k] = pieces[k];
+                const capKey = landing.capturedRow + "_" + landing.capturedCol;
+                const fromKey = row + "_" + col;
+                const toKey = landing.toRow + "_" + landing.toCol;
+                tempPieces[capKey] = { color: "blocked", king: false };
+                delete tempPieces[fromKey];
+                tempPieces[toKey] = { color: color, king: true };
+                if (canCaptureAt(tempPieces, landing.toRow, landing.toCol, color, true)) {
+                    validLandings.push(landing);
+                }
+            }
+            if (validLandings.length > 0) {
+                jumps.push(...validLandings);
+            } else {
+                jumps.push(...potentialLandings);
             }
         }
     }
