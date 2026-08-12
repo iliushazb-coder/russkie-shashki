@@ -2123,41 +2123,8 @@ btnResignYes.addEventListener("click", function () {
 
 if (btnOfferDraw) {
     btnOfferDraw.addEventListener("click", function () {
-        if (!currentState || currentState.winner) return;
-        
-        if (isOnlineGame) {
-            database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
-        } else if (isBotGame) {
-            // Сбрасываем переменные времени перед началом оценки
-            botStartTime = Date.now();
-            botNodesSearched = 0;
-            botSearchCancelled = false;
-
-            const pieceCount = Object.keys(currentState.pieces).length;
-            let evalDepth = 9; 
-            if (pieceCount <= 12) evalDepth = 10; 
-            if (pieceCount <= 6) evalDepth = 12;  
-            
-            // Оцениваем позицию от лица того, чей сейчас ход
-            const score = evaluatePositionForDraw(currentState, currentState.turn, evalDepth, -Infinity, Infinity, botColor);
-            
-            // Если расчёт был прерван по лимиту времени — считаем, что ничья не подтверждена.
-            // Бот отказывается, чтобы случайно не согласиться на ничью в выигранной позиции.
-            if (botSearchCancelled) {
-                // Третий параметр false — не возвращать в меню при закрытии
-                showInfoModal("🤖 Бот отклонил ничью. Слишком сложная позиция!", false, false);
-            } else if (score <= 50) {
-                currentState.winner = "draw";
-                currentState.winReason = "draw";
-                renderBoard();
-                if (botSpectateRoomCode) {
-                    syncBotStateToFirebase();
-                }
-            } else {
-                // Третий параметр false — не возвращать в меню при закрытии
-                showInfoModal("🤖 Бот отклонил ничью. У него хорошее настроение!", false, false);
-            }
-        }
+        if (!isOnlineGame || !currentState || currentState.winner) return;
+        database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
     });
 }
 
@@ -3154,48 +3121,6 @@ function evaluateBoard(state, botColor) {
     }
 
     return score;
-}
-
-function evaluatePositionForDraw(state, currentColor, depth, alpha, beta, botColor) {
-    // Проверка лимита времени (каждые 128 узлов)
-    botNodesSearched++;
-    if (botNodesSearched % 128 === 0) {
-        if (Date.now() - botStartTime > BOT_MAX_THINK_TIME_MS) {
-            botSearchCancelled = true;
-        }
-    }
-    if (botSearchCancelled) return 0; // Прерываем расчёт, результат будет проигнорирован
-
-    if (depth === 0 || state.winner) {
-        return evaluateBoard(state, botColor);
-    }
-
-    const moves = getAllLegalMovesForBot(state, currentColor);
-    if (moves.length === 0) return currentColor === botColor ? -1000000 : 1000000;
-
-    const isMaximizing = (currentColor === botColor);
-    let bestScore = isMaximizing ? -Infinity : Infinity;
-
-    for (const move of moves) {
-        const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
-        if (!newState) continue;
-        
-        // Не уменьшаем глубину при цепочке взятий
-        const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
-        const evalScore = evaluatePositionForDraw(newState, newState.turn, nextDepth, alpha, beta, botColor);
-        
-        if (botSearchCancelled) return 0; // Прерываем цикл, если время вышло
-
-        if (isMaximizing) {
-            bestScore = Math.max(bestScore, evalScore);
-            alpha = Math.max(alpha, evalScore);
-        } else {
-            bestScore = Math.min(bestScore, evalScore);
-            beta = Math.min(beta, evalScore);
-        }
-        if (beta <= alpha) break; 
-    }
-    return bestScore;
 }
 
 function getAllLegalMovesForBot(state, color) {
