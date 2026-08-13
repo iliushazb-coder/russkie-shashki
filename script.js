@@ -153,11 +153,68 @@ if (!currentLang) {
     localStorage.setItem("shashki_lang", currentLang);
 }
 
-// Словарь переводов (пока пустой, заполним на следующих этапах)
+// Словарь переводов
 const translations = {
-    ru: { },
-    en: { },
-    it: { }
+    ru: {
+        h1_title: "Русские Шашки 🎮",
+        no_active_game: "Нет активной игры",
+        active_games: "Активные игры",
+        btn_play_online: "👥 Кто играет?",
+        btn_play_friend: "👥 Играть с другом",
+        btn_play_bot: "🤖 Играть с ботом",
+        btn_show_stats: "📊 Моя статистика",
+        time_control_prompt: "Выбери контроль времени на ход:",
+        time_0: "Без ограничения",
+        time_30: "30 секунд на ход",
+        time_60: "1 минута на ход",
+        time_120: "2 минуты на ход",
+        time_180: "3 минуты на ход",
+        time_300: "5 минут на ход",
+        btn_back: "Назад",
+        waiting_link_prompt: "Отправь эту ссылку другу:",
+        btn_share_link: "📤 Отправить другу",
+        waiting_friend: "Ожидание подключения друга..."
+    },
+    en: {
+        h1_title: "Russian Checkers 🎮",
+        no_active_game: "No active games",
+        active_games: "Active games",
+        btn_play_online: "👥 Who is playing?",
+        btn_play_friend: "👥 Play with a friend",
+        btn_play_bot: "🤖 Play with bot",
+        btn_show_stats: "📊 My statistics",
+        time_control_prompt: "Choose time control per move:",
+        time_0: "No limit",
+        time_30: "30 seconds per move",
+        time_60: "1 minute per move",
+        time_120: "2 minutes per move",
+        time_180: "3 minutes per move",
+        time_300: "5 minutes per move",
+        btn_back: "Back",
+        waiting_link_prompt: "Send this link to a friend:",
+        btn_share_link: "📤 Send to friend",
+        waiting_friend: "Waiting for friend to connect..."
+    },
+    it: {
+        h1_title: "Dama Russa 🎮",
+        no_active_game: "Nessuna partita attiva",
+        active_games: "Partite attive",
+        btn_play_online: "👥 Chi sta giocando?",
+        btn_play_friend: "👥 Gioca con un amico",
+        btn_play_bot: "🤖 Gioca con il bot",
+        btn_show_stats: "📊 Le mie statistiche",
+        time_control_prompt: "Scegli il tempo per mossa:",
+        time_0: "Senza limiti",
+        time_30: "30 secondi per mossa",
+        time_60: "1 minuto per mossa",
+        time_120: "2 minuti per mossa",
+        time_180: "3 minuti per mossa",
+        time_300: "5 minuti per mossa",
+        btn_back: "Indietro",
+        waiting_link_prompt: "Invia questo link a un amico:",
+        btn_share_link: "📤 Invia ad un amico",
+        waiting_friend: "In attesa che l'amico si connetta..."
+    }
 };
 
 // Функция получения перевода по ключу
