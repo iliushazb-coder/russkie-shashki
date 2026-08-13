@@ -93,6 +93,9 @@
                 <button id="btn-react-angry" class="reaction-btn">😡</button>
             </div>
         </div>
+
+        <!-- Кнопка выхода для игры с ботом -->
+        <button id="btn-back-bot" class="menu-button danger-button hidden" data-i18n="btn_back_bot">👈 Назад</button>
     </div>
 
     <div id="emoji-burst-container" class="emoji-burst-container"></div>
@@ -103,6 +106,16 @@
             <div class="modal-buttons">
                 <button id="btn-resign-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
                 <button id="btn-resign-no" class="menu-button" data-i18n="btn_no">Нет</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="back-confirm-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p data-i18n="confirm_back_bot">Вы точно хотите выйти?</p>
+            <div class="modal-buttons">
+                <button id="btn-back-bot-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
+                <button id="btn-back-bot-no" class="menu-button" data-i18n="btn_no">Нет</button>
             </div>
         </div>
     </div>
