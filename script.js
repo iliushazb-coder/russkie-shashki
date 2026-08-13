@@ -198,7 +198,21 @@ const translations = {
         rematch_no_response: "Соперник не ответил на реванш (пропал).",
         left_game: " покинул игру 👋",
         game_over: "\nПартия завершена.",
-        err_resync_failed: "Потеряно соединение с сервером. Попробуйте перезайти в игру."
+        err_resync_failed: "Потеряно соединение с сервером. Попробуйте перезайти в игру.",
+        err_load_game: "Не удалось загрузить игру. Проверьте интернет-соединение.",
+        err_no_active_game: "Нет активной игры",
+        err_play_self: "Нельзя играть против самого себя",
+        err_opponent_offline: "Соперник оффлайн\n\n",
+        err_opponent_offline_2: " больше не находится в игре.",
+        err_join_failed: "Не удалось подключиться к игре. Попробуйте ещё раз.",
+        err_room_taken: "Комната уже занята или не существует.",
+        err_search_failed: "Не удалось начать поиск. Проверьте интернет-соединение.",
+        err_game_closed: "Игра была завершена или закрыта.",
+        err_resign_failed: "Не удалось сдаться. Попробуйте ещё раз.",
+        err_resign_connection: "Ошибка соединения при сдаче.",
+        err_draw_failed: "Не удалось принять ничью. Возможно, игра уже завершена.",
+        err_draw_connection: "Ошибка соединения при принятии ничьей.",
+        err_rematch_failed: "Не удалось начать реванш. Возможно, потеряно соединение."
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -243,7 +257,21 @@ const translations = {
         rematch_no_response: "Opponent didn't respond to rematch (disconnected).",
         left_game: " left the game 👋",
         game_over: "\nGame over.",
-        err_resync_failed: "Lost connection to server. Try rejoining the game."
+        err_resync_failed: "Lost connection to server. Try rejoining the game.",
+        err_load_game: "Failed to load game. Check your internet connection.",
+        err_no_active_game: "No active game",
+        err_play_self: "Cannot play against yourself",
+        err_opponent_offline: "Opponent is offline\n\n",
+        err_opponent_offline_2: " is no longer in the game.",
+        err_join_failed: "Failed to join the game. Try again.",
+        err_room_taken: "Room is already taken or doesn't exist.",
+        err_search_failed: "Failed to start search. Check your internet connection.",
+        err_game_closed: "The game was ended or closed.",
+        err_resign_failed: "Failed to resign. Try again.",
+        err_resign_connection: "Connection error during resignation.",
+        err_draw_failed: "Failed to accept draw. The game might be over.",
+        err_draw_connection: "Connection error during draw acceptance.",
+        err_rematch_failed: "Failed to start rematch. Connection might be lost."
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -288,7 +316,21 @@ const translations = {
         rematch_no_response: "L'avversario non ha risposto alla rivincita (disconnesso).",
         left_game: " ha lasciato la partita 👋",
         game_over: "\nPartita terminata.",
-        err_resync_failed: "Connessione al server persa. Prova a rientrare nella partita."
+        err_resync_failed: "Connessione al server persa. Prova a rientrare nella partita.",
+        err_load_game: "Impossibile caricare la partita. Controlla la connessione.",
+        err_no_active_game: "Nessuna partita attiva",
+        err_play_self: "Non puoi giocare contro te stesso",
+        err_opponent_offline: "L'avversario è offline\n\n",
+        err_opponent_offline_2: " non è più in gioco.",
+        err_join_failed: "Impossibile unirsi alla partita. Riprova.",
+        err_room_taken: "La stanza è già occupata o non esiste.",
+        err_search_failed: "Impossibile avviare la ricerca. Controlla la connessione.",
+        err_game_closed: "La partita è stata terminata o chiusa.",
+        err_resign_failed: "Impossibile abbandonare. Riprova.",
+        err_resign_connection: "Errore di connessione durante l'abbandono.",
+        err_draw_failed: "Impossibile accettare il pareggio. La partita potrebbe essere finita.",
+        err_draw_connection: "Errore di connessione durante il pareggio.",
+        err_rematch_failed: "Impossibile avviare la rivincita. Connessione persa."
     }
 };
 
@@ -2344,10 +2386,10 @@ btnResignYes.addEventListener("click", function () {
             return newRoom;
         }).then(function(result) {
             if (!result.committed) {
-                showInfoModal("Не удалось сдаться. Попробуйте ещё раз.", false);
+                showInfoModal(t("err_resign_failed"), false);
             }
         }).catch(function() {
-            showInfoModal("Ошибка соединения при сдаче.", false);
+            showInfoModal(t("err_resign_connection"), false);
         });
     } else {
         currentState.winner = currentState.turn === "light" ? "dark" : "light";
@@ -2455,10 +2497,10 @@ if (btnDrawAccept) {
             return newRoom;
         }).then(function(result) {
             if (!result.committed) {
-                showInfoModal("Не удалось принять ничью. Возможно, игра уже завершена.", false);
+                showInfoModal(t("err_draw_failed"), false);
             }
         }).catch(function() {
-            showInfoModal("Ошибка соединения при принятии ничьей.", false);
+            showInfoModal(t("err_draw_connection"), false);
         });
     });
 }
@@ -2598,7 +2640,7 @@ btnRematchAccept.addEventListener("click", function () {
         });
     }).catch(function(error) {
         console.error("Rematch transaction failed:", error);
-        showInfoModal("Не удалось начать реванш. Возможно, потеряно соединение.", false);
+        showInfoModal(t("err_rematch_failed"), false);
     });
 });
 
@@ -2689,7 +2731,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Не удалось загрузить игру. Проверьте интернет-соединение.", false);
+            showInfoModal(t("err_load_game"), false);
         }
     }, 10000);
 
@@ -2703,7 +2745,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Нет активной игры", false);
+            showInfoModal(t("err_no_active_game"), false);
             return;
         }
 
@@ -2716,7 +2758,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Нельзя играть против самого себя", false);
+            showInfoModal(t("err_play_self"), false);
             return;
         }
 
@@ -2735,7 +2777,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Соперник оффлайн\n\n" + creatorName + " больше не находится в игре.", false);
+            showInfoModal(t("err_opponent_offline") + creatorName + t("err_opponent_offline_2"), false);
             return;
         }
 
@@ -2745,7 +2787,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Нет активной игры", false);
+            showInfoModal(t("err_no_active_game"), false);
             return;
         }
 
@@ -2780,7 +2822,7 @@ function checkForInviteLink() {
             roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
-            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
+            showInfoModal(t("err_join_failed"), false);
         });
     }).catch(function () {
         if (settled) return;
@@ -2789,7 +2831,7 @@ function checkForInviteLink() {
         roomCode = null;
         showScreen(menuScreen);
         loadActiveRooms();
-        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
+        showInfoModal(t("err_join_failed"), false);
     });
 
     return true;
@@ -3013,7 +3055,7 @@ function startOnlineSearch() {
 
     }).catch(function(error) {
         console.error("Ошибка при входе в очередь матчмейкинга:", error);
-        showInfoModal("Не удалось начать поиск. Проверьте интернет-соединение.", false);
+        showInfoModal(t("err_search_failed"), false);
         showScreen(menuScreen);
     });
 }
@@ -3134,7 +3176,7 @@ function tryMatchOpponent(opponentId, opponentData) {
         }
     }).catch(function(error) {
         console.error("Matchmaking transaction failed:", error);
-        showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
+        showInfoModal(t("err_join_failed"), false);
         showScreen(menuScreen);
         loadActiveRooms();
     });
@@ -3672,7 +3714,7 @@ function joinGroupRoom(code) {
     database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
         const room = snapshot.val();
         if (!room || room.status !== "waiting") {
-            showInfoModal("Комната уже занята или не существует.", false);
+            showInfoModal(t("err_room_taken"), false);
             return;
         }
 
@@ -3681,7 +3723,7 @@ function joinGroupRoom(code) {
 
         // ПРОВЕРКА: Защита от игры против самого себя
         if (creatorId && creatorId === myTelegramId) {
-            showInfoModal("Нельзя играть против самого себя", false);
+            showInfoModal(t("err_play_self"), false);
             return;
         }
 
@@ -3722,7 +3764,7 @@ function joinGroupRoom(code) {
             startOnlineGame();
         }).catch(function(error) {
             console.error("Join room transaction failed:", error);
-            showInfoModal("Не удалось подключиться к игре. Попробуйте ещё раз.", false);
+            showInfoModal(t("err_join_failed"), false);
             showScreen(menuScreen);
             loadActiveRooms();
         });
@@ -3771,7 +3813,7 @@ function watchGroupRoom(code) {
             if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
             if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
             showScreen(menuScreen);
-            showInfoModal("Игра была завершена или закрыта.", false);
+            showInfoModal(t("err_game_closed"), false);
             return;
         }
 
