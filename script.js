@@ -194,7 +194,11 @@ const translations = {
         waiting_draw: "⏳ Ждём ответа соперника на ничью...",
         offers_draw: " предлагает ничью",
         btn_cancel: "Отменить",
-        opponent_default: "Соперник"
+        opponent_default: "Соперник",
+        rematch_no_response: "Соперник не ответил на реванш (пропал).",
+        left_game: " покинул игру 👋",
+        game_over: "\nПартия завершена.",
+        err_resync_failed: "Потеряно соединение с сервером. Попробуйте перезайти в игру."
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -235,7 +239,11 @@ const translations = {
         waiting_draw: "⏳ Waiting for opponent's response to draw...",
         offers_draw: " offers a draw",
         btn_cancel: "Cancel",
-        opponent_default: "Opponent"
+        opponent_default: "Opponent",
+        rematch_no_response: "Opponent didn't respond to rematch (disconnected).",
+        left_game: " left the game 👋",
+        game_over: "\nGame over.",
+        err_resync_failed: "Lost connection to server. Try rejoining the game."
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -276,7 +284,11 @@ const translations = {
         waiting_draw: "⏳ In attesa di risposta per il pareggio...",
         offers_draw: " offre il pareggio",
         btn_cancel: "Annulla",
-        opponent_default: "Avversario"
+        opponent_default: "Avversario",
+        rematch_no_response: "L'avversario non ha risposto alla rivincita (disconnesso).",
+        left_game: " ha lasciato la partita 👋",
+        game_over: "\nPartita terminata.",
+        err_resync_failed: "Connessione al server persa. Prova a rientrare nella partita."
     }
 };
 
@@ -964,17 +976,15 @@ function checkOpponentAbsence() {
                     opponentAbsenceHandled = true;
                     if (currentState.winner && currentState.rematchProposal) {
                         // Если соперник пропал во время ожидания ответа на реванш
-                        showInfoModal("Соперник не ответил на реванш (пропал).", false);
+                        showInfoModal(t("rematch_no_response"), false);
                         showScreen(menuScreen);
                         loadActiveRooms();
                         cleanupAbandonedRoom();
                     } else {
                         // Обычный уход во время игры
-                        const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || "Соперник";
-                        const reasonText = stillInfo.text.indexOf("потерял соединение") !== -1
-                            ? (oppName + " потерял соединение 📡")
-                            : (oppName + " покинул игру 👋");
-                        opponentLeftText.textContent = reasonText + "\nПартия завершена.";
+                        const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || t("opponent_default");
+                        const reasonText = oppName + t("left_game");
+                        opponentLeftText.textContent = reasonText + t("game_over");
                         opponentLeftModal.classList.remove("hidden");
                         cleanupAbandonedRoom();
                     }
@@ -1596,7 +1606,7 @@ function forceResyncFromServer() {
         renderBoard();
     }).catch(function(err) {
         console.error("Resync error", err);
-        showInfoModal("Потеряно соединение с сервером. Попробуйте перезайти в игру.", false);
+        showInfoModal(t("err_resync_failed"), false);
     });
 }
 
