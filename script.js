@@ -216,7 +216,21 @@ const translations = {
         loading: "Загрузка...",
         lobby_empty: "Пока никто не играет",
         btn_back_bot: "👈 Назад",
-        confirm_back_bot: "Вы точно хотите выйти?"
+        confirm_back_bot: "Вы точно хотите выйти?",
+        confirm_resign: "Вы уверены, что хотите сдаться?",
+        btn_yes: "Да",
+        btn_no: "Нет",
+        btn_rematch: "Реванш",
+        btn_new_game: "Новая игра",
+        btn_start_new_game: "Начать новую игру",
+        stats_top_online: "📊 Топ игроков (Онлайн)",
+        stats_top_bot: "🤖 Топ игроков (Против бота)",
+        modal_offline_opp: "Соперник офлайн",
+        btn_play_bot_offline: "🤖 Играть с ботом",
+        btn_invite_other: "👥 Пригласить другого друга",
+        btn_accept: "✅ Принять",
+        btn_decline: "❌ Отклонить",
+        btn_cancel_offer: "Отменить предложение"
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -279,7 +293,21 @@ const translations = {
         loading: "Loading...",
         lobby_empty: "Nobody is playing right now",
         btn_back_bot: "👈 Back",
-        confirm_back_bot: "Are you sure you want to exit?"
+        confirm_back_bot: "Are you sure you want to exit?",
+        confirm_resign: "Are you sure you want to resign?",
+        btn_yes: "Yes",
+        btn_no: "No",
+        btn_rematch: "Rematch",
+        btn_new_game: "New game",
+        btn_start_new_game: "Start new game",
+        stats_top_online: "📊 Top players (Online)",
+        stats_top_bot: "🤖 Top players (vs Bot)",
+        modal_offline_opp: "Opponent offline",
+        btn_play_bot_offline: "🤖 Play with bot",
+        btn_invite_other: "👥 Invite another friend",
+        btn_accept: "✅ Accept",
+        btn_decline: "❌ Decline",
+        btn_cancel_offer: "Cancel offer"
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -342,7 +370,21 @@ const translations = {
         loading: "Caricamento...",
         lobby_empty: "Nessuno sta giocando",
         btn_back_bot: "👈 Indietro",
-        confirm_back_bot: "Sei sicuro di voler uscire?"
+        confirm_back_bot: "Sei sicuro di voler uscire?",
+        confirm_resign: "Sei sicuro di voler abbandonare?",
+        btn_yes: "Sì",
+        btn_no: "No",
+        btn_rematch: "Rivincita",
+        btn_new_game: "Nuova partita",
+        btn_start_new_game: "Inizia nuova partita",
+        stats_top_online: "📊 Migliori (Online)",
+        stats_top_bot: "🤖 Migliori (vs Bot)",
+        modal_offline_opp: "Avversario offline",
+        btn_play_bot_offline: "🤖 Gioca con il bot",
+        btn_invite_other: "👥 Invita un altro amico",
+        btn_accept: "✅ Accetta",
+        btn_decline: "❌ Rifiuta",
+        btn_cancel_offer: "Annulla offerta"
     }
 };
 
