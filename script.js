@@ -188,7 +188,13 @@ const translations = {
         status_connecting: "подключение...",
         draw_agreed: "🤝 Ничья!\nОба игрока согласились закончить партию.",
         btn_to_menu: "В меню",
-        btn_close: "Закрыть"
+        btn_close: "Закрыть",
+        waiting_rematch: "⏳ Ждём ответа соперника на реванш...",
+        offers_rematch: " предлагает сыграть ещё раз",
+        waiting_draw: "⏳ Ждём ответа соперника на ничью...",
+        offers_draw: " предлагает ничью",
+        btn_cancel: "Отменить",
+        opponent_default: "Соперник"
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -223,7 +229,13 @@ const translations = {
         status_connecting: "connecting...",
         draw_agreed: "🤝 Draw!\nBoth players agreed to end the game.",
         btn_to_menu: "To menu",
-        btn_close: "Close"
+        btn_close: "Close",
+        waiting_rematch: "⏳ Waiting for opponent's response to rematch...",
+        offers_rematch: " offers a rematch",
+        waiting_draw: "⏳ Waiting for opponent's response to draw...",
+        offers_draw: " offers a draw",
+        btn_cancel: "Cancel",
+        opponent_default: "Opponent"
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -258,7 +270,13 @@ const translations = {
         status_connecting: "connessione...",
         draw_agreed: "🤝 Pareggio!\nEntrambi i giocatori hanno concordato di terminare.",
         btn_to_menu: "Al menu",
-        btn_close: "Chiudi"
+        btn_close: "Chiudi",
+        waiting_rematch: "⏳ In attesa di risposta per la rivincita...",
+        offers_rematch: " offre una rivincita",
+        waiting_draw: "⏳ In attesa di risposta per il pareggio...",
+        offers_draw: " offre il pareggio",
+        btn_cancel: "Annulla",
+        opponent_default: "Avversario"
     }
 };
 
@@ -2400,12 +2418,12 @@ function checkDrawProposal() {
         return;
     }
     if (proposal.by === myColor) {
-        drawOfferText.textContent = "⏳ Ждём ответа соперника на ничью...";
+        drawOfferText.textContent = t("waiting_draw");
         if (btnDrawAccept) btnDrawAccept.classList.add("hidden");
         if (btnDrawDecline) btnDrawDecline.classList.add("hidden");
         if (btnDrawCancel) btnDrawCancel.classList.remove("hidden");
     } else {
-        drawOfferText.textContent = (proposal.name || "Соперник") + " предлагает ничью";
+        drawOfferText.textContent = (proposal.name || t("opponent_default")) + t("offers_draw");
         if (btnDrawAccept) btnDrawAccept.classList.remove("hidden");
         if (btnDrawDecline) btnDrawDecline.classList.remove("hidden");
         if (btnDrawCancel) btnDrawCancel.classList.add("hidden");
@@ -2544,16 +2562,16 @@ function checkRematchProposal() {
     if (proposal.by === myColor) {
         rematchRequestModal.classList.add("hidden");
         if (currentState.winner) {
-            endGameText.textContent = endGameText.textContent.split("\n\n⏳")[0] + "\n\n⏳ Ждём ответа соперника на реванш...";
+            endGameText.textContent = endGameText.textContent.split("\n\n⏳")[0] + "\n\n" + t("waiting_rematch");
             if (buttonsRow) {
                 buttonsRow.classList.remove("hidden");
                 btnNewGame.classList.add("hidden"); // Прячем "Новая игра"
                 btnCloseGame.classList.remove("hidden"); // Показываем "Закрыть"
-                btnCloseGame.textContent = "Отменить"; // Меняем текст
+                btnCloseGame.textContent = t("btn_cancel"); // Меняем текст
             }
         }
     } else {
-        rematchRequestText.textContent = (proposal.name || "Соперник") + " предлагает сыграть ещё раз";
+        rematchRequestText.textContent = (proposal.name || t("opponent_default")) + t("offers_rematch");
         rematchRequestModal.classList.remove("hidden");
     }
 }
