@@ -141,6 +141,59 @@ function getMyTelegramUser() {
 let myTelegramId = null;
 let myTelegramName = null;
 
+// ===== ЛОКАЛИЗАЦИЯ (i18n) =====
+let currentLang = localStorage.getItem("shashki_lang");
+if (!currentLang) {
+    let tgLang = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.language_code) ? Telegram.WebApp.initDataUnsafe.user.language_code : "ru";
+    if (tgLang === "ru" || tgLang === "en" || tgLang === "it") {
+        currentLang = tgLang;
+    } else {
+        currentLang = "ru"; // Для всех остальных языков по умолчанию русский
+    }
+    localStorage.setItem("shashki_lang", currentLang);
+}
+
+// Словарь переводов (пока пустой, заполним на следующих этапах)
+const translations = {
+    ru: { },
+    en: { },
+    it: { }
+};
+
+// Функция получения перевода по ключу
+function t(key) {
+    return (translations[currentLang] && translations[currentLang][key]) || (translations['ru'] && translations['ru'][key]) || key;
+}
+
+// Функция применения переводов к HTML-элементам с атрибутом data-i18n
+function applyTranslationsToDOM() {
+    document.querySelectorAll("[data-i18n]").forEach(function(el) {
+        const key = el.getAttribute("data-i18n");
+        el.textContent = t(key);
+    });
+    // Обновляем текст и флаг на кнопке переключения языка
+    const langBtn = document.getElementById("btn-change-lang");
+    if (langBtn) {
+        let flag = "🇷🇺";
+        if (currentLang === "en") flag = "🇺🇸";
+        if (currentLang === "it") flag = "🇮🇹";
+        langBtn.textContent = flag + " " + currentLang.toUpperCase();
+    }
+}
+
+// Обработчик кнопки ручного переключения языка
+const btnChangeLang = document.getElementById("btn-change-lang");
+if (btnChangeLang) {
+    btnChangeLang.addEventListener("click", function() {
+        if (currentLang === "ru") currentLang = "en";
+        else if (currentLang === "en") currentLang = "it";
+        else currentLang = "ru";
+        
+        localStorage.setItem("shashki_lang", currentLang);
+        applyTranslationsToDOM(); // Применяем новый язык сразу
+    });
+}
+
 // ===== ЭКРАНЫ =====
 
 const menuScreen = document.getElementById("menu-screen");
@@ -3313,6 +3366,9 @@ function startApp() {
         let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName;
         greetingNameSpan.textContent = displayName;
     }
+
+    // Применяем переводы к интерфейсу при старте
+    applyTranslationsToDOM();
 
     const joinedViaLink = checkForInviteLink();
     if (!joinedViaLink) {
