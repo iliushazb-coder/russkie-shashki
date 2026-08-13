@@ -99,10 +99,10 @@
 
     <div id="resign-confirm-modal" class="hidden modal-overlay">
         <div class="modal-box">
-            <p>Вы уверены, что хотите сдаться?</p>
+            <p data-i18n="confirm_resign">Вы уверены, что хотите сдаться?</p>
             <div class="modal-buttons">
-                <button id="btn-resign-yes" class="menu-button danger-button">Да</button>
-                <button id="btn-resign-no" class="menu-button">Нет</button>
+                <button id="btn-resign-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
+                <button id="btn-resign-no" class="menu-button" data-i18n="btn_no">Нет</button>
             </div>
         </div>
     </div>
@@ -111,8 +111,8 @@
         <div class="modal-box">
             <p id="end-game-text" class="end-game-text"></p>
             <div class="modal-buttons">
-                <button id="btn-new-game" class="menu-button">Реванш</button>
-                <button id="btn-close-game" class="menu-button">Закрыть</button>
+                <button id="btn-new-game" class="menu-button" data-i18n="btn_rematch">Реванш</button>
+                <button id="btn-close-game" class="menu-button" data-i18n="btn_close">Закрыть</button>
             </div>
         </div>
     </div>
@@ -121,8 +121,8 @@
         <div class="modal-box">
             <p id="opponent-left-text" class="end-game-text"></p>
             <div class="modal-buttons">
-                <button id="btn-new-game-after-leave" class="menu-button">Новая игра</button>
-                <button id="btn-close-after-leave" class="menu-button">Закрыть</button>
+                <button id="btn-new-game-after-leave" class="menu-button" data-i18n="btn_new_game">Новая игра</button>
+                <button id="btn-close-after-leave" class="menu-button" data-i18n="btn_close">Закрыть</button>
             </div>
         </div>
     </div>
@@ -131,35 +131,35 @@
         <div class="modal-box">
             <p id="info-modal-text" class="end-game-text"></p>
             <div class="modal-buttons">
-                <button id="btn-info-new-game" class="menu-button hidden">Начать новую игру</button>
-                <button id="btn-info-close" class="menu-button">Закрыть</button>
+                <button id="btn-info-new-game" class="menu-button hidden" data-i18n="btn_start_new_game">Начать новую игру</button>
+                <button id="btn-info-close" class="menu-button" data-i18n="btn_close">Закрыть</button>
             </div>
         </div>
     </div>
 
    <div id="stats-modal" class="hidden modal-overlay">
         <div class="modal-box">
-            <p class="end-game-text">📊 Топ игроков (Онлайн)</p>
+            <p class="end-game-text" data-i18n="stats_top_online">📊 Топ игроков (Онлайн)</p>
             <div id="stats-leaderboard" class="stats-leaderboard"></div>
             
             <hr style="width: 100%; border: 0; border-top: 1px solid rgba(255,210,130,0.2); margin: 20px 0;">
             
-            <p class="end-game-text">🤖 Топ игроков (Против бота)</p>
+            <p class="end-game-text" data-i18n="stats_top_bot">🤖 Топ игроков (Против бота)</p>
             <div id="stats-leaderboard-bot" class="stats-leaderboard"></div>
             
             <div class="modal-buttons">
-                <button id="btn-stats-close" class="menu-button">Назад</button>
+                <button id="btn-stats-close" class="menu-button" data-i18n="btn_back">Назад</button>
             </div>
         </div>
     </div>
 
     <div id="offline-opponent-modal" class="hidden modal-overlay">
         <div class="modal-box">
-            <p class="end-game-text">Соперник офлайн</p>
+            <p class="end-game-text" data-i18n="modal_offline_opp">Соперник офлайн</p>
             <p id="offline-opponent-text" class="stats-summary"></p>
             <div class="modal-buttons">
-                <button id="btn-offline-play-bot" class="menu-button">🤖 Играть с ботом</button>
-                <button id="btn-offline-invite-friend" class="menu-button">👥 Пригласить другого друга</button>
+                <button id="btn-offline-play-bot" class="menu-button" data-i18n="btn_play_bot_offline">🤖 Играть с ботом</button>
+                <button id="btn-offline-invite-friend" class="menu-button" data-i18n="btn_invite_other">👥 Пригласить другого друга</button>
             </div>
         </div>
     </div>
@@ -168,8 +168,8 @@
         <div class="modal-box">
             <p id="rematch-request-text" class="end-game-text"></p>
             <div class="modal-buttons">
-                <button id="btn-rematch-accept" class="menu-button">✅ Принять</button>
-                <button id="btn-rematch-decline" class="menu-button danger-button">❌ Отклонить</button>
+                <button id="btn-rematch-accept" class="menu-button" data-i18n="btn_accept">✅ Принять</button>
+                <button id="btn-rematch-decline" class="menu-button danger-button" data-i18n="btn_decline">❌ Отклонить</button>
             </div>
         </div>
     </div>
@@ -177,9 +177,9 @@
         <div class="modal-box">
             <p id="draw-offer-text" class="end-game-text"></p>
             <div class="modal-buttons">
-                <button id="btn-draw-accept" class="menu-button">✅ Принять</button>
-                <button id="btn-draw-decline" class="menu-button danger-button">❌ Отклонить</button>
-                <button id="btn-draw-cancel" class="menu-button hidden">Отменить предложение</button>
+                <button id="btn-draw-accept" class="menu-button" data-i18n="btn_accept">✅ Принять</button>
+                <button id="btn-draw-decline" class="menu-button danger-button" data-i18n="btn_decline">❌ Отклонить</button>
+                <button id="btn-draw-cancel" class="menu-button hidden" data-i18n="btn_cancel_offer">Отменить предложение</button>
             </div>
         </div>
     </div>
