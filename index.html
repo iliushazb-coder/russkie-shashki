@@ -10,18 +10,18 @@
     <link rel="stylesheet" href="style.css?v=6">
 </head>
 <body>
-    <h1>Русские Шашки 🎮</h1>
+    <h1 data-i18n="h1_title">Русские Шашки 🎮</h1>
 
     <div id="menu-screen">
-        <div id="no-active-game-text" class="hidden section-title">Нет активной игры</div>
+        <div id="no-active-game-text" class="hidden section-title" data-i18n="no_active_game">Нет активной игры</div>
         <div id="active-rooms-section" class="hidden">
-            <p class="section-title">Активные игры</p>
+            <p class="section-title" data-i18n="active_games">Активные игры</p>
             <div id="active-rooms-list"></div>
         </div>
-        <button id="btn-play-online" class="menu-button">👥 Кто играет?</button>
-        <button id="btn-play-friend" class="menu-button">👥 Играть с другом</button>
-        <button id="btn-play-bot" class="menu-button">🤖 Играть с ботом</button>
-        <button id="btn-show-stats" class="menu-button">📊 Моя статистика</button>
+        <button id="btn-play-online" class="menu-button" data-i18n="btn_play_online">👥 Кто играет?</button>
+        <button id="btn-play-friend" class="menu-button" data-i18n="btn_play_friend">👥 Играть с другом</button>
+        <button id="btn-play-bot" class="menu-button" data-i18n="btn_play_bot">🤖 Играть с ботом</button>
+        <button id="btn-show-stats" class="menu-button" data-i18n="btn_show_stats">📊 Моя статистика</button>
         
         <div class="lang-switcher">
             <button class="lang-btn" data-lang="ru">🇷🇺</button>
@@ -31,14 +31,14 @@
     </div>
 
     <div id="time-control-screen" class="hidden">
-        <p>Выбери контроль времени на ход:</p>
-        <button class="menu-button time-option" data-seconds="0">Без ограничения</button>
-        <button class="menu-button time-option" data-seconds="30">30 секунд на ход</button>
-        <button class="menu-button time-option" data-seconds="60">1 минута на ход</button>
-        <button class="menu-button time-option" data-seconds="120">2 минуты на ход</button>
-        <button class="menu-button time-option" data-seconds="180">3 минуты на ход</button>
-        <button class="menu-button time-option" data-seconds="300">5 минут на ход</button>
-        <button id="btn-back-from-time-control" class="menu-button danger-button" style="margin-top: 15px;">Назад</button>
+        <p data-i18n="time_control_prompt">Выбери контроль времени на ход:</p>
+        <button class="menu-button time-option" data-seconds="0" data-i18n="time_0">Без ограничения</button>
+        <button class="menu-button time-option" data-seconds="30" data-i18n="time_30">30 секунд на ход</button>
+        <button class="menu-button time-option" data-seconds="60" data-i18n="time_60">1 минута на ход</button>
+        <button class="menu-button time-option" data-seconds="120" data-i18n="time_120">2 минуты на ход</button>
+        <button class="menu-button time-option" data-seconds="180" data-i18n="time_180">3 минуты на ход</button>
+        <button class="menu-button time-option" data-seconds="300" data-i18n="time_300">5 минут на ход</button>
+        <button id="btn-back-from-time-control" class="menu-button danger-button" style="margin-top: 15px;" data-i18n="btn_back">Назад</button>
     </div>
 
     <div id="matchmaking-screen" class="hidden">
@@ -49,16 +49,16 @@
     </div>
 
     <div id="group-lobby-screen" class="hidden">
-        <h2>👥 Кто играет?</h2>
+        <h2 data-i18n="btn_play_online">👥 Кто играет?</h2>
         <div id="group-rooms-list"></div>
-        <button id="btn-back-to-menu" class="menu-button danger-button" style="margin-top: 15px;">Назад</button>
+        <button id="btn-back-to-menu" class="menu-button danger-button" style="margin-top: 15px;" data-i18n="btn_back">Назад</button>
     </div>
 
     <div id="waiting-screen" class="hidden">
-        <p>Отправь эту ссылку другу:</p>
+        <p data-i18n="waiting_link_prompt">Отправь эту ссылку другу:</p>
         <div id="invite-link-box"></div>
-        <button id="btn-share-link" class="menu-button">📤 Отправить другу</button>
-        <p id="waiting-text">Ожидание подключения друга...</p>
+        <button id="btn-share-link" class="menu-button" data-i18n="btn_share_link">📤 Отправить другу</button>
+        <p id="waiting-text" data-i18n="waiting_friend">Ожидание подключения друга...</p>
     </div>
 
     <div id="game-screen" class="hidden">
