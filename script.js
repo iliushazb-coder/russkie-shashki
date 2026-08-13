@@ -185,7 +185,10 @@ const translations = {
         status_offline: "Оффлайн",
         status_left: "осталось",
         sec: "с",
-        status_connecting: "подключение..."
+        status_connecting: "подключение...",
+        draw_agreed: "🤝 Ничья!\nОба игрока согласились закончить партию.",
+        btn_to_menu: "В меню",
+        btn_close: "Закрыть"
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -217,7 +220,10 @@ const translations = {
         status_offline: "Offline",
         status_left: "left",
         sec: "s",
-        status_connecting: "connecting..."
+        status_connecting: "connecting...",
+        draw_agreed: "🤝 Draw!\nBoth players agreed to end the game.",
+        btn_to_menu: "To menu",
+        btn_close: "Close"
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -249,7 +255,10 @@ const translations = {
         status_offline: "Offline",
         status_left: "rimasti",
         sec: "s",
-        status_connecting: "connessione..."
+        status_connecting: "connessione...",
+        draw_agreed: "🤝 Pareggio!\nEntrambi i giocatori hanno concordato di terminare.",
+        btn_to_menu: "Al menu",
+        btn_close: "Chiudi"
     }
 };
 
@@ -1399,12 +1408,12 @@ function updateTimerDisplay() {
 function renderEndGameModal() {
     if (currentState && currentState.winner) {
         if (currentState.winner === "draw") {
-            endGameText.textContent = "🤝 Ничья!\nОба игрока согласились закончить партию.";
+            endGameText.textContent = t("draw_agreed");
         } else {
             const winnerColor = currentState.winner;
             const loserColor = winnerColor === "light" ? "dark" : "light";
-            const winnerName = (currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].name) || (winnerColor === "light" ? "Белые" : "Чёрные");
-            const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? "Белые" : "Чёрные");
+            const winnerName = (currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].name) || (winnerColor === "light" ? t("whites") : t("blacks"));
+            const loserName = (currentState.players && currentState.players[loserColor] && currentState.players[loserColor].name) || (loserColor === "light" ? t("whites") : t("blacks"));
             const winnerIcon = "✅";
             const loserIcon = "❌";
 
@@ -1421,11 +1430,11 @@ function renderEndGameModal() {
             if (isSpectator) {
                 btnNewGame.classList.add("hidden");
                 btnCloseGame.classList.remove("hidden");
-                btnCloseGame.textContent = "В меню";
+                btnCloseGame.textContent = t("btn_to_menu");
             } else {
                 btnNewGame.classList.remove("hidden");
                 btnCloseGame.classList.remove("hidden");
-                btnCloseGame.textContent = "Закрыть";
+                btnCloseGame.textContent = t("btn_close");
             }
         }
 
