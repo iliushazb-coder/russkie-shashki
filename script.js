@@ -171,28 +171,24 @@ function applyTranslationsToDOM() {
         const key = el.getAttribute("data-i18n");
         el.textContent = t(key);
     });
-    // Обновляем текст и флаг на кнопке переключения языка
-    const langBtn = document.getElementById("btn-change-lang");
-    if (langBtn) {
-        let flag = "🇷🇺";
-        if (currentLang === "en") flag = "🇺🇸";
-        if (currentLang === "it") flag = "🇮🇹";
-        langBtn.textContent = flag + " " + currentLang.toUpperCase();
-    }
+    // Обновляем подсветку активного флага
+    document.querySelectorAll(".lang-btn").forEach(function(btn) {
+        if (btn.getAttribute("data-lang") === currentLang) {
+            btn.classList.add("active");
+        } else {
+            btn.classList.remove("active");
+        }
+    });
 }
 
-// Обработчик кнопки ручного переключения языка
-const btnChangeLang = document.getElementById("btn-change-lang");
-if (btnChangeLang) {
-    btnChangeLang.addEventListener("click", function() {
-        if (currentLang === "ru") currentLang = "en";
-        else if (currentLang === "en") currentLang = "it";
-        else currentLang = "ru";
-        
+// Обработчики кнопок ручного переключения языка (три отдельных флага)
+document.querySelectorAll(".lang-btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+        currentLang = btn.getAttribute("data-lang");
         localStorage.setItem("shashki_lang", currentLang);
         applyTranslationsToDOM(); // Применяем новый язык сразу
     });
-}
+});
 
 // ===== ЭКРАНЫ =====
 
