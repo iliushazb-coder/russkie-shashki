@@ -214,7 +214,9 @@ const translations = {
         err_draw_connection: "Ошибка соединения при принятии ничьей.",
         err_rematch_failed: "Не удалось начать реванш. Возможно, потеряно соединение.",
         loading: "Загрузка...",
-        lobby_empty: "Пока никто не играет"
+        lobby_empty: "Пока никто не играет",
+        btn_back_bot: "👈 Назад",
+        confirm_back_bot: "Вы точно хотите выйти?"
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -275,7 +277,9 @@ const translations = {
         err_draw_connection: "Connection error during draw acceptance.",
         err_rematch_failed: "Failed to start rematch. Connection might be lost.",
         loading: "Loading...",
-        lobby_empty: "Nobody is playing right now"
+        lobby_empty: "Nobody is playing right now",
+        btn_back_bot: "👈 Back",
+        confirm_back_bot: "Are you sure you want to exit?"
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -336,7 +340,9 @@ const translations = {
         err_draw_connection: "Errore di connessione durante il pareggio.",
         err_rematch_failed: "Impossibile avviare la rivincita. Connessione persa.",
         loading: "Caricamento...",
-        lobby_empty: "Nessuno sta giocando"
+        lobby_empty: "Nessuno sta giocando",
+        btn_back_bot: "👈 Indietro",
+        confirm_back_bot: "Sei sicuro di voler uscire?"
     }
 };
 
@@ -389,6 +395,10 @@ const btnResign = document.getElementById("btn-resign");
 const resignConfirmModal = document.getElementById("resign-confirm-modal");
 const btnResignYes = document.getElementById("btn-resign-yes");
 const btnResignNo = document.getElementById("btn-resign-no");
+const btnBackBot = document.getElementById("btn-back-bot");
+const backConfirmModal = document.getElementById("back-confirm-modal");
+const btnBackBotYes = document.getElementById("btn-back-bot-yes");
+const btnBackBotNo = document.getElementById("btn-back-bot-no");
 const endGameModal = document.getElementById("end-game-modal");
 const endGameText = document.getElementById("end-game-text");
 const btnNewGame = document.getElementById("btn-new-game");
@@ -1809,6 +1819,7 @@ function startOnlineGame() {
     
     // Показываем кнопки реакций только для онлайн-игр
     if (reactionsRow) reactionsRow.classList.remove("hidden");
+    if (btnBackBot) btnBackBot.classList.add("hidden"); // Прячем кнопку "Назад" для бота
 
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
@@ -2056,6 +2067,7 @@ function startOfflineGame() {
     
     // Прячем кнопки реакций в игре с ботом
     if (reactionsRow) reactionsRow.classList.add("hidden");
+    if (btnBackBot) btnBackBot.classList.remove("hidden"); // Показываем кнопку "Назад" для бота
     
     // Сохраняем список зрителей перед пересозданием объекта состояния,
     // чтобы при реванше с ботом строчка "Смотрят: ..." не пропадала.
@@ -2376,6 +2388,26 @@ btnResign.addEventListener("click", function () {
 btnResignNo.addEventListener("click", function () {
     resignConfirmModal.classList.add("hidden");
 });
+
+if (btnBackBot) {
+    btnBackBot.addEventListener("click", function() {
+        if (backConfirmModal) backConfirmModal.classList.remove("hidden");
+    });
+}
+if (btnBackBotNo) {
+    btnBackBotNo.addEventListener("click", function() {
+        if (backConfirmModal) backConfirmModal.classList.add("hidden");
+    });
+}
+if (btnBackBotYes) {
+    btnBackBotYes.addEventListener("click", function() {
+        if (backConfirmModal) backConfirmModal.classList.add("hidden");
+        stopBotSpectateRoom(); // Удаляем фантомную комнату
+        isBotGame = false;
+        showScreen(menuScreen);
+        loadActiveRooms();
+    });
+}
 
 btnResignYes.addEventListener("click", function () {
     resignConfirmModal.classList.add("hidden");
