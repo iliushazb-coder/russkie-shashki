@@ -916,6 +916,7 @@ let currentState = null;
 let selectedFrom = null;
 let flipped = false;
 let lastSeenMoveCount = -1;
+let isLocalStateOptimistic = false; // Флаг: сделали ли мы локальный ход, который ещё не подтверждён сервером
 let endGameShownForRoom = null;
 let pieceElements = {};
 let lastRenderedSignature = null;
@@ -1687,11 +1688,18 @@ function forceResyncFromServer() {
         // МЕНЬШЕ того, что мы уже знаем (например, мы уже получили ход 6, а сервер 
         // с опозданием вернул ход 5) — полностью игнорируем этот ответ.
         if (newState.moveCount < lastSeenMoveCount) {
-            console.log("Force resync ignored stale state.");
-            return;
+            // Если мы НЕ в оптимистичном состоянии — это реальное устаревшее эхо, игнорируем.
+            if (!isLocalStateOptimistic) {
+                console.log("Force resync ignored stale state.");
+                return;
+            }
+            // Если мы В оптимистичном состоянии, но сервер вернул старый ход —
+            // значит наш ход провалился. Мы ОБЯЗАНЫ откатиться назад.
+            console.log("Force resync rolling back optimistic move...");
         }
 
         currentState = newState;
+        isLocalStateOptimistic = false; // Откатились к серверной реальности, сбрасываем флаг
         
         // ОБЯЗАТЕЛЬНО обновляем lastSeenMoveCount, чтобы основной слушатель 
         // не сбился и не заблокировал будущие обновления.
@@ -1743,6 +1751,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
 
         lastSeenMoveCount = currentState.moveCount;
         lastRenderedSignature = computeGameSignature(currentState);
+        isLocalStateOptimistic = true; // Ставим флаг, что мы ушли в оптимистичное состояние
 
         playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
         renderBoard();
@@ -1841,6 +1850,7 @@ function startOnlineGame() {
     isOnlineGame = true;
     flipped = (myColor === "dark");
     lastSeenMoveCount = -1;
+    isLocalStateOptimistic = false; // Сбрасываем флаг при новой игре
     selectedFrom = null;
     endGameShownForRoom = null;
     statsRecordedForRoom = null;
@@ -1955,6 +1965,7 @@ function startOnlineGame() {
             }
             lastSeenMoveCount = currentState.moveCount;
             lastRenderedSignature = newSignature;
+            isLocalStateOptimistic = false; // Сервер прислал реальный апдейт, сбрасываем флаг
             renderBoard();
         } else if (currentState) {
             currentState.presence = newState.presence;
