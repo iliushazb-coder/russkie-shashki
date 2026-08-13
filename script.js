@@ -173,7 +173,19 @@ const translations = {
         btn_back: "Назад",
         waiting_link_prompt: "Отправь эту ссылку другу:",
         btn_share_link: "📤 Отправить другу",
-        waiting_friend: "Ожидание подключения друга..."
+        waiting_friend: "Ожидание подключения друга...",
+        btn_draw: "🤝 Ничья",
+        btn_resign: "🏳 Сдаться",
+        timer_move: "Ход",
+        timer_time_left: "осталось",
+        whites: "Белые",
+        blacks: "Чёрные",
+        spectators: "Смотрят",
+        status_in_game: "В игре",
+        status_offline: "Оффлайн",
+        status_left: "осталось",
+        sec: "с",
+        status_connecting: "подключение..."
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -193,7 +205,19 @@ const translations = {
         btn_back: "Back",
         waiting_link_prompt: "Send this link to a friend:",
         btn_share_link: "📤 Send to friend",
-        waiting_friend: "Waiting for friend to connect..."
+        waiting_friend: "Waiting for friend to connect...",
+        btn_draw: "🤝 Draw",
+        btn_resign: "🏳 Resign",
+        timer_move: "Move",
+        timer_time_left: "left",
+        whites: "White",
+        blacks: "Black",
+        spectators: "Watching",
+        status_in_game: "In game",
+        status_offline: "Offline",
+        status_left: "left",
+        sec: "s",
+        status_connecting: "connecting..."
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -213,7 +237,19 @@ const translations = {
         btn_back: "Indietro",
         waiting_link_prompt: "Invia questo link a un amico:",
         btn_share_link: "📤 Invia ad un amico",
-        waiting_friend: "In attesa che l'amico si connetta..."
+        waiting_friend: "In attesa che l'amico si connetta...",
+        btn_draw: "🤝 Pareggio",
+        btn_resign: "🏳 Abbandona",
+        timer_move: "Turno",
+        timer_time_left: "rimasti",
+        whites: "Bianchi",
+        blacks: "Neri",
+        spectators: "Spettatori",
+        status_in_game: "In gioco",
+        status_offline: "Offline",
+        status_left: "rimasti",
+        sec: "s",
+        status_connecting: "connessione..."
     }
 };
 
@@ -793,7 +829,7 @@ function statusForColor(color) {
 
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
-        return { text: ratingPrefix + "подключение...", cls: "status-neutral" };
+        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
     }
     const isStale = (Date.now() - (presence.lastSeen || 0)) > STALE_MS;
     if (presence.online === false || isStale) {
@@ -801,9 +837,9 @@ function statusForColor(color) {
         const elapsed = Date.now() - (presence.lastSeen || Date.now());
         let remaining = Math.ceil((RECONNECT_GRACE_MS - elapsed) / 1000);
         if (remaining < 0) remaining = 0;
-        return { text: ratingPrefix + "Оффлайн (осталось " + remaining + "с)", cls: "status-left" };
+        return { text: ratingPrefix + t("status_offline") + " (" + t("status_left") + " " + remaining + t("sec") + ")", cls: "status-left" };
     }
-    return { text: ratingPrefix + "В игре", cls: "status-online" };
+    return { text: ratingPrefix + t("status_in_game"), cls: "status-online" };
 }
 
 function applyStatusToElement(el, panelEl, statusInfo) {
@@ -831,7 +867,7 @@ function renderSpectatorsList() {
         el.textContent = "";
         return;
     }
-    el.textContent = "👁 Смотрят: " + names.join(", ");
+    el.textContent = "👁 " + t("spectators") + ": " + names.join(", ");
     el.classList.remove("hidden");
 }
 
@@ -1356,8 +1392,8 @@ function updateTimerDisplay() {
     const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
     let remaining = currentState.timeControlSeconds - elapsed;
     if (remaining > currentState.timeControlSeconds) remaining = currentState.timeControlSeconds;
-    const whoseTurn = currentState.turn === "light" ? "Белые" : "Чёрные";
-    turnTimerDiv.textContent = "⏱ Ход: " + whoseTurn + " — осталось " + formatTime(remaining);
+    const whoseTurn = currentState.turn === "light" ? t("whites") : t("blacks");
+    turnTimerDiv.textContent = "⏱ " + t("timer_move") + ": " + whoseTurn + " — " + t("timer_time_left") + " " + formatTime(remaining);
 }
 
 function renderEndGameModal() {
