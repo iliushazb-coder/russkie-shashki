@@ -212,7 +212,9 @@ const translations = {
         err_resign_connection: "Ошибка соединения при сдаче.",
         err_draw_failed: "Не удалось принять ничью. Возможно, игра уже завершена.",
         err_draw_connection: "Ошибка соединения при принятии ничьей.",
-        err_rematch_failed: "Не удалось начать реванш. Возможно, потеряно соединение."
+        err_rematch_failed: "Не удалось начать реванш. Возможно, потеряно соединение.",
+        loading: "Загрузка...",
+        lobby_empty: "Пока никто не играет"
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -271,7 +273,9 @@ const translations = {
         err_resign_connection: "Connection error during resignation.",
         err_draw_failed: "Failed to accept draw. The game might be over.",
         err_draw_connection: "Connection error during draw acceptance.",
-        err_rematch_failed: "Failed to start rematch. Connection might be lost."
+        err_rematch_failed: "Failed to start rematch. Connection might be lost.",
+        loading: "Loading...",
+        lobby_empty: "Nobody is playing right now"
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -330,7 +334,9 @@ const translations = {
         err_resign_connection: "Errore di connessione durante l'abbandono.",
         err_draw_failed: "Impossibile accettare il pareggio. La partita potrebbe essere finita.",
         err_draw_connection: "Errore di connessione durante il pareggio.",
-        err_rematch_failed: "Impossibile avviare la rivincita. Connessione persa."
+        err_rematch_failed: "Impossibile avviare la rivincita. Connessione persa.",
+        loading: "Caricamento...",
+        lobby_empty: "Nessuno sta giocando"
     }
 };
 
@@ -3581,7 +3587,7 @@ function showGroupLobby() {
     if (!groupLobbyScreen || !groupRoomsList) return;
     
     showScreen(groupLobbyScreen);
-    groupRoomsList.innerHTML = '<p class="section-title">Загрузка...</p>';
+    groupRoomsList.innerHTML = '<p class="section-title">' + t("loading") + '</p>';
 
     // Важно: отключаем предыдущую "слежку" за списком, если она ещё была
     // активна (например, при повторном входе) — иначе они накапливаются
@@ -3685,7 +3691,7 @@ function showGroupLobby() {
             finalHtml += '<p class="section-title" style="margin-top: 15px;">Идут игры</p>' + activeHtml;
         }
         if (!finalHtml) {
-            finalHtml = '<p class="section-title">Пока никто не играет</p>';
+            finalHtml = '<p class="section-title">' + t("lobby_empty") + '</p>';
         }
         groupRoomsList.innerHTML = finalHtml;
 
