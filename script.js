@@ -1165,11 +1165,15 @@ function cleanupAbandonedRoom() {
 function handleVisibilityChange() {
     if (!myPresenceRef) return;
 
-    // Сворачивание Mini App НЕ означает, что игрок покинул игру.
-    // Поэтому при document.hidden ничего не меняем.
-    // Реальный разрыв соединения обработает Firebase onDisconnect(),
-    // а явный выход из игры — markMyselfLeftExplicitly().
-    if (!document.hidden) {
+    if (document.hidden) {
+        // Mini App ушёл в фон: соперник сразу видит Offline
+        // и начинает отсчёт 60 секунд на возвращение.
+        myPresenceRef.update({
+            online: false,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP
+        });
+    } else {
+        // Игрок вернулся в игру — сразу снова Online.
         myPresenceRef.update({
             online: true,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
@@ -1196,12 +1200,11 @@ function setupPresence() {
     presenceRef.onDisconnect().update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
 
     presenceHeartbeatInterval = setInterval(function () {
+        if (document.hidden) return;
         presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }, 4000);
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("blur", handleVisibilityChange);
-    window.addEventListener("focus", handleVisibilityChange);
 }
 
 function stopPresenceHeartbeat() {
@@ -1210,8 +1213,6 @@ function stopPresenceHeartbeat() {
         presenceHeartbeatInterval = null;
     }
     document.removeEventListener("visibilitychange", handleVisibilityChange);
-    window.removeEventListener("blur", handleVisibilityChange);
-    window.removeEventListener("focus", handleVisibilityChange);
 }
 
 function markMyselfLeftExplicitly() {
