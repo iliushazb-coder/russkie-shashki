@@ -189,6 +189,7 @@ const translations = {
         draw_agreed: "🤝 Ничья!\nОба игрока согласились закончить партию.",
         btn_to_menu: "В меню",
         btn_close: "Закрыть",
+        btn_ok: "ОК",
         waiting_rematch: "⏳ Ждём ответа соперника на реванш...",
         offers_rematch: " предлагает сыграть ещё раз",
         waiting_draw: "⏳ Ждём ответа соперника на ничью...",
@@ -238,6 +239,7 @@ const translations = {
         stats_no_online_games: "Пока никто не сыграл ни одной партии",
         stats_load_error: "Не удалось загрузить рейтинг",
         stats_no_bot_games: "Пока никто не играл с ботом",
+        stats_games_word: "партий",
         lobby_waiting: "Ждут игру",
         lobby_active: "Идут игры",
         matchmaking_searching: "Поиск соперника...",
@@ -280,6 +282,7 @@ const translations = {
         draw_agreed: "🤝 Draw!\nBoth players agreed to end the game.",
         btn_to_menu: "To menu",
         btn_close: "Close",
+        btn_ok: "OK",
         waiting_rematch: "⏳ Waiting for opponent's response to rematch...",
         offers_rematch: " offers a rematch",
         waiting_draw: "⏳ Waiting for opponent's response to draw...",
@@ -329,6 +332,7 @@ const translations = {
         stats_no_online_games: "No online games have been played yet",
         stats_load_error: "Failed to load leaderboard",
         stats_no_bot_games: "No games against the bot have been played yet",
+        stats_games_word: "games",
         lobby_waiting: "Waiting for a game",
         lobby_active: "Games in progress",
         matchmaking_searching: "Searching for an opponent...",
@@ -371,6 +375,7 @@ const translations = {
         draw_agreed: "🤝 Pareggio!\nEntrambi i giocatori hanno concordato di terminare.",
         btn_to_menu: "Al menu",
         btn_close: "Chiudi",
+        btn_ok: "OK",
         waiting_rematch: "⏳ In attesa di risposta per la rivincita...",
         offers_rematch: " offre una rivincita",
         waiting_draw: "⏳ In attesa di risposta per il pareggio...",
@@ -420,6 +425,7 @@ const translations = {
         stats_no_online_games: "Non è stata ancora giocata nessuna partita online",
         stats_load_error: "Impossibile caricare la classifica",
         stats_no_bot_games: "Non è stata ancora giocata nessuna partita contro il bot",
+        stats_games_word: "partite",
         lobby_waiting: "In attesa di una partita",
         lobby_active: "Partite in corso",
         matchmaking_searching: "Ricerca di un avversario...",
@@ -2835,10 +2841,10 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
     infoModalText.textContent = text;
     if (offerNewGame) {
         btnInfoNewGame.classList.remove("hidden");
-        btnInfoClose.textContent = "Закрыть";
+        btnInfoClose.textContent = t("btn_close");
     } else {
         btnInfoNewGame.classList.add("hidden");
-        btnInfoClose.textContent = "ОК";
+        btnInfoClose.textContent = t("btn_ok");
     }
     infoModal.classList.remove("hidden");
 }
@@ -3107,7 +3113,7 @@ function renderStatsRow(rank, name, wins, losses) {
     }
     
     const infoSpan = document.createElement("span");
-    infoSpan.textContent = "🏆 " + wins + " · ❌ " + losses + " · " + total + " партий";
+    infoSpan.textContent = "🏆 " + wins + " · ❌ " + losses + " · " + total + " " + t("stats_games_word");
     row.appendChild(rankSpan);
     row.appendChild(infoSpan);
     return row;
