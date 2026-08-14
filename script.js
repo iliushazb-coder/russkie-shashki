@@ -230,7 +230,21 @@ const translations = {
         btn_invite_other: "👥 Пригласить другого друга",
         btn_accept: "✅ Принять",
         btn_decline: "❌ Отклонить",
-        btn_cancel_offer: "Отменить предложение"
+        btn_cancel_offer: "Отменить предложение",
+        checking_game: "Проверяем игру...",
+        connecting_to_friend: "Подключаемся к другу...",
+        game_against: "Игра против",
+        remove_from_list: "Убрать из списка",
+        stats_no_online_games: "Пока никто не сыграл ни одной партии",
+        stats_load_error: "Не удалось загрузить рейтинг",
+        stats_no_bot_games: "Пока никто не играл с ботом",
+        lobby_waiting: "Ждут игру",
+        lobby_active: "Идут игры",
+        matchmaking_searching: "Поиск соперника...",
+        matchmaking_count_one: "Сейчас в поиске: {count} игрок",
+        matchmaking_count_few: "Сейчас в поиске: {count} игрока",
+        matchmaking_count_many: "Сейчас в поиске: {count} игроков",
+        matchmaking_cancel: "🔴 Отменить поиск"
     },
     en: {
         h1_title: "Russian Checkers 🎮",
@@ -307,7 +321,21 @@ const translations = {
         btn_invite_other: "👥 Invite another friend",
         btn_accept: "✅ Accept",
         btn_decline: "❌ Decline",
-        btn_cancel_offer: "Cancel offer"
+        btn_cancel_offer: "Cancel offer",
+        checking_game: "Checking game...",
+        connecting_to_friend: "Connecting to friend...",
+        game_against: "Game against",
+        remove_from_list: "Remove from list",
+        stats_no_online_games: "No online games have been played yet",
+        stats_load_error: "Failed to load leaderboard",
+        stats_no_bot_games: "No games against the bot have been played yet",
+        lobby_waiting: "Waiting for a game",
+        lobby_active: "Games in progress",
+        matchmaking_searching: "Searching for an opponent...",
+        matchmaking_count_one: "Currently searching: {count} player",
+        matchmaking_count_few: "Currently searching: {count} players",
+        matchmaking_count_many: "Currently searching: {count} players",
+        matchmaking_cancel: "🔴 Cancel search"
     },
     it: {
         h1_title: "Dama Russa 🎮",
@@ -384,7 +412,21 @@ const translations = {
         btn_invite_other: "👥 Invita un altro amico",
         btn_accept: "✅ Accetta",
         btn_decline: "❌ Rifiuta",
-        btn_cancel_offer: "Annulla offerta"
+        btn_cancel_offer: "Annulla offerta",
+        checking_game: "Controllo della partita...",
+        connecting_to_friend: "Connessione all'amico...",
+        game_against: "Partita contro",
+        remove_from_list: "Rimuovi dall'elenco",
+        stats_no_online_games: "Non è stata ancora giocata nessuna partita online",
+        stats_load_error: "Impossibile caricare la classifica",
+        stats_no_bot_games: "Non è stata ancora giocata nessuna partita contro il bot",
+        lobby_waiting: "In attesa di una partita",
+        lobby_active: "Partite in corso",
+        matchmaking_searching: "Ricerca di un avversario...",
+        matchmaking_count_one: "Attualmente in ricerca: {count} giocatore",
+        matchmaking_count_few: "Attualmente in ricerca: {count} giocatori",
+        matchmaking_count_many: "Attualmente in ricerca: {count} giocatori",
+        matchmaking_cancel: "🔴 Annulla ricerca"
     }
 };
 
@@ -1584,6 +1626,7 @@ function renderEndGameModal() {
 let statsRecordedForRoom = null;
 
 function recordGameResult() {
+    if (isSpectator) return; // Зритель никогда не участвует в статистике
     if (!isOnlineGame && !isBotGame) return; // Если это не онлайн и не бот — выходим
     if (!currentState || !currentState.winner) return;
     if (currentState.winner === "draw") return;
@@ -2230,7 +2273,7 @@ function loadActiveRooms() {
 
                         const btn = document.createElement("button");
                         btn.className = "menu-button room-item-button";
-                        btn.textContent = "Игра против " + item.opponent;
+                        btn.textContent = t("game_against") + " " + item.opponent;
                         btn.addEventListener("click", function () {
                             roomCode = item.code;
                             myColor = item.color;
@@ -2242,7 +2285,7 @@ function loadActiveRooms() {
                         const removeBtn = document.createElement("button");
                         removeBtn.className = "room-item-remove";
                         removeBtn.textContent = "✕";
-                        removeBtn.title = "Убрать из списка";
+                        removeBtn.title = t("remove_from_list");
                         removeBtn.addEventListener("click", function (e) {
                             e.stopPropagation();
                             database.ref("users/" + myTelegramId + "/rooms/" + item.code).remove().then(function () {
@@ -2811,7 +2854,7 @@ function checkForInviteLink() {
     roomCode = startParam;
 
     showScreen(waitingScreen);
-    waitingText.textContent = "Проверяем игру...";
+    waitingText.textContent = t("checking_game");
     inviteLinkBox.classList.add("hidden");
     btnShareLink.classList.add("hidden");
 
@@ -2872,45 +2915,81 @@ function checkForInviteLink() {
             return;
         }
 
-        if (room.players && room.players.dark && room.players.dark.id && room.players.dark.id !== myTelegramId) {
+        waitingText.textContent = t("connecting_to_friend");
+
+        database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
+            // Комната могла измениться после первоначального чтения.
+            // Все критические проверки выполняем именно внутри transaction.
+            if (!currentRoom || currentRoom.status !== "waiting" || currentRoom.winner) {
+                return;
+            }
+
+            // Атомарно проверяем, свободно ли место чёрных.
+            // Если другой игрок уже занял его — transaction отменяется.
+            if (currentRoom.players &&
+                currentRoom.players.dark &&
+                currentRoom.players.dark.id &&
+                currentRoom.players.dark.id !== myTelegramId) {
+                return;
+            }
+
+            currentRoom.players = currentRoom.players || {};
+            currentRoom.players.dark = {
+                id: myTelegramId,
+                name: myTelegramName
+            };
+            currentRoom.status = "active";
+            currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+
+            return currentRoom;
+        }).then(function (result) {
+            if (settled) return;
+
+            if (!result.committed) {
+                settled = true;
+                clearTimeout(timeoutId);
+                roomCode = null;
+                myColor = "light";
+                isOnlineGame = false;
+                isSpectator = false;
+                showScreen(menuScreen);
+                loadActiveRooms();
+                showInfoModal(t("err_room_taken"), false);
+                return;
+            }
+
+            // Только после успешной атомарной записи считаем себя игроком.
+            myColor = "dark";
+            isOnlineGame = true;
+            isSpectator = false;
+
             settled = true;
             clearTimeout(timeoutId);
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal(t("err_no_active_game"), false);
-            return;
-        }
 
-        myColor = "dark";
-        isOnlineGame = true;
-        waitingText.textContent = "Подключаемся к другу...";
-
-        database.ref("rooms/" + roomCode).update({
-            status: "active",
-            "players/dark": { id: myTelegramId, name: myTelegramName },
-            turnStartedAt: firebase.database.ServerValue.TIMESTAMP
-        }).then(function () {
-            settled = true;
-            clearTimeout(timeoutId);
             database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
                 opponentName: creatorName,
                 myColor: "dark"
             });
+
             if (creatorId) {
                 database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
                     opponentName: myTelegramName
                 });
             }
+
             setTimeout(function () {
                 showScreen(gameScreen);
                 startOnlineGame();
             }, 800);
         }).catch(function () {
             if (settled) return;
+
             settled = true;
             clearTimeout(timeoutId);
             roomCode = null;
+            myColor = "light";
+            isOnlineGame = false;
+            isSpectator = false;
             showScreen(menuScreen);
             loadActiveRooms();
             showInfoModal(t("err_join_failed"), false);
@@ -3047,7 +3126,7 @@ function openStatsModal() {
         const data = snapshot.val();
         statsLeaderboard.innerHTML = "";
         if (!data) {
-            statsLeaderboard.textContent = "Пока никто не сыграл ни одной партии";
+            statsLeaderboard.textContent = t("stats_no_online_games");
             return;
         }
         const entries = Object.keys(data).map(function (key) {
@@ -3058,7 +3137,7 @@ function openStatsModal() {
             statsLeaderboard.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
         });
     }).catch(function () {
-        statsLeaderboard.textContent = "Не удалось загрузить рейтинг";
+        statsLeaderboard.textContent = t("stats_load_error");
     });
 
     // --- РЕЙТИНГ ПРОТИВ БОТА ---
@@ -3067,7 +3146,7 @@ function openStatsModal() {
             const data = snapshot.val();
             statsLeaderboardBot.innerHTML = "";
             if (!data) {
-                statsLeaderboardBot.textContent = "Пока никто не играл с ботом";
+                statsLeaderboardBot.textContent = t("stats_no_bot_games");
                 return;
             }
             const entries = Object.keys(data).map(function (key) {
@@ -3078,7 +3157,7 @@ function openStatsModal() {
                 statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
             });
         }).catch(function () {
-            if (statsLeaderboardBot) statsLeaderboardBot.textContent = "Не удалось загрузить рейтинг";
+            if (statsLeaderboardBot) statsLeaderboardBot.textContent = t("stats_load_error");
         });
     }
 }
@@ -3108,7 +3187,13 @@ function startOnlineSearch() {
         matchmakingQueueRef.on("value", function(snapshot) {
             const queue = snapshot.val() || {};
             const queueSize = Object.keys(queue).length;
-            matchmakingCount.textContent = "Сейчас в поиске: " + queueSize + " игрок" + (queueSize === 1 ? "" : (queueSize > 1 && queueSize < 5 ? "а" : "ов"));
+            const countKey = queueSize === 1
+                ? "matchmaking_count_one"
+                : (currentLang === "ru" && queueSize > 1 && queueSize < 5
+                    ? "matchmaking_count_few"
+                    : "matchmaking_count_many");
+
+            matchmakingCount.textContent = t(countKey).replace("{count}", queueSize);
             
             if (!isMatchmakingResolved) {
                 const opponentIds = Object.keys(queue).filter(id => id !== myTelegramId);
@@ -3770,10 +3855,10 @@ function showGroupLobby() {
 
         let finalHtml = "";
         if (waitingHtml) {
-            finalHtml += '<p class="section-title">Ждут игру</p>' + waitingHtml;
+            finalHtml += '<p class="section-title">' + t("lobby_waiting") + '</p>' + waitingHtml;
         }
         if (activeHtml) {
-            finalHtml += '<p class="section-title" style="margin-top: 15px;">Идут игры</p>' + activeHtml;
+            finalHtml += '<p class="section-title" style="margin-top: 15px;">' + t("lobby_active") + '</p>' + activeHtml;
         }
         if (!finalHtml) {
             finalHtml = '<p class="section-title">' + t("lobby_empty") + '</p>';
