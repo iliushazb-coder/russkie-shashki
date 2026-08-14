@@ -2921,14 +2921,27 @@ function checkForInviteLink() {
         waitingText.textContent = t("connecting_to_friend");
 
         database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
-            // Комната могла измениться после первоначального чтения.
-            // Все критические проверки выполняем именно внутри transaction.
-            if (!currentRoom || currentRoom.status !== "waiting" || currentRoom.winner) {
+            // Комната отсутствует или игра уже закончена.
+            if (!currentRoom || currentRoom.winner) {
                 return;
             }
 
-            // Атомарно проверяем, свободно ли место чёрных.
-            // Если другой игрок уже занял его — transaction отменяется.
+            // Повторное открытие той же startapp-ссылки:
+            // комната уже активна, но чёрными уже являюсь именно я.
+            // Это нормальный повторный вход, а не "комната занята".
+            if (currentRoom.status === "active" &&
+                currentRoom.players &&
+                currentRoom.players.dark &&
+                currentRoom.players.dark.id === myTelegramId) {
+                return currentRoom;
+            }
+
+            // Для первого подключения комната обязательно должна ждать игрока.
+            if (currentRoom.status !== "waiting") {
+                return;
+            }
+
+            // Не позволяем занять место чёрных другому игроку.
             if (currentRoom.players &&
                 currentRoom.players.dark &&
                 currentRoom.players.dark.id &&
@@ -2948,7 +2961,38 @@ function checkForInviteLink() {
         }).then(function (result) {
             if (settled) return;
 
-            if (!result.committed) {
+            const committedRoom = result.snapshot ? result.snapshot.val() : null;
+
+            // Успех: если транзакция прошла (первый вход), 
+            // ИЛИ если мы уже были в активной комнате (повторный запуск, Firebase вернул committed=false)
+            if (result.committed || (committedRoom && committedRoom.status === "active" && committedRoom.players && committedRoom.players.dark && committedRoom.players.dark.id === myTelegramId)) {
+                
+                // После первого подключения или повторного входа
+                // этот пользователь является игроком за чёрных.
+                myColor = "dark";
+                isOnlineGame = true;
+                isSpectator = false;
+
+                settled = true;
+                clearTimeout(timeoutId);
+
+                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                    opponentName: creatorName,
+                    myColor: "dark"
+                });
+
+                if (creatorId) {
+                    database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
+                        opponentName: myTelegramName
+                    });
+                }
+
+                setTimeout(function () {
+                    showScreen(gameScreen);
+                    startOnlineGame();
+                }, 800);
+            } else {
+                // Ошибка: комната занята другим игроком или не существует
                 settled = true;
                 clearTimeout(timeoutId);
                 roomCode = null;
@@ -2958,32 +3002,7 @@ function checkForInviteLink() {
                 showScreen(menuScreen);
                 loadActiveRooms();
                 showInfoModal(t("err_room_taken"), false);
-                return;
             }
-
-            // Только после успешной атомарной записи считаем себя игроком.
-            myColor = "dark";
-            isOnlineGame = true;
-            isSpectator = false;
-
-            settled = true;
-            clearTimeout(timeoutId);
-
-            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-                opponentName: creatorName,
-                myColor: "dark"
-            });
-
-            if (creatorId) {
-                database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
-                    opponentName: myTelegramName
-                });
-            }
-
-            setTimeout(function () {
-                showScreen(gameScreen);
-                startOnlineGame();
-            }, 800);
         }).catch(function () {
             if (settled) return;
 
