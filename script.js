@@ -2394,7 +2394,7 @@ function createOnlineRoom() {
 
 btnPlayOnline.addEventListener("click", function () {
     isBotGame = false;
-    createOnlineRoom();
+    showGroupLobby();
 });
 
 btnCancelMatchmaking.addEventListener("click", function () {
@@ -2867,7 +2867,11 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
 
 function checkForInviteLink() {
     let startParam = null;
-    if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.start_param) {
+
+    if (window.Telegram &&
+        window.Telegram.WebApp &&
+        Telegram.WebApp.initDataUnsafe &&
+        Telegram.WebApp.initDataUnsafe.start_param) {
         startParam = Telegram.WebApp.initDataUnsafe.start_param;
     }
 
@@ -2881,21 +2885,23 @@ function checkForInviteLink() {
     btnShareLink.classList.add("hidden");
 
     let settled = false;
+
     const timeoutId = setTimeout(function () {
-        if (!settled) {
-            settled = true;
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal(t("err_load_game"), false);
-        }
+        if (settled) return;
+
+        settled = true;
+        roomCode = null;
+        showScreen(menuScreen);
+        loadActiveRooms();
+        showInfoModal(t("err_load_game"), false);
     }, 10000);
 
     database.ref("rooms/" + roomCode).once("value").then(function (snapshot) {
         if (settled) return;
+
         const room = snapshot.val();
 
-        if (!room || room.status === "finished" || room.winner) {
+        if (!room || !room.pieces || room.status === "finished" || room.winner) {
             settled = true;
             clearTimeout(timeoutId);
             roomCode = null;
@@ -2905,8 +2911,15 @@ function checkForInviteLink() {
             return;
         }
 
-        const creatorId = (room.players && room.players.light) ? room.players.light.id : null;
-        const creatorName = (room.players && room.players.light) ? room.players.light.name : "Соперник";
+        const creatorId =
+            room.players && room.players.light
+                ? room.players.light.id
+                : null;
+
+        const creatorName =
+            room.players && room.players.light
+                ? room.players.light.name
+                : t("opponent_default");
 
         if (creatorId && creatorId === myTelegramId) {
             settled = true;
@@ -2918,100 +2931,69 @@ function checkForInviteLink() {
             return;
         }
 
-        waitingText.textContent = t("connecting_to_friend");
+        // Повторное открытие той же ссылки тем же приглашённым игроком.
+        if (room.status === "active" &&
+            room.players &&
+            room.players.dark &&
+            room.players.dark.id === myTelegramId) {
 
-        const diagRef = database.ref("rooms/" + roomCode + "/debugLog");
-        function diag(step, data) {
-            diagRef.push({
-                step: step,
-                data: JSON.stringify(data === undefined ? null : data),
-                who: myTelegramName,
-                whoId: myTelegramId,
-                ts: firebase.database.ServerValue.TIMESTAMP
-            });
+            myColor = "dark";
+            isOnlineGame = true;
+            isSpectator = false;
+
+            settled = true;
+            clearTimeout(timeoutId);
+
+            showScreen(gameScreen);
+            startOnlineGame();
+            return;
         }
 
+        // Для первого подключения комната должна именно ждать игрока.
+        if (room.status !== "waiting") {
+            settled = true;
+            clearTimeout(timeoutId);
+            roomCode = null;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal(t("err_room_taken"), false);
+            return;
+        }
+
+        waitingText.textContent = t("connecting_to_friend");
+
         database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
-            diag("transaction_called", currentRoom);
-
-            // Комната отсутствует или игра уже закончена.
-            if (!currentRoom || currentRoom.winner) {
-                diag("abort_no_room_or_winner", { exists: !!currentRoom, winner: currentRoom && currentRoom.winner });
+            // Та же простая схема, что используется в работающем joinGroupRoom().
+            if (!currentRoom ||
+                !currentRoom.pieces ||
+                currentRoom.status !== "waiting" ||
+                currentRoom.winner) {
                 return;
             }
 
-            // Повторное открытие той же startapp-ссылки:
-            // комната уже активна, но чёрными уже являюсь именно я.
-            // Это нормальный повторный вход, а не "комната занята".
-            if (currentRoom.status === "active" &&
-                currentRoom.players &&
-                currentRoom.players.dark &&
-                currentRoom.players.dark.id === myTelegramId) {
-                diag("repeat_visit_already_dark", currentRoom.players);
-                return currentRoom;
-            }
-
-            // Для первого подключения комната обязательно должна ждать игрока.
-            if (currentRoom.status !== "waiting") {
-                diag("abort_status_not_waiting", { status: currentRoom.status, players: currentRoom.players });
-                return;
-            }
-
-            // Не позволяем занять место чёрных другому игроку.
+            // Защита от третьего игрока.
             if (currentRoom.players &&
                 currentRoom.players.dark &&
                 currentRoom.players.dark.id &&
                 currentRoom.players.dark.id !== myTelegramId) {
-                diag("abort_dark_taken_by_other", { darkId: currentRoom.players.dark.id, myId: myTelegramId });
                 return;
             }
 
-            diag("success_claiming_dark", null);
             currentRoom.players = currentRoom.players || {};
             currentRoom.players.dark = {
                 id: myTelegramId,
                 name: myTelegramName
             };
+
             currentRoom.status = "active";
-            currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+            currentRoom.turnStartedAt =
+                firebase.database.ServerValue.TIMESTAMP;
 
             return currentRoom;
         }).then(function (result) {
             if (settled) return;
 
-            const committedRoom = result.snapshot ? result.snapshot.val() : null;
-            diag("transaction_result", { committed: result.committed, room: committedRoom });
-
-            // Успех: если транзакция прошла (первый вход), 
-            // ИЛИ если мы уже были в активной комнате (повторный запуск, Firebase вернул committed=false)
-            if (result.committed || (committedRoom && committedRoom.status === "active" && committedRoom.players && committedRoom.players.dark && committedRoom.players.dark.id === myTelegramId)) {
-                
-                // После первого подключения или повторного входа
-                // этот пользователь является игроком за чёрных.
-                myColor = "dark";
-                isOnlineGame = true;
-                isSpectator = false;
-
-                settled = true;
-                clearTimeout(timeoutId);
-
-                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-                    opponentName: creatorName,
-                    myColor: "dark"
-                });
-
-                if (creatorId) {
-                    database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
-                        opponentName: myTelegramName
-                    });
-                }
-
-                setTimeout(function () {
-                    showScreen(gameScreen);
-                    startOnlineGame();
-                }, 800);
-            } else {
-                // Ошибка: комната занята другим игроком или не существует
+            if (!result.committed) {
                 settled = true;
                 clearTimeout(timeoutId);
                 roomCode = null;
@@ -3021,8 +3003,34 @@ function checkForInviteLink() {
                 showScreen(menuScreen);
                 loadActiveRooms();
                 showInfoModal(t("err_room_taken"), false);
+                return;
             }
-        }).catch(function () {
+
+            myColor = "dark";
+            isOnlineGame = true;
+            isSpectator = false;
+
+            settled = true;
+            clearTimeout(timeoutId);
+
+            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                opponentName: creatorName,
+                myColor: "dark"
+            });
+
+            if (creatorId) {
+                database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
+                    opponentName: myTelegramName
+                });
+            }
+
+            setTimeout(function () {
+                showScreen(gameScreen);
+                startOnlineGame();
+            }, 800);
+        }).catch(function (error) {
+            console.error("Invite transaction failed:", error);
+
             if (settled) return;
 
             settled = true;
@@ -3035,8 +3043,12 @@ function checkForInviteLink() {
             loadActiveRooms();
             showInfoModal(t("err_join_failed"), false);
         });
-    }).catch(function () {
+
+    }).catch(function (error) {
+        console.error("Invite room read failed:", error);
+
         if (settled) return;
+
         settled = true;
         clearTimeout(timeoutId);
         roomCode = null;
@@ -3825,7 +3837,8 @@ function showGroupLobby() {
 
             const isPlayerStale = function(color) {
                 const p = room.presence && room.presence[color];
-                return !p || p.online === false || (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
+                if (!p) return true;
+                return (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
             };
 
             // АВТО-ЧИСТКА: зависшее предложение реванша
