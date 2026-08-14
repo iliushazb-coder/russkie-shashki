@@ -30,7 +30,10 @@ const database = firebase.database();
 const connectedRef = database.ref(".info/connected");
 connectedRef.on("value", function(snap) {
     if (snap.val() === true) {
-        if (myPresenceRef) {
+        // Дополнительная защита: оживляем presence, только если человек
+        // ДЕЙСТВИТЕЛЬНО сейчас участвует в какой-то партии как игрок —
+        // а не когда myPresenceRef случайно остался от уже неактуальной комнаты.
+        if (myPresenceRef && isOnlineGame && !isSpectator && roomCode) {
             myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
         }
     }
@@ -1159,6 +1162,7 @@ function cleanupAbandonedRoom() {
         database.ref("users/" + currentState.players[oppColor].id + "/rooms/" + codeToClean).remove();
     }
     database.ref("rooms/" + codeToClean).remove();
+    detachMyPresence();
 }
 
 // ===== СИСТЕМА ПРИСУТСТВИЯ (ONLINE / OFFLINE) =====
@@ -1216,11 +1220,24 @@ function stopPresenceHeartbeat() {
     document.removeEventListener("visibilitychange", handleVisibilityChange);
 }
 
+// Общая функция: полностью "отвязываемся" от presence текущей комнаты.
+// Вызывать её нужно везде, где человек по-настоящему перестаёт участвовать
+// в партии (обычное завершение игры, явный выход, брошенная комната,
+// переход в режим зрителя) — иначе глобальный слушатель .info/connected
+// может позже "оживить" presence уже неактуальной, старой комнаты.
+function detachMyPresence() {
+    if (myPresenceRef) {
+        myPresenceRef.onDisconnect().cancel();
+    }
+    stopPresenceHeartbeat();
+    myPresenceRef = null;
+}
+
 function markMyselfLeftExplicitly() {
     if (myPresenceRef) {
         myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }
-    stopPresenceHeartbeat();
+    detachMyPresence();
 }
 
 let squareElements = {};
@@ -2714,6 +2731,7 @@ function cleanupFinishedRoom() {
         database.ref("users/" + currentState.players[oppColor].id + "/rooms/" + codeToClean).remove();
     }
     database.ref("rooms/" + codeToClean).remove();
+    detachMyPresence();
 }
 
 btnNewGame.addEventListener("click", function () {
@@ -3857,7 +3875,18 @@ function showGroupLobby() {
                 continue;
             }
 
+            // ЛЕНИВАЯ ОЧИСТКА: если партия активна, но оба игрока по-настоящему
+            // давно оффлайн (дольше RECONNECT_GRACE_MS через isPlayerStale) —
+            // партия гарантированно заброшена. Удаляет тот, кто первым откроет
+            // "Кто играет?" после истечения этого времени.
             if (room.status === "active" && lightIsStale && darkIsStale) {
+                if (room.players && room.players.light && room.players.light.id) {
+                    database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
+                }
+                if (room.players && room.players.dark && room.players.dark.id) {
+                    database.ref("users/" + room.players.dark.id + "/rooms/" + code).remove();
+                }
+                database.ref("rooms/" + code).remove();
                 continue;
             }
 
@@ -3992,9 +4021,10 @@ function watchGroupRoom(code) {
         database.ref("users/" + myTelegramId + "/rooms/" + roomToRemove).remove();
         if (activeMatchRef) { activeMatchRef.off(); activeMatchRef = null; }
         myPendingOnlineRoom = null;
-        stopPresenceHeartbeat();
-        myPresenceRef = null;
     }
+    // Зритель никогда не создаёт свой presence — на всякий случай отвязываемся
+    // от presence любой предыдущей роли (например, если до этого был игроком).
+    detachMyPresence();
 
     roomCode = code;
     myColor = null; // У наблюдателя нет цвета
