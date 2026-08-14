@@ -2441,6 +2441,12 @@ function createRoomAndShowWaiting() {
         moveType: null,
         pieces: createInitialPieces(),
         players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+        presence: {
+            light: {
+                online: true,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP
+            }
+        },
         timeControlSeconds: pendingTimeControlSeconds,
         turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
         winner: null,
@@ -3831,7 +3837,23 @@ function showGroupLobby() {
                 if (room.players && room.players.light && room.players.light.id) {
                     database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
                 }
-                database.ref("rooms/" + code).remove();
+                            const lightIsStale = isPlayerStale("light");
+            const darkIsStale = isPlayerStale("dark");
+
+            // ВАЖНО:
+            // Лобби никогда не удаляет waiting-комнату.
+            // Новая комната появляется раньше, чем presence успевает стабильно записаться,
+            // поэтому прежняя автоочистка могла уничтожить свежую комнату.
+            if (room.status === "waiting" && lightIsStale) {
+                continue;
+            }
+
+            // Активную игру тоже не удаляем из лобби.
+            // Удаление после реального ухода уже выполняется игровой логикой
+            // через 60-секундную проверку отсутствия соперника.
+            if (room.status === "active" && lightIsStale && darkIsStale) {
+                continue;
+            }database.ref("rooms/" + code).remove();
                 roomDeleted = true;
             }
 
