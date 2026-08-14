@@ -1019,8 +1019,7 @@ function statusForColor(color) {
     if (!presence) {
         return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
     }
-    const isStale = (Date.now() - (presence.lastSeen || 0)) > STALE_MS;
-    if (presence.online === false || isStale) {
+    if (presence.online === false) {
         // Считаем оставшееся время до конца "минуты форы"
         const elapsed = Date.now() - (presence.lastSeen || Date.now());
         let remaining = Math.ceil((RECONNECT_GRACE_MS - elapsed) / 1000);
@@ -1165,18 +1164,29 @@ function cleanupAbandonedRoom() {
 
 function handleVisibilityChange() {
     if (!myPresenceRef) return;
-    // Если приложение реально свёрнуто (document.hidden) — пишем offline сразу.
-    // Поле hasFocus() больше не используем, чтобы клавиатура и уведомления не ломали игру.
-    if (document.hidden) {
-        myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
-    } else {
-        // Если приложение снова на экране — сразу бьём пульс, статус становится "В игре"
-        myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+
+    // Сворачивание Mini App НЕ означает, что игрок покинул игру.
+    // Поэтому при document.hidden ничего не меняем.
+    // Реальный разрыв соединения обработает Firebase onDisconnect(),
+    // а явный выход из игры — markMyselfLeftExplicitly().
+    if (!document.hidden) {
+        myPresenceRef.update({
+            online: true,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP
+        });
     }
 }
 
 function setupPresence() {
     if (!myTelegramId || !roomCode) return;
+
+    // Перед перенастройкой presence отменяем старый onDisconnect.
+    // Иначе старое подключение позже может ошибочно записать online:false,
+    // хотя игрок уже снова находится в игре.
+    if (myPresenceRef) {
+        myPresenceRef.onDisconnect().cancel();
+    }
+
     stopPresenceHeartbeat();
 
     const presenceRef = database.ref("rooms/" + roomCode + "/presence/" + myColor);
