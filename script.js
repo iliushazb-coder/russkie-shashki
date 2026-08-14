@@ -539,6 +539,7 @@ const emojiBurstContainer = document.getElementById("emoji-burst-container");
 let lastReactionTs = 0;
 
 let roomCode = null;
+let myPendingFriendRoomCode = null; // Отдельная, "неприкосновенная" переменная именно для ссылки-приглашения — защита от того, что общая roomCode может смениться где-то в фоне между созданием комнаты и нажатием "Отправить другу"
 let myColor = "light";
 let isOnlineGame = false;
 let pendingTimeControlSeconds = 0;
@@ -2425,6 +2426,7 @@ function createRoomAndShowWaiting() {
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = generateRoomCode();
+    myPendingFriendRoomCode = roomCode; // Запоминаем именно этот код надёжно, для ссылки
     myColor = "light";
     isOnlineGame = true;
 
@@ -2455,7 +2457,7 @@ function createRoomAndShowWaiting() {
         });
         setupPresence();
 
-        const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+        const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + myPendingFriendRoomCode;
         inviteLinkBox.textContent = link;
         waitingText.textContent = "Ожидание подключения друга...";
         inviteLinkBox.classList.remove("hidden");
@@ -2477,7 +2479,7 @@ function createRoomAndShowWaiting() {
 }
 
 btnShareLink.addEventListener("click", function () {
-    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+    const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + myPendingFriendRoomCode;
     const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
     if (window.Telegram && window.Telegram.WebApp) {
         Telegram.WebApp.openTelegramLink(shareUrl);
@@ -3123,7 +3125,7 @@ btnOfflineInviteFriend.addEventListener("click", function () {
     pendingTimeControlSeconds = 0;
     createRoomAndShowWaiting();
     setTimeout(function() {
-        const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+        const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + myPendingFriendRoomCode;
         const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
         if (window.Telegram && window.Telegram.WebApp) {
             Telegram.WebApp.openTelegramLink(shareUrl);
