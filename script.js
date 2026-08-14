@@ -2968,55 +2968,41 @@ function checkForInviteLink() {
             return;
         }
 
+        // Дополнительная защита перед записью:
+        // если место чёрных уже занял другой игрок — не подключаемся.
+        if (room.players &&
+            room.players.dark &&
+            room.players.dark.id &&
+            room.players.dark.id !== myTelegramId) {
+
+            settled = true;
+            clearTimeout(timeoutId);
+            roomCode = null;
+            myColor = "light";
+            isOnlineGame = false;
+            isSpectator = false;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal(t("err_room_taken"), false);
+            return;
+        }
+
+        myColor = "dark";
+        isOnlineGame = true;
+        isSpectator = false;
         waitingText.textContent = t("connecting_to_friend");
 
-        database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
-            // Та же простая схема, что используется в работающем joinGroupRoom().
-            if (!currentRoom ||
-                !currentRoom.pieces ||
-                currentRoom.status !== "waiting" ||
-                currentRoom.winner) {
-                return;
-            }
-
-            // Защита от третьего игрока.
-            if (currentRoom.players &&
-                currentRoom.players.dark &&
-                currentRoom.players.dark.id &&
-                currentRoom.players.dark.id !== myTelegramId) {
-                return;
-            }
-
-            currentRoom.players = currentRoom.players || {};
-            currentRoom.players.dark = {
+        // Возвращаем проверенную рабочую схему из старой версии:
+        // без Firebase transaction().
+        database.ref("rooms/" + roomCode).update({
+            status: "active",
+            "players/dark": {
                 id: myTelegramId,
                 name: myTelegramName
-            };
-
-            currentRoom.status = "active";
-            currentRoom.turnStartedAt =
-                firebase.database.ServerValue.TIMESTAMP;
-
-            return currentRoom;
-        }).then(function (result) {
+            },
+            turnStartedAt: firebase.database.ServerValue.TIMESTAMP
+        }).then(function () {
             if (settled) return;
-
-            if (!result.committed) {
-                settled = true;
-                clearTimeout(timeoutId);
-                roomCode = null;
-                myColor = "light";
-                isOnlineGame = false;
-                isSpectator = false;
-                showScreen(menuScreen);
-                loadActiveRooms();
-                showInfoModal(t("err_room_taken"), false);
-                return;
-            }
-
-            myColor = "dark";
-            isOnlineGame = true;
-            isSpectator = false;
 
             settled = true;
             clearTimeout(timeoutId);
@@ -3037,7 +3023,7 @@ function checkForInviteLink() {
                 startOnlineGame();
             }, 800);
         }).catch(function (error) {
-            console.error("Invite transaction failed:", error);
+            console.error("Invite update failed:", error);
 
             if (settled) return;
 
