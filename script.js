@@ -2918,25 +2918,6 @@ function checkForInviteLink() {
             return;
         }
 
-        const creatorPresence = room.presence && room.presence.light;
-        const creatorLastSeen = creatorPresence ? (creatorPresence.lastSeen || 0) : 0;
-        const isCreatorStale = (Date.now() - creatorLastSeen) > STALE_MS; 
-        const creatorIsOffline = !creatorPresence || creatorPresence.online === false || isCreatorStale;
-        
-        if (creatorIsOffline) {
-            settled = true;
-            clearTimeout(timeoutId);
-            database.ref("rooms/" + roomCode).remove();
-            if (myTelegramId) {
-                database.ref("users/" + myTelegramId + "/rooms/" + roomCode).remove();
-            }
-            roomCode = null;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal(t("err_opponent_offline") + creatorName + t("err_opponent_offline_2"), false);
-            return;
-        }
-
         waitingText.textContent = t("connecting_to_friend");
 
         database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
