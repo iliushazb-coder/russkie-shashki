@@ -2562,6 +2562,7 @@ if (btnReactAngry) {
 }
 
 function sendReaction(emoji) {
+    if (isSpectator) return;
     if (!isOnlineGame || !currentState || currentState.winner) return;
     // ts: Date.now() гарантирует, что каждое нажатие уникально
     database.ref("rooms/" + roomCode + "/reaction").set({
@@ -2723,11 +2724,14 @@ function performRematchReset() {
     updates["lastMove"] = null;
     updates["lastMovePath"] = null;
     updates["lastCapturedSquares"] = null;
+    updates["pendingRemovals"] = null;
     updates["winner"] = null;
     updates["winReason"] = null;
     updates["status"] = "active";
     updates["turnStartedAt"] = firebase.database.ServerValue.TIMESTAMP;
     updates["rematchProposal"] = null;
+    updates["drawProposal"] = null;
+    updates["reaction"] = null;
     
     const oldLight = (currentState.players && currentState.players.light) ? currentState.players.light : null;
     const oldDark = (currentState.players && currentState.players.dark) ? currentState.players.dark : null;
@@ -2779,7 +2783,7 @@ btnRematchAccept.addEventListener("click", function () {
             startOnlineGame();
         });
     }).catch(function(error) {
-        console.error("Rematch transaction failed:", error);
+        console.error("Rematch update failed:", error);
         showInfoModal(t("err_rematch_failed"), false);
     });
 });
@@ -2809,6 +2813,7 @@ function updatePresenceOnly() {
 }
 
 function checkTimeout() {
+    if (isSpectator) return;
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
 
