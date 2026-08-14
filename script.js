@@ -2962,6 +2962,16 @@ function checkForInviteLink() {
             return;
         }
 
+        // Безопасная диагностика: записываем ДО транзакции (не внутри неё),
+        // чтобы не создавать конфликтов с самой транзакцией.
+        database.ref("rooms/" + roomCode + "/debugLog").push({
+            step: "before_transaction",
+            data: JSON.stringify({ status: room.status, players: room.players, hasPieces: !!room.pieces }),
+            who: myTelegramName,
+            whoId: myTelegramId,
+            ts: firebase.database.ServerValue.TIMESTAMP
+        });
+
         waitingText.textContent = t("connecting_to_friend");
 
         database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
@@ -2994,6 +3004,18 @@ function checkForInviteLink() {
             return currentRoom;
         }).then(function (result) {
             if (settled) return;
+
+            // Безопасная диагностика: пишем СНАРУЖИ транзакции, уже после того
+            // как она полностью завершилась (успешно или нет) — это никак не
+            // может помешать самой транзакции.
+            const resultRoom = result.snapshot ? result.snapshot.val() : null;
+            database.ref("rooms/" + roomCode + "/debugLog").push({
+                step: "after_transaction",
+                data: JSON.stringify({ committed: result.committed, resultRoom: resultRoom }),
+                who: myTelegramName,
+                whoId: myTelegramId,
+                ts: firebase.database.ServerValue.TIMESTAMP
+            });
 
             if (!result.committed) {
                 settled = true;
