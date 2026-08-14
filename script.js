@@ -2920,9 +2920,23 @@ function checkForInviteLink() {
 
         waitingText.textContent = t("connecting_to_friend");
 
+        const diagRef = database.ref("rooms/" + roomCode + "/debugLog");
+        function diag(step, data) {
+            diagRef.push({
+                step: step,
+                data: JSON.stringify(data === undefined ? null : data),
+                who: myTelegramName,
+                whoId: myTelegramId,
+                ts: firebase.database.ServerValue.TIMESTAMP
+            });
+        }
+
         database.ref("rooms/" + roomCode).transaction(function (currentRoom) {
+            diag("transaction_called", currentRoom);
+
             // Комната отсутствует или игра уже закончена.
             if (!currentRoom || currentRoom.winner) {
+                diag("abort_no_room_or_winner", { exists: !!currentRoom, winner: currentRoom && currentRoom.winner });
                 return;
             }
 
@@ -2933,11 +2947,13 @@ function checkForInviteLink() {
                 currentRoom.players &&
                 currentRoom.players.dark &&
                 currentRoom.players.dark.id === myTelegramId) {
+                diag("repeat_visit_already_dark", currentRoom.players);
                 return currentRoom;
             }
 
             // Для первого подключения комната обязательно должна ждать игрока.
             if (currentRoom.status !== "waiting") {
+                diag("abort_status_not_waiting", { status: currentRoom.status, players: currentRoom.players });
                 return;
             }
 
@@ -2946,9 +2962,11 @@ function checkForInviteLink() {
                 currentRoom.players.dark &&
                 currentRoom.players.dark.id &&
                 currentRoom.players.dark.id !== myTelegramId) {
+                diag("abort_dark_taken_by_other", { darkId: currentRoom.players.dark.id, myId: myTelegramId });
                 return;
             }
 
+            diag("success_claiming_dark", null);
             currentRoom.players = currentRoom.players || {};
             currentRoom.players.dark = {
                 id: myTelegramId,
@@ -2962,6 +2980,7 @@ function checkForInviteLink() {
             if (settled) return;
 
             const committedRoom = result.snapshot ? result.snapshot.val() : null;
+            diag("transaction_result", { committed: result.committed, room: committedRoom });
 
             // Успех: если транзакция прошла (первый вход), 
             // ИЛИ если мы уже были в активной комнате (повторный запуск, Firebase вернул committed=false)
