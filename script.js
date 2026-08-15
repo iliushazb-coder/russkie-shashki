@@ -165,6 +165,7 @@ const translations = {
         btn_play_online: "👥 Кто играет?",
         btn_play_friend: "👥 Играть с другом",
         btn_play_bot: "🤖 Играть с ботом",
+        btn_continue: "▶️ Продолжить",
         btn_show_stats: "📊 Моя статистика",
         time_control_prompt: "Выбери контроль времени на ход:",
         time_0: "Без ограничения",
@@ -258,6 +259,7 @@ const translations = {
         btn_play_online: "👥 Who is playing?",
         btn_play_friend: "👥 Play with a friend",
         btn_play_bot: "🤖 Play with bot",
+        btn_continue: "▶️ Continue",
         btn_show_stats: "📊 My statistics",
         time_control_prompt: "Choose time control per move:",
         time_0: "No limit",
@@ -351,6 +353,7 @@ const translations = {
         btn_play_online: "👥 Chi sta giocando?",
         btn_play_friend: "👥 Gioca con un amico",
         btn_play_bot: "🤖 Gioca con il bot",
+        btn_continue: "▶️ Continua",
         btn_show_stats: "📊 Le mie statistiche",
         time_control_prompt: "Scegli il tempo per mossa:",
         time_0: "Senza limiti",
@@ -2948,6 +2951,46 @@ function checkForInviteLink() {
                 : t("opponent_default");
 
         if (creatorId && creatorId === myTelegramId) {
+            // Моя собственная партия уже активна — возвращаемся как игрок.
+            if (room.status === "active") {
+                settled = true;
+                clearTimeout(timeoutId);
+
+                resumeOwnActiveRoom(roomCode).then(function (resumed) {
+                    if (!resumed) {
+                        roomCode = null;
+                        showScreen(menuScreen);
+                        loadActiveRooms();
+                        showInfoModal(t("err_no_active_game"), false);
+                    }
+                });
+
+                return;
+            }
+
+            // Моя собственная комната ещё ждёт друга — просто показываем
+            // экран ожидания заново, а не ошибку "нельзя играть с собой".
+            if (room.status === "waiting") {
+                myColor = "light";
+                isOnlineGame = true;
+                isSpectator = false;
+                myPendingFriendRoomCode = roomCode;
+
+                settled = true;
+                clearTimeout(timeoutId);
+
+                setupPresence();
+
+                const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
+                inviteLinkBox.textContent = link;
+                waitingText.textContent = "Ожидание подключения друга...";
+                inviteLinkBox.classList.remove("hidden");
+                btnShareLink.classList.remove("hidden");
+
+                showScreen(waitingScreen);
+                return;
+            }
+
             settled = true;
             clearTimeout(timeoutId);
             roomCode = null;
@@ -3785,6 +3828,57 @@ function startApp() {
     }
 }
 
+// Общая функция: возврат в свою собственную активную партию — как игрок,
+// а не зритель. Используется и из списка "Кто играет?", и при повторном
+// открытии своей же ссылки-приглашения.
+function resumeOwnActiveRoom(code) {
+    return database.ref("rooms/" + code).once("value").then(function (snapshot) {
+        const room = snapshot.val();
+
+        if (!room ||
+            !room.pieces ||
+            room.status !== "active" ||
+            room.winner ||
+            !room.players) {
+            return false;
+        }
+
+        let color = null;
+        if (room.players.light && room.players.light.id === myTelegramId) {
+            color = "light";
+        } else if (room.players.dark && room.players.dark.id === myTelegramId) {
+            color = "dark";
+        }
+
+        if (!color) {
+            return false;
+        }
+
+        if (groupLobbyListener) {
+            groupLobbyListener.off();
+            groupLobbyListener = null;
+        }
+
+        if (myCurrentSpectatorRef) {
+            myCurrentSpectatorRef.remove();
+            myCurrentSpectatorRef = null;
+        }
+
+        roomCode = code;
+        myColor = color;
+        isOnlineGame = true;
+        isSpectator = false;
+
+        showScreen(gameScreen);
+        startOnlineGame();
+
+        return true;
+    }).catch(function (error) {
+        console.error("Resume own room failed:", error);
+        return false;
+    });
+}
+
 // ===== ЛОББИ ГРУППЫ (Список комнат) =====
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -3907,12 +4001,25 @@ function showGroupLobby() {
                     `;
                 }
             } else if (room.status === "active") {
-                activeHtml += `
-                    <div class="group-room-card">
-                        <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
-                        <button class="group-watch-btn" data-code="${code}">Смотреть</button>
-                    </div>
-                `;
+                const isMyActiveGame =
+                    (room.players && room.players.light && room.players.light.id === myTelegramId) ||
+                    (room.players && room.players.dark && room.players.dark.id === myTelegramId);
+
+                if (isMyActiveGame) {
+                    activeHtml += `
+                        <div class="group-room-card">
+                            <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
+                            <button class="group-resume-btn" data-code="${code}">${t("btn_continue")}</button>
+                        </div>
+                    `;
+                } else {
+                    activeHtml += `
+                        <div class="group-room-card">
+                            <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
+                            <button class="group-watch-btn" data-code="${code}">Смотреть</button>
+                        </div>
+                    `;
+                }
             }
         }
 
@@ -3938,6 +4045,17 @@ function showGroupLobby() {
         groupRoomsList.querySelectorAll('.group-watch-btn').forEach(btn => {
             btn.addEventListener('click', function() {
                 watchGroupRoom(this.getAttribute('data-code'));
+            });
+        });
+
+        groupRoomsList.querySelectorAll('.group-resume-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const code = this.getAttribute('data-code');
+                resumeOwnActiveRoom(code).then(function (resumed) {
+                    if (!resumed) {
+                        showInfoModal(t("err_no_active_game"), false);
+                    }
+                });
             });
         });
     });
