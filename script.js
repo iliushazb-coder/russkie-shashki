@@ -2988,6 +2988,20 @@ function checkForInviteLink() {
                 btnShareLink.classList.remove("hidden");
 
                 showScreen(waitingScreen);
+
+                // Тот же слушатель, что и в createRoomAndShowWaiting() — без него
+                // экран ожидания не переключится сам на игру, когда друг подключится.
+                database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
+                    if (snapshot.val() === "active") {
+                        database.ref("rooms/" + roomCode + "/status").off();
+                        waitingText.textContent = "Друг подключился! Начинаем игру.";
+                        setTimeout(function () {
+                            showScreen(gameScreen);
+                            startOnlineGame();
+                        }, 1000);
+                    }
+                });
+
                 return;
             }
 
