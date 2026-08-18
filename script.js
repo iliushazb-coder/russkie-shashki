@@ -3709,32 +3709,41 @@ btnOfflineInviteFriend.addEventListener("click", function () {
 
 // ===== СТАТИСТИКА И РЕЙТИНГ =====
 
-function renderStatsRow(rank, name, wins, losses) {
+function renderStatsRow(rank, name, wins, losses, coins) {
     const row = document.createElement("div");
     row.className = "stats-row";
-    const total = wins + losses;
     const rankSpan = document.createElement("span");
+    rankSpan.className = "stats-name-block";
     const rankNumber = document.createElement("span");
     rankNumber.className = "stats-rank";
     rankNumber.textContent = rank + ".";
     rankSpan.appendChild(rankNumber);
-    
+
+    // Длинные имена/юзернеймы обрезаем, чтобы строка не переносилась
+    const maxNameLength = 14;
+    const displayName = (typeof name === "string" && name.length > maxNameLength)
+        ? name.substring(0, maxNameLength) + "…"
+        : name;
+
     // Если имя начинается с "@", делаем из него кликабельную ссылку на Telegram
     if (typeof name === 'string' && name.startsWith('@')) {
         const link = document.createElement("a");
         link.href = "https://t.me/" + name.substring(1);
-        link.textContent = name;
+        link.textContent = displayName;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
         link.className = "stats-user-link"; // Добавляем класс для стилизации
         rankSpan.appendChild(link);
     } else {
         // Иначе оставляем обычный текст
-        rankSpan.appendChild(document.createTextNode(name));
+        rankSpan.appendChild(document.createTextNode(displayName));
     }
-    
+
     const infoSpan = document.createElement("span");
-    infoSpan.textContent = "🏆 " + wins + " · ❌ " + losses + " · " + total + " " + t("stats_games_word");
+    infoSpan.className = "stats-info-block";
+    const total = wins + losses;
+    const coinsPart = (typeof coins === "number") ? (" 🪙" + coins) : "";
+    infoSpan.textContent = "🏆" + wins + " ❌" + losses + coinsPart + " 🎮" + total;
     row.appendChild(rankSpan);
     row.appendChild(infoSpan);
     return row;
@@ -3756,11 +3765,20 @@ function openStatsModal() {
             return;
         }
         const entries = Object.keys(data).map(function (key) {
-            return { name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
+            return { id: key, name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
         });
         entries.sort(function (a, b) { return b.wins - a.wins; });
-        entries.forEach(function (entry, index) {
-            statsLeaderboard.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
+
+        Promise.all(entries.map(function (entry) {
+            return database.ref("economy/" + entry.id + "/balance").once("value").then(function (coinSnap) {
+                entry.coins = coinSnap.val();
+            }).catch(function () {
+                entry.coins = null;
+            });
+        })).then(function () {
+            entries.forEach(function (entry, index) {
+                statsLeaderboard.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins));
+            });
         });
     }).catch(function () {
         statsLeaderboard.textContent = t("stats_load_error");
@@ -3775,11 +3793,20 @@ function openStatsModal() {
                 return;
             }
             const entries = Object.keys(data).map(function (key) {
-                return { name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
+                return { id: key, name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
             });
             entries.sort(function (a, b) { return b.wins - a.wins; });
-            entries.forEach(function (entry, index) {
-                statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses));
+
+            Promise.all(entries.map(function (entry) {
+                return database.ref("economy/" + entry.id + "/balance").once("value").then(function (coinSnap) {
+                    entry.coins = coinSnap.val();
+                }).catch(function () {
+                    entry.coins = null;
+                });
+            })).then(function () {
+                entries.forEach(function (entry, index) {
+                    statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins));
+                });
             });
         }).catch(function () {
             if (statsLeaderboardBot) statsLeaderboardBot.textContent = t("stats_load_error");
