@@ -671,6 +671,9 @@ const translations = {
         btn_start_new_game: "Начать новую игру",
         stats_top_online: "📊 Топ игроков (Онлайн)",
         stats_top_bot: "🤖 Топ игроков (Против бота)",
+        stats_tab_wins: "🏆 Победы",
+        stats_tab_coins: "🪙 Заработано",
+        stats_top_coins: "🪙 Топ по заработанным монетам",
         modal_offline_opp: "Соперник офлайн",
         btn_play_bot_offline: "🤖 Играть с ботом",
         btn_invite_other: "👥 Пригласить другого друга",
@@ -765,6 +768,9 @@ const translations = {
         btn_start_new_game: "Start new game",
         stats_top_online: "📊 Top players (Online)",
         stats_top_bot: "🤖 Top players (vs Bot)",
+        stats_tab_wins: "🏆 Wins",
+        stats_tab_coins: "🪙 Earned",
+        stats_top_coins: "🪙 Top by coins earned",
         modal_offline_opp: "Opponent offline",
         btn_play_bot_offline: "🤖 Play with bot",
         btn_invite_other: "👥 Invite another friend",
@@ -859,6 +865,9 @@ const translations = {
         btn_start_new_game: "Inizia nuova partita",
         stats_top_online: "📊 Migliori (Online)",
         stats_top_bot: "🤖 Migliori (vs Bot)",
+        stats_tab_wins: "🏆 Vittorie",
+        stats_tab_coins: "🪙 Guadagnate",
+        stats_top_coins: "🪙 Migliori per monete guadagnate",
         modal_offline_opp: "Avversario offline",
         btn_play_bot_offline: "🤖 Gioca con il bot",
         btn_invite_other: "👥 Invita un altro amico",
@@ -3749,6 +3758,45 @@ function renderStatsRow(rank, name, wins, losses, coins) {
     return row;
 }
 
+// Отдельная строка для рейтинга "Заработано" — переиспользует те же
+// CSS-классы обрезки имени, но показывает только rank/имя/монеты.
+function renderCoinRankRow(rank, name, coins) {
+    const row = document.createElement("div");
+    row.className = "stats-row";
+
+    const rankSpan = document.createElement("span");
+    rankSpan.className = "stats-name-block";
+    const rankNumber = document.createElement("span");
+    rankNumber.className = "stats-rank";
+    rankNumber.textContent = rank + ".";
+    rankSpan.appendChild(rankNumber);
+
+    const maxNameLength = 14;
+    const displayName = (typeof name === "string" && name.length > maxNameLength)
+        ? name.substring(0, maxNameLength) + "…"
+        : name;
+
+    if (typeof name === 'string' && name.startsWith('@')) {
+        const link = document.createElement("a");
+        link.href = "https://t.me/" + name.substring(1);
+        link.textContent = displayName;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.className = "stats-user-link";
+        rankSpan.appendChild(link);
+    } else {
+        rankSpan.appendChild(document.createTextNode(displayName));
+    }
+
+    const infoSpan = document.createElement("span");
+    infoSpan.className = "stats-info-block";
+    infoSpan.textContent = "🪙" + (coins || 0);
+
+    row.appendChild(rankSpan);
+    row.appendChild(infoSpan);
+    return row;
+}
+
 function openStatsModal() {
     statsLeaderboard.innerHTML = "";
     
@@ -3812,10 +3860,55 @@ function openStatsModal() {
             if (statsLeaderboardBot) statsLeaderboardBot.textContent = t("stats_load_error");
         });
     }
+
+    // --- РЕЙТИНГ "ЗАРАБОТАНО" (lifetimeEarned) ---
+    const statsLeaderboardCoins = document.getElementById("stats-leaderboard-coins");
+    if (statsLeaderboardCoins) {
+        statsLeaderboardCoins.innerHTML = "";
+        database.ref("economy").orderByChild("lifetimeEarned").limitToLast(10).once("value").then(function (snapshot) {
+            const data = snapshot.val();
+            statsLeaderboardCoins.innerHTML = "";
+            if (!data) {
+                return;
+            }
+            const entries = Object.keys(data).map(function (key) {
+                return { name: data[key].name || "Игрок", lifetimeEarned: data[key].lifetimeEarned || 0 };
+            });
+            // Сортируем именно по lifetimeEarned — сколько всего заработано за всё время,
+            // не по balance, чтобы будущие траты в магазине не сбивали место в рейтинге.
+            entries.sort(function (a, b) { return b.lifetimeEarned - a.lifetimeEarned; });
+            entries.forEach(function (entry, index) {
+                statsLeaderboardCoins.appendChild(renderCoinRankRow(index + 1, entry.name, entry.lifetimeEarned));
+            });
+        }).catch(function () {
+            statsLeaderboardCoins.textContent = t("stats_load_error");
+        });
+    }
 }
 
 if (btnShowStats) {
     btnShowStats.addEventListener("click", openStatsModal);
+}
+
+const statsTabWins = document.getElementById("stats-tab-wins");
+const statsTabCoins = document.getElementById("stats-tab-coins");
+const statsViewWins = document.getElementById("stats-view-wins");
+const statsViewCoins = document.getElementById("stats-view-coins");
+
+if (statsTabWins && statsTabCoins && statsViewWins && statsViewCoins) {
+    statsTabWins.addEventListener("click", function () {
+        statsTabWins.classList.add("stats-tab-active");
+        statsTabCoins.classList.remove("stats-tab-active");
+        statsViewWins.classList.remove("hidden");
+        statsViewCoins.classList.add("hidden");
+    });
+
+    statsTabCoins.addEventListener("click", function () {
+        statsTabCoins.classList.add("stats-tab-active");
+        statsTabWins.classList.remove("stats-tab-active");
+        statsViewCoins.classList.remove("hidden");
+        statsViewWins.classList.add("hidden");
+    });
 }
 
 if (btnStatsClose) {
