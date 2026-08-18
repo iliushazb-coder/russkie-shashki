@@ -39,6 +39,353 @@ connectedRef.on("value", function(snap) {
     }
 });
 
+// ===== ЭКОНОМИКА =====
+
+function normalizeEconomy(current) {
+    const result = {};
+
+    if (current) {
+        for (const key in current) {
+            result[key] = current[key];
+        }
+    }
+
+    result.name = myTelegramName || result.name || "Игрок";
+
+    result.balance =
+        typeof result.balance === "number"
+            ? Math.max(0, Math.floor(result.balance))
+            : 0;
+
+    result.lifetimeEarned =
+        typeof result.lifetimeEarned === "number"
+            ? Math.max(0, Math.floor(result.lifetimeEarned))
+            : 0;
+
+    result.lifetimeSpent =
+        typeof result.lifetimeSpent === "number"
+            ? Math.max(0, Math.floor(result.lifetimeSpent))
+            : 0;
+
+    result.lastDailyClaim =
+        typeof result.lastDailyClaim === "string"
+            ? result.lastDailyClaim
+            : "";
+
+    result.welcomeClaimed =
+        result.welcomeClaimed === true;
+
+    if (
+        !result.rewardedMatches ||
+        typeof result.rewardedMatches !== "object"
+    ) {
+        result.rewardedMatches = {};
+    }
+
+    return result;
+}
+
+
+// Получаем время максимально близкое к серверному времени Firebase.
+// .info/serverTimeOffset показывает разницу между временем Firebase
+// и локальными часами устройства.
+function getFirebaseServerNow() {
+    return database.ref(".info/serverTimeOffset")
+        .once("value")
+        .then(function (snapshot) {
+            const offset = Number(snapshot.val()) || 0;
+            return Date.now() + offset;
+        });
+}
+
+
+// Единый серверный день для ежедневного бонуса.
+// Используем UTC, чтобы правило было одинаковым для всех игроков.
+function getFirebaseServerDayKey() {
+    return getFirebaseServerNow().then(function (serverNow) {
+        return new Date(serverNow).toISOString().slice(0, 10);
+    });
+}
+
+
+// Пока визуал монет ещё не добавлен.
+// В Части 2 эта функция будет обновлять видимый счётчик.
+function updateCoinBalanceUI(balance) {
+    currentCoinBalance = Math.max(0, Number(balance) || 0);
+
+    const el = document.getElementById("coin-balance-value");
+    if (el) {
+        el.textContent = currentCoinBalance.toLocaleString();
+    }
+}
+
+
+// Стартовый подарок.
+// Firebase transaction гарантирует, что +500 выдаётся только один раз.
+function claimWelcomeCoins() {
+    if (!myTelegramId) return Promise.resolve(false);
+
+    const economyRef =
+        database.ref("economy/" + myTelegramId);
+
+    return economyRef.transaction(function (current) {
+        const economy = normalizeEconomy(current);
+
+        if (economy.welcomeClaimed) {
+            return;
+        }
+
+        economy.welcomeClaimed = true;
+        economy.balance += COIN_REWARDS.welcome;
+        economy.lifetimeEarned += COIN_REWARDS.welcome;
+        economy.name = myTelegramName;
+
+        return economy;
+    }).then(function (result) {
+        if (result.snapshot) {
+            const data = result.snapshot.val();
+
+            if (data) {
+                updateCoinBalanceUI(data.balance);
+            }
+        }
+
+        return result.committed;
+    }).catch(function (error) {
+        console.error("Welcome coins failed:", error);
+        return false;
+    });
+}
+
+
+// Ежедневный бонус.
+// Проверка даты и изменение баланса находятся
+// в одной transaction().
+function claimDailyCoins() {
+    if (!myTelegramId) return Promise.resolve(false);
+
+    return getFirebaseServerDayKey().then(function (todayKey) {
+        const economyRef =
+            database.ref("economy/" + myTelegramId);
+
+        return economyRef.transaction(function (current) {
+            const economy = normalizeEconomy(current);
+
+            if (economy.lastDailyClaim === todayKey) {
+                return;
+            }
+
+            economy.lastDailyClaim = todayKey;
+            economy.balance += COIN_REWARDS.daily;
+            economy.lifetimeEarned += COIN_REWARDS.daily;
+            economy.name = myTelegramName;
+
+            return economy;
+        }).then(function (result) {
+            if (result.snapshot) {
+                const data = result.snapshot.val();
+
+                if (data) {
+                    updateCoinBalanceUI(data.balance);
+                }
+            }
+
+            return result.committed;
+        });
+    }).catch(function (error) {
+        console.error("Daily coins failed:", error);
+        return false;
+    });
+}
+
+
+// Загружаем экономику при запуске.
+// Сначала стартовый подарок, затем ежедневный,
+// чтобы две transaction не выполнялись одновременно.
+function initializeEconomy() {
+    if (!myTelegramId) return;
+
+    claimWelcomeCoins()
+        .then(function () {
+            return claimDailyCoins();
+        })
+        .then(function () {
+            return database.ref("economy/" + myTelegramId)
+                .once("value");
+        })
+        .then(function (snapshot) {
+            const economy = snapshot.val();
+
+            if (economy) {
+                updateCoinBalanceUI(economy.balance);
+            }
+        })
+        .catch(function (error) {
+            console.error("Economy initialization failed:", error);
+        });
+}
+
+
+// Уникальный идентификатор именно ПАРТИИ, а не комнаты.
+function getCurrentRewardMatchId() {
+    if (isBotGame) {
+        return currentBotMatchId;
+    }
+
+    if (
+        isOnlineGame &&
+        roomCode &&
+        currentState
+    ) {
+        const matchNumber =
+            typeof currentState.matchNumber === "number"
+                ? currentState.matchNumber
+                : 0;
+
+        return "online_" + roomCode + "_" + matchNumber;
+    }
+
+    return null;
+}
+
+
+// Атомарная выплата результата одной партии.
+// rewardedMatches и баланс меняются В ОДНОЙ transaction().
+function awardCoinsForMatch(matchId, amount) {
+    if (!myTelegramId || !matchId) {
+        return Promise.resolve({
+            rewarded: false,
+            balance: currentCoinBalance
+        });
+    }
+
+    const economyRef =
+        database.ref("economy/" + myTelegramId);
+
+    return economyRef.transaction(function (current) {
+        const economy = normalizeEconomy(current);
+
+        economy.rewardedMatches =
+            economy.rewardedMatches || {};
+
+        // Эта конкретная партия уже была оплачена.
+        if (economy.rewardedMatches[matchId] === true) {
+            return;
+        }
+
+        economy.rewardedMatches[matchId] = true;
+        economy.name = myTelegramName;
+
+        const oldBalance = economy.balance || 0;
+
+        // Баланс никогда не опускается ниже нуля.
+        economy.balance =
+            Math.max(0, oldBalance + amount);
+
+        // lifetimeEarned увеличивается только при получении монет.
+        // Поражения его не уменьшают.
+        if (amount > 0) {
+            economy.lifetimeEarned =
+                (economy.lifetimeEarned || 0) + amount;
+        }
+
+        return economy;
+    }).then(function (result) {
+        const economy =
+            result.snapshot
+                ? result.snapshot.val()
+                : null;
+
+        if (economy) {
+            updateCoinBalanceUI(economy.balance);
+        }
+
+        return {
+            rewarded: result.committed,
+            balance: economy
+                ? economy.balance
+                : currentCoinBalance
+        };
+    });
+}
+
+
+// Определяем награду по результату текущей партии.
+function getCurrentCoinReward() {
+    if (!currentState || !currentState.winner) {
+        return null;
+    }
+
+    if (isBotGame) {
+        // Для ничьей с ботом отдельной награды пока нет.
+        if (currentState.winner === "draw") {
+            return null;
+        }
+
+        return currentState.winner === myColor
+            ? COIN_REWARDS.botWin
+            : COIN_REWARDS.botLoss;
+    }
+
+    if (isOnlineGame) {
+        if (currentState.winner === "draw") {
+            return COIN_REWARDS.onlineDraw;
+        }
+
+        return currentState.winner === myColor
+            ? COIN_REWARDS.onlineWin
+            : COIN_REWARDS.onlineLoss;
+    }
+
+    return null;
+}
+
+
+// Вызывается после окончания партии.
+// Локальный флаг убирает лишние запросы,
+// Firebase rewardedMatches даёт настоящую защиту.
+function recordCoinResultOnce() {
+    if (isSpectator) return;
+    if (!currentState || !currentState.winner) return;
+    if (!myTelegramId) return;
+
+    // В онлайн-игре не начисляем монеты по локальному
+    // оптимистичному состоянию. Ждём подтверждение Firebase.
+    if (isOnlineGame && isLocalStateOptimistic) return;
+
+    const matchId = getCurrentRewardMatchId();
+    const reward = getCurrentCoinReward();
+
+    if (!matchId || reward === null) return;
+
+    if (coinRewardAttemptForMatch === matchId) {
+        return;
+    }
+
+    coinRewardAttemptForMatch = matchId;
+
+    awardCoinsForMatch(matchId, reward)
+        .then(function (result) {
+            if (result.rewarded) {
+                console.log(
+                    "Coins rewarded:",
+                    reward,
+                    "match:",
+                    matchId,
+                    "balance:",
+                    result.balance
+                );
+            }
+        })
+        .catch(function (error) {
+            // При настоящей сетевой ошибке разрешаем повторить
+            // запрос в этой же открытой сессии.
+            coinRewardAttemptForMatch = null;
+            console.error("Coin reward failed:", error);
+        });
+}
+
+
 // ===== ЗВУКИ =====
 
 const audioContext = new (window.AudioContext || window.webkitAudioContext)();
@@ -543,6 +890,30 @@ const btnReactShock = document.getElementById("btn-react-shock");
 const btnReactAngry = document.getElementById("btn-react-angry");
 const emojiBurstContainer = document.getElementById("emoji-burst-container");
 let lastReactionTs = 0;
+
+// ===== МОНЕТЫ / ЭКОНОМИКА =====
+
+const COIN_REWARDS = {
+    welcome: 500,
+    daily: 25,
+    onlineWin: 100,
+    onlineDraw: 25,
+    onlineLoss: -30,
+    botWin: 35,
+    botLoss: -10
+};
+
+let currentCoinBalance = 0;
+
+// Уникальный ID текущей партии с ботом.
+// Для онлайн-игры ID будет строиться из roomCode + matchNumber.
+let currentBotMatchId = null;
+
+// Локальная защита от повторного запроса выплаты
+// для одной и той же партии в текущей открытой сессии.
+// Настоящая защита от двойной выплаты будет находиться
+// в Firebase: economy/<id>/rewardedMatches.
+let coinRewardAttemptForMatch = null;
 
 let roomCode = null;
 let myPendingFriendRoomCode = null; // Отдельная, "неприкосновенная" переменная именно для ссылки-приглашения — защита от того, что общая roomCode может смениться где-то в фоне между созданием комнаты и нажатием "Отправить другу"
@@ -1656,6 +2027,8 @@ function renderEndGameModal() {
             statsRecordedForRoom = marker;
             recordGameResult();
         }
+
+        recordCoinResultOnce();
     } else {
         endGameModal.classList.add("hidden");
     }
@@ -1749,6 +2122,7 @@ function forceResyncFromServer() {
             capturedDark: room.capturedDark || 0,
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
+            matchNumber: room.matchNumber || 0,
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -1935,6 +2309,7 @@ function startOnlineGame() {
     selectedFrom = null;
     endGameShownForRoom = null;
     statsRecordedForRoom = null;
+    coinRewardAttemptForMatch = null;
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
     boardBuilt = false;
@@ -1979,6 +2354,7 @@ function startOnlineGame() {
             capturedDark: room.capturedDark || 0,
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
+            matchNumber: room.matchNumber || 0,
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -2165,6 +2541,22 @@ function syncBotStateToFirebase() {
 
 function startOfflineGame() {
     isOnlineGame = false;
+    isSpectator = false;
+
+    // Каждая новая партия с ботом имеет собственный ID.
+    // Зеркальная bot-комната может использовать тот же roomCode при реванше,
+    // поэтому roomCode нельзя использовать как уникальный ID партии.
+    currentBotMatchId =
+        "bot_" +
+        myTelegramId +
+        "_" +
+        Date.now() +
+        "_" +
+        Math.random().toString(36).slice(2, 8);
+
+    // Новая партия должна иметь право сделать новую попытку выплаты.
+    // Защита от реального двойного начисления всё равно находится в Firebase.
+    coinRewardAttemptForMatch = null;
     
     // Чередование цвета: читаем из памяти, меняем на противоположный
     let lastBotColor = localStorage.getItem("shashki_last_bot_color");
@@ -2370,6 +2762,7 @@ function createOnlineRoom() {
         capturedDark: 0,
         capturedLight: 0,
         moveCount: 0,
+        matchNumber: 0,
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -2457,6 +2850,7 @@ function createRoomAndShowWaiting() {
         capturedDark: 0,
         capturedLight: 0,
         moveCount: 0,
+        matchNumber: 0,
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -2760,6 +3154,11 @@ function performRematchReset() {
     updates["capturedDark"] = 0;
     updates["capturedLight"] = 0;
     updates["moveCount"] = 0;
+
+    // Каждая партия внутри одной комнаты получает новый номер.
+    // Первая партия = 0, первый реванш = 1, второй = 2 и т.д.
+    updates["matchNumber"] = (currentState.matchNumber || 0) + 1;
+
     updates["moveType"] = null;
     updates["lastMove"] = null;
     updates["lastMovePath"] = null;
@@ -3373,6 +3772,7 @@ function addToMatchmakingQueue() {
             capturedDark: 0,
             capturedLight: 0,
             moveCount: 0,
+            matchNumber: 0,
             lastMove: null,
             lastMovePath: null,
             lastCapturedSquares: null,
@@ -3826,6 +4226,8 @@ function startApp() {
     const me = getMyTelegramUser();
     myTelegramId = me.id;
     myTelegramName = me.name;
+
+    initializeEconomy();
 
     const greetingNameSpan = document.getElementById("user-greeting-name");
     if (greetingNameSpan) {
