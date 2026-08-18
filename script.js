@@ -4253,12 +4253,44 @@ let botSearchCancelled = false;
 // чтобы пользователь подумал, что приложение сломалось.
 const BOT_MAX_THINK_TIME_MS = 5000; 
 
+// Ключ позиции для Transposition Table. В отличие от ключа Opening Book,
+// здесь ОБЯЗАТЕЛЬНО учитываем mustContinueFrom и pendingRemovals — без них
+// две разные ситуации (например, разное состояние цепочки взятия при
+// одинаковом расположении шашек) могли бы ошибочно склеиться в одну запись.
+function getTTKey(state) {
+    let s = "";
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if ((row + col) % 2 === 0) continue;
+            const p = state.pieces[row + "_" + col];
+            if (!p) { s += "."; continue; }
+            if (p.color === "light") s += p.king ? "L" : "l";
+            else s += p.king ? "D" : "d";
+        }
+    }
+    s += "_" + state.turn;
+    s += "_" + (state.mustContinueFrom ? (state.mustContinueFrom.row + "-" + state.mustContinueFrom.col) : "x");
+    if (state.pendingRemovals && state.pendingRemovals.length > 0) {
+        // Сортируем в стабильном порядке — одно и то же множество побитых
+        // шашек не должно давать разные ключи из-за порядка в массиве.
+        s += "_" + state.pendingRemovals.slice().sort().join(",");
+    } else {
+        s += "_x";
+    }
+    return s;
+}
+
 function findBestMove(state, color, maxDepth) {
     const moves = getAllLegalMovesForBot(state, color);
     if (moves.length === 0) return null;
 
     // ОПТИМИЗАЦИЯ: Если доступен только один ход — нет смысла думать, играем его сразу.
     if (moves.length === 1) return moves[0];
+
+    // Новая пустая Transposition Table для ЭТОГО хода бота. Живёт через все
+    // итерации iterative deepening внутри одного вызова findBestMove(),
+    // но не сохраняется между разными ходами или партиями.
+    const tt = {};
 
     let bestMove = moves[0]; // Запасной ход на случай, если время выйдет сразу
     let previousBestMove = null;
@@ -4290,7 +4322,7 @@ function findBestMove(state, color, maxDepth) {
 
             // Если цепочка взятия не закончена, глубину не уменьшаем
             const nextDepth = (newState.turn === color) ? depth : depth - 1;
-            const score = minimax(newState, nextDepth, alpha, beta, color);
+            const score = minimax(newState, nextDepth, alpha, beta, color, tt);
 
             if (botSearchCancelled) break; // Время вышло, прерываем текущую глубину
 
@@ -4327,7 +4359,7 @@ function findBestMove(state, color, maxDepth) {
     return bestMove;
 }
 
-function minimax(state, depth, alpha, beta, botColor) {
+function minimax(state, depth, alpha, beta, botColor, tt) {
     // Проверка лимита времени (каждые 128 узлов, чтобы минимизировать 
     // отставание при просадках скорости или работе сборщика мусора)
     botNodesSearched++;
@@ -4342,11 +4374,49 @@ function minimax(state, depth, alpha, beta, botColor) {
         return evaluateBoard(state, botColor);
     }
 
+    // Сохраняем ИСХОДНЫЕ границы окна поиска — тип записи TT (EXACT/LOWER/UPPER)
+    // определяется относительно них, а не относительно alpha/beta, изменённых
+    // уже внутри перебора ходов этого узла.
+    const alphaOriginal = alpha;
+    const betaOriginal = beta;
+
+    const ttKey = getTTKey(state);
+    const ttEntry = tt[ttKey];
+
+    if (ttEntry && ttEntry.depth >= depth) {
+        if (ttEntry.flag === "EXACT") {
+            return ttEntry.score;
+        } else if (ttEntry.flag === "LOWER") {
+            alpha = Math.max(alpha, ttEntry.score);
+        } else if (ttEntry.flag === "UPPER") {
+            beta = Math.min(beta, ttEntry.score);
+        }
+        if (alpha >= beta) {
+            return ttEntry.score;
+        }
+    }
+
     const currentColor = state.turn;
     const isMaximizing = (currentColor === botColor);
     const moves = getAllLegalMovesForBot(state, currentColor);
 
     if (moves.length === 0) return isMaximizing ? -1000000 : 1000000;
+
+    // Подсказка порядка ходов из TT — используем сохранённый bestMove только
+    // чтобы переставить его в начало списка. Move Ordering в остальном не трогаем.
+    if (ttEntry && ttEntry.bestMove) {
+        const bm = ttEntry.bestMove;
+        const idx = moves.findIndex(function (m) {
+            return m.from.row === bm.from.row && m.from.col === bm.from.col &&
+                   m.to.row === bm.to.row && m.to.col === bm.to.col;
+        });
+        if (idx > 0) {
+            const mv = moves.splice(idx, 1)[0];
+            moves.unshift(mv);
+        }
+    }
+
+    let bestMoveThisNode = null;
 
     if (isMaximizing) {
         let maxEval = -Infinity;
@@ -4356,14 +4426,32 @@ function minimax(state, depth, alpha, beta, botColor) {
             
             // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
             const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
-            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor);
+            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor, tt);
             
             if (botSearchCancelled) return 0;
             
-            maxEval = Math.max(maxEval, evalScore);
+            if (evalScore > maxEval) {
+                maxEval = evalScore;
+                bestMoveThisNode = move;
+            }
             alpha = Math.max(alpha, evalScore);
             if (beta <= alpha) break; 
         }
+
+        // КРИТИЧНО: если мы дошли сюда, botSearchCancelled точно false —
+        // выше уже был бы return 0 при первом же обнаружении отмены поиска.
+        // Значит, узел досчитан полностью, и запись в TT безопасна.
+        let flag;
+        if (maxEval <= alphaOriginal) flag = "UPPER";
+        else if (maxEval >= betaOriginal) flag = "LOWER";
+        else flag = "EXACT";
+        // Replacement policy: не затираем уже сохранённую запись более глубоким
+        // расчётом более мелкой — сохраняем только если записи ещё нет,
+        // либо новая depth не меньше уже имеющейся.
+        if (!tt[ttKey] || tt[ttKey].depth <= depth) {
+            tt[ttKey] = { depth: depth, score: maxEval, flag: flag, bestMove: bestMoveThisNode };
+        }
+
         return maxEval;
     } else {
         let minEval = Infinity;
@@ -4373,14 +4461,27 @@ function minimax(state, depth, alpha, beta, botColor) {
             
             // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
             const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
-            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor);
+            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor, tt);
             
             if (botSearchCancelled) return 0;
             
-            minEval = Math.min(minEval, evalScore);
+            if (evalScore < minEval) {
+                minEval = evalScore;
+                bestMoveThisNode = move;
+            }
             beta = Math.min(beta, evalScore);
             if (beta <= alpha) break;
         }
+
+        let flag;
+        if (minEval <= alphaOriginal) flag = "UPPER";
+        else if (minEval >= betaOriginal) flag = "LOWER";
+        else flag = "EXACT";
+        // Та же самая защита, что и в maximizing-ветке.
+        if (!tt[ttKey] || tt[ttKey].depth <= depth) {
+            tt[ttKey] = { depth: depth, score: minEval, flag: flag, bestMove: bestMoveThisNode };
+        }
+
         return minEval;
     }
 }
