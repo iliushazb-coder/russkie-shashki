@@ -671,6 +671,30 @@ h1 {
     color: #fff3d6;
 }
 
+.stats-tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+}
+
+.stats-tab-btn {
+    flex: 1;
+    padding: 8px 6px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,210,130,0.25);
+    background: rgba(255,225,170,0.04);
+    color: #cbb98a;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+
+.stats-tab-btn.stats-tab-active {
+    background: rgba(255,210,130,0.16);
+    border-color: rgba(255,210,130,0.5);
+    color: #fff3d6;
+}
+
 .stats-leaderboard {
     display: flex;
     flex-direction: column;
