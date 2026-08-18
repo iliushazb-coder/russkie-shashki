@@ -110,13 +110,91 @@ function getFirebaseServerDayKey() {
 
 // Пока визуал монет ещё не добавлен.
 // В Части 2 эта функция будет обновлять видимый счётчик.
-function updateCoinBalanceUI(balance) {
-    currentCoinBalance = Math.max(0, Number(balance) || 0);
+let coinBalanceAnimFrame = null;
+let coinBalanceDisplayedValue = 0; // То, что реально видно на экране прямо сейчас
 
+function updateCoinBalanceUI(balance) {
+    const newBalance = Math.max(0, Number(balance) || 0);
     const el = document.getElementById("coin-balance-value");
-    if (el) {
-        el.textContent = currentCoinBalance.toLocaleString();
+
+    currentCoinBalance = newBalance; // Канонический баланс — обновляем сразу
+
+    if (!el) {
+        coinBalanceDisplayedValue = newBalance;
+        return;
     }
+
+    // Отменяем предыдущую анимацию, если новое значение пришло раньше её окончания —
+    // но стартуем от того, что реально видно на экране в этот момент, а не от старой цели.
+    if (coinBalanceAnimFrame) {
+        cancelAnimationFrame(coinBalanceAnimFrame);
+        coinBalanceAnimFrame = null;
+    }
+
+    const startValue = coinBalanceDisplayedValue;
+    const endValue = newBalance;
+
+    const duration = 600;
+    const startTime = performance.now();
+
+    function step(now) {
+        const progress = Math.min(1, (now - startTime) / duration);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const displayValue = Math.round(startValue + (endValue - startValue) * eased);
+        coinBalanceDisplayedValue = displayValue;
+        el.textContent = displayValue.toLocaleString();
+
+        if (progress < 1) {
+            coinBalanceAnimFrame = requestAnimationFrame(step);
+        } else {
+            coinBalanceDisplayedValue = endValue;
+            coinBalanceAnimFrame = null;
+        }
+    }
+
+    coinBalanceAnimFrame = requestAnimationFrame(step);
+}
+
+
+// Простая очередь всплывающих окошек монет, чтобы, например,
+// стартовый и ежедневный бонусы при первом входе не наложились друг на друга.
+let coinPopupQueue = [];
+let coinPopupShowing = false;
+
+function showCoinPopup(amount) {
+    if (!amount) return;
+    coinPopupQueue.push(amount);
+    processCoinPopupQueue();
+}
+
+function processCoinPopupQueue() {
+    if (coinPopupShowing) return;
+    if (coinPopupQueue.length === 0) return;
+
+    const popup = document.getElementById("coin-popup");
+    const text = document.getElementById("coin-popup-text");
+    if (!popup || !text) {
+        coinPopupQueue = [];
+        return;
+    }
+
+    const amount = coinPopupQueue.shift();
+    coinPopupShowing = true;
+
+    const sign = amount > 0 ? "+" : "";
+    text.textContent = sign + amount + " 🪙";
+    popup.classList.remove("hidden");
+    popup.classList.add("coin-popup-show");
+
+    setTimeout(function () {
+        popup.classList.remove("coin-popup-show"); // Запускаем fade-out
+
+        setTimeout(function () {
+            popup.classList.add("hidden"); // Ставим hidden только после окончания transition
+            coinPopupShowing = false;
+            processCoinPopupQueue();
+        }, 250);
+    }, 1600);
 }
 
 
@@ -148,6 +226,10 @@ function claimWelcomeCoins() {
             if (data) {
                 updateCoinBalanceUI(data.balance);
             }
+        }
+
+        if (result.committed) {
+            showCoinPopup(COIN_REWARDS.welcome);
         }
 
         return result.committed;
@@ -188,6 +270,10 @@ function claimDailyCoins() {
                 if (data) {
                     updateCoinBalanceUI(data.balance);
                 }
+            }
+
+            if (result.committed) {
+                showCoinPopup(COIN_REWARDS.daily);
             }
 
             return result.committed;
@@ -367,6 +453,8 @@ function recordCoinResultOnce() {
     awardCoinsForMatch(matchId, reward)
         .then(function (result) {
             if (result.rewarded) {
+                showCoinPopup(reward);
+
                 console.log(
                     "Coins rewarded:",
                     reward,
