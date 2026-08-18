@@ -3753,7 +3753,6 @@ function openStatsModal() {
         const data = snapshot.val();
         statsLeaderboard.innerHTML = "";
         if (!data) {
-            statsLeaderboard.textContent = t("stats_no_online_games");
             return;
         }
         const entries = Object.keys(data).map(function (key) {
@@ -3773,7 +3772,6 @@ function openStatsModal() {
             const data = snapshot.val();
             statsLeaderboardBot.innerHTML = "";
             if (!data) {
-                statsLeaderboardBot.textContent = t("stats_no_bot_games");
                 return;
             }
             const entries = Object.keys(data).map(function (key) {
