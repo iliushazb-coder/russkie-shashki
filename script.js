@@ -4129,12 +4129,116 @@ function cancelOnlineSearch() {
 
 // ===== ИСКУССТВЕННЫЙ ИНТЕЛЛЕКТ (СУПЕР УМНЫЙ БОТ - ГРАНДМАСТЕР) =====
 
+// ===== ДЕБЮТНАЯ КНИГА (OPENING BOOK v1) =====
+// Три вручную проверенных, названных дебюта русских шашек:
+// 1. Городская партия, 2. Косяк, 3. Обратная вилочка.
+// Каждый полуход лично проверен через настоящую игровую логику
+// (attemptMove/hasMandatoryCapture) — обязательного взятия ни на
+// одном шаге не возникает, книга работает только в спокойных позициях.
+
+// Ключ позиции: фиксированный обход всех 32 игровых клеток (не зависит
+// от порядка ключей в объекте pieces) + чья сторона сейчас ходит.
+function getPositionKey(pieces, turn) {
+    let s = "";
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if ((row + col) % 2 === 0) continue;
+            const p = pieces[row + "_" + col];
+            if (!p) { s += "."; continue; }
+            if (p.color === "light") s += p.king ? "L" : "l";
+            else s += p.king ? "D" : "d";
+        }
+    }
+    return s + "_" + turn;
+}
+
+const OPENING_BOOK = {
+    // Начальная позиция — три равновероятных варианта первого хода светлыми
+    "dddddddddddd........llllllllllll_light": [
+        { from: { row: 5, col: 2 }, to: { row: 4, col: 3 } }, // 1.cd4 — Городская партия
+        { from: { row: 5, col: 2 }, to: { row: 4, col: 1 } }, // 1.cb4 — Косяк
+        { from: { row: 5, col: 6 }, to: { row: 4, col: 5 } }  // 1.gf4 — Обратная вилочка
+    ],
+    // Ответ тёмными после 1.cd4
+    "dddddddddddd.....l..l.llllllllll_dark": [
+        { from: { row: 2, col: 3 }, to: { row: 3, col: 2 } } // dc5
+    ],
+    // Ответ тёмными после 1.cb4
+    "dddddddddddd....l...l.llllllllll_dark": [
+        { from: { row: 2, col: 5 }, to: { row: 3, col: 6 } } // fg5
+    ],
+    // Ответ тёмными после 1.gf4
+    "dddddddddddd......l.lll.llllllll_dark": [
+        { from: { row: 2, col: 5 }, to: { row: 3, col: 4 } } // fe5
+    ],
+    // Городская партия: светлые после 1...dc5
+    "ddddddddd.dd.d...l..l.llllllllll_light": [
+        { from: { row: 6, col: 1 }, to: { row: 5, col: 2 } } // bc3
+    ],
+    // Городская партия: тёмные после 2.bc3
+    "ddddddddd.dd.d...l..llll.lllllll_dark": [
+        { from: { row: 2, col: 5 }, to: { row: 3, col: 6 } } // fg5
+    ],
+    // Городская партия: светлые после 2...fg5 (конец линии)
+    "ddddddddd..d.d.d.l..llll.lllllll_light": [
+        { from: { row: 5, col: 2 }, to: { row: 4, col: 1 } } // cb4
+    ],
+    // Косяк: светлые после 1...fg5
+    "dddddddddd.d...dl...l.llllllllll_light": [
+        { from: { row: 5, col: 6 }, to: { row: 4, col: 5 } } // gf4
+    ],
+    // Косяк: тёмные после 2.gf4
+    "dddddddddd.d...dl.l.l.l.llllllll_dark": [
+        { from: { row: 1, col: 6 }, to: { row: 2, col: 5 } } // gf6
+    ],
+    // Косяк: светлые после 2...gf6 (конец линии)
+    "ddddddd.dddd...dl.l.l.l.llllllll_light": [
+        { from: { row: 6, col: 1 }, to: { row: 5, col: 2 } } // bc3
+    ],
+    // Обратная вилочка: светлые после 1...fe5 (конец линии)
+    "dddddddddd.d..d...l.lll.llllllll_light": [
+        { from: { row: 5, col: 2 }, to: { row: 4, col: 3 } } // cd4
+    ]
+};
+
+// Возвращает ход из книги, либо null, если книгу нельзя использовать
+// (не спокойная позиция, позиции нет в книге, или ход оказался нелегален).
+function getOpeningBookMove(state, color) {
+    // Книга работает только в полностью спокойной позиции —
+    // без незакрытой цепочки взятия и без обязательного взятия вообще.
+    if (state.mustContinueFrom) return null;
+    if (hasMandatoryCapture(state.pieces, color)) return null;
+
+    const key = getPositionKey(state.pieces, state.turn);
+    const options = OPENING_BOOK[key];
+    if (!options || options.length === 0) return null;
+
+    const candidate = options[Math.floor(Math.random() * options.length)];
+
+    // Обязательная проверка: книжный ход должен реально быть среди
+    // легальных ходов, которые выдаёт уже существующий генератор ходов.
+    // Второй, отдельный генератор ходов здесь не создаём.
+    const legalMoves = getAllLegalMovesForBot(state, color);
+    const isLegal = legalMoves.some(function (m) {
+        return m.from.row === candidate.from.row && m.from.col === candidate.from.col &&
+               m.to.row === candidate.to.row && m.to.col === candidate.to.col;
+    });
+
+    return isLegal ? candidate : null;
+}
+
 function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== botColor || currentState.winner) return;
 
+    // Сначала проверяем дебютную книгу — если применима, используем её ход
+    // вместо запуска поиска. Ход из книги проходит через тот же самый
+    // performMove(), что и обычный результат findBestMove() — второго,
+    // отдельного пути выполнения хода здесь нет.
+    const bookMove = getOpeningBookMove(currentState, botColor);
+
     // Передаем максимальную глубину 20. Бот сам остановится по лимиту времени.
     // Это спасает от зависаний в позициях с дамками, где дерево вариантов огромно.
-    const bestMove = findBestMove(currentState, botColor, 20);
+    const bestMove = bookMove || findBestMove(currentState, botColor, 20);
     if (bestMove) {
         performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
     }
