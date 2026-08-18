@@ -119,6 +119,12 @@ function updateCoinBalanceUI(balance) {
 
     currentCoinBalance = newBalance; // Канонический баланс — обновляем сразу
 
+    // Мои собственные монеты в statsCache (показ рядом с именем) не должны
+    // устаревать после rewardedMatches — обновляем в том же месте, без лишних чтений.
+    if (myTelegramId && statsCache[myTelegramId]) {
+        statsCache[myTelegramId].coins = newBalance;
+    }
+
     if (!el) {
         coinBalanceDisplayedValue = newBalance;
         return;
@@ -1458,8 +1464,17 @@ function fetchAndCacheStatsIfNeeded(id) {
     statsCache[id] = null;
     database.ref("stats/" + id).once("value").then(function (snapshot) {
         const val = snapshot.val();
-        statsCache[id] = { wins: (val && val.wins) || 0, losses: (val && val.losses) || 0 };
+        statsCache[id] = { wins: (val && val.wins) || 0, losses: (val && val.losses) || 0, coins: null };
         renderPlayerPanels();
+
+        // Баланс монет запрашиваем отдельно, из другого узла — не блокирует
+        // отображение wins/losses, если экономика ещё не подтянулась.
+        database.ref("economy/" + id + "/balance").once("value").then(function (coinSnap) {
+            if (statsCache[id]) {
+                statsCache[id].coins = coinSnap.val();
+                renderPlayerPanels();
+            }
+        }).catch(function () {});
     }).catch(function () {
         // При ошибке сети не обнуляем кэш, оставляем undefined для повторной попытки
         statsCache[id] = undefined;
@@ -1479,7 +1494,8 @@ function statusForColor(color) {
     const playerId = currentState.players && currentState.players[color] && currentState.players[color].id;
     if (playerId) fetchAndCacheStatsIfNeeded(playerId);
     const stats = playerId ? statsCache[playerId] : null;
-    const ratingPrefix = stats ? ("🏆" + stats.wins + " ❌" + stats.losses + " · ") : "";
+    const coinsPart = (stats && typeof stats.coins === "number") ? (" · 🪙" + stats.coins) : "";
+    const ratingPrefix = stats ? ("🏆" + stats.wins + " ❌" + stats.losses + coinsPart + " · ") : "";
 
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
@@ -2398,6 +2414,7 @@ function startOnlineGame() {
     endGameShownForRoom = null;
     statsRecordedForRoom = null;
     coinRewardAttemptForMatch = null;
+    statsCache = {}; // Новая партия/реванш — статистика и монеты обоих игроков могли устареть
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
     boardBuilt = false;
@@ -2485,6 +2502,7 @@ function startOnlineGame() {
                 }
                 flipped = (myColor === "dark");
                 boardBuilt = false;
+                statsCache = {}; // Реванш без startOnlineGame() — кэш иначе останется старым
                 // ВАЖНО: при реванше цвета меняются местами. Нужно заново
                 // настроить "пульс присутствия" на новый цвет — иначе он
                 // продолжит стучать в старую (уже не свою) ячейку presence,
