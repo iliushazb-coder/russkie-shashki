@@ -155,23 +155,18 @@
    <div id="stats-modal" class="hidden modal-overlay">
         <div class="modal-box">
             <div class="stats-tabs">
-                <button id="stats-tab-wins" class="stats-tab-btn stats-tab-active" data-i18n="stats_tab_wins">🏆 Победы</button>
-                <button id="stats-tab-coins" class="stats-tab-btn" data-i18n="stats_tab_coins">🪙 Заработано</button>
+                <button id="stats-tab-online" class="stats-tab-btn stats-tab-active" data-i18n="stats_tab_online">🌐 Онлайн</button>
+                <button id="stats-tab-bot" class="stats-tab-btn" data-i18n="stats_tab_bot">🤖 С ботом</button>
             </div>
 
-            <div id="stats-view-wins">
+            <div id="stats-view-online">
                 <p class="end-game-text" data-i18n="stats_top_online">📊 Топ игроков (Онлайн)</p>
                 <div id="stats-leaderboard" class="stats-leaderboard"></div>
-
-                <hr style="width: 100%; border: 0; border-top: 1px solid rgba(255,210,130,0.2); margin: 20px 0;">
-
-                <p class="end-game-text" data-i18n="stats_top_bot">🤖 Топ игроков (Против бота)</p>
-                <div id="stats-leaderboard-bot" class="stats-leaderboard"></div>
             </div>
 
-            <div id="stats-view-coins" class="hidden">
-                <p class="end-game-text" data-i18n="stats_top_coins">🪙 Топ по заработанным монетам</p>
-                <div id="stats-leaderboard-coins" class="stats-leaderboard"></div>
+            <div id="stats-view-bot" class="hidden">
+                <p class="end-game-text" data-i18n="stats_top_bot">🤖 Топ игроков (Против бота)</p>
+                <div id="stats-leaderboard-bot" class="stats-leaderboard"></div>
             </div>
 
             <div class="modal-buttons">
