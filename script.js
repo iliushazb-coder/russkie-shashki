@@ -414,9 +414,20 @@ function getCurrentCoinReward() {
             return null;
         }
 
-        return currentState.winner === myColor
-            ? COIN_REWARDS.botWin
-            : COIN_REWARDS.botLoss;
+        const didIWin = currentState.winner === myColor;
+
+        // Лёгкий — тренировочный режим. Возвращаем null (не 0), чтобы
+        // recordCoinResultOnce() вообще не пытался создать запись награды —
+        // "reward === null" уже проверяется там как условие выхода.
+        if (botDifficulty === "easy") {
+            return null;
+        }
+        if (botDifficulty === "medium") {
+            return didIWin ? COIN_REWARDS.botMediumWin : COIN_REWARDS.botMediumLoss;
+        }
+        // Любое другое/неизвестное значение (включая "hard") безопасно
+        // трактуется как Сложный — тот же принцип, что и в getMaxDepthForDifficulty.
+        return didIWin ? COIN_REWARDS.botHardWin : COIN_REWARDS.botHardLoss;
     }
 
     if (isOnlineGame) {
@@ -989,6 +1000,7 @@ const botDifficultyModal = document.getElementById("bot-difficulty-modal");
 const btnDifficultyEasy = document.getElementById("btn-difficulty-easy");
 const btnDifficultyMedium = document.getElementById("btn-difficulty-medium");
 const btnDifficultyHard = document.getElementById("btn-difficulty-hard");
+const btnDifficultyBack = document.getElementById("btn-difficulty-back");
 const offlineOpponentText = document.getElementById("offline-opponent-text");
 const btnOfflinePlayBot = document.getElementById("btn-offline-play-bot");
 const btnOfflineInviteFriend = document.getElementById("btn-offline-invite-friend");
@@ -1018,8 +1030,15 @@ const COIN_REWARDS = {
     onlineWin: 100,
     onlineDraw: 25,
     onlineLoss: -30,
-    botWin: 35,
-    botLoss: -10
+    // Лёгкий — тренировочный режим, монеты не начисляются вообще.
+    botEasyWin: 0,
+    botEasyLoss: 0,
+    botMediumWin: 10,
+    botMediumLoss: -10,
+    // Значения Сложного не изменились — это те же botWin/botLoss, что были
+    // единственными до появления уровней сложности.
+    botHardWin: 35,
+    botHardLoss: -10
 };
 
 let currentCoinBalance = 0;
@@ -2274,11 +2293,21 @@ function renderEndGameModal() {
             } else {
                 btnNewGame.classList.remove("hidden");
                 btnCloseGame.classList.remove("hidden");
-                btnCloseGame.textContent = t("btn_close");
+                // Для игры с ботом кнопка ведёт в меню (не закрывает Mini App) —
+                // текст должен соответствовать реальному поведению.
+                btnCloseGame.textContent = isBotGame ? t("btn_to_menu") : t("btn_close");
             }
         }
 
-        const marker = (roomCode || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "");
+        // Для bot game используем уникальный currentBotMatchId, а не roomCode —
+        // "зеркальная" bot-комната может переиспользовать тот же roomCode при
+        // реванше, и тогда marker мог бы случайно совпасть с прошлой партией
+        // (если moveCount тоже совпадёт), пропустив recordGameResult() второй
+        // раз. currentBotMatchId уникален на каждый вызов startOfflineGame().
+        // Для online-игр ничего не меняем — roomCode там honestly уникален per match.
+        const marker = isBotGame
+            ? (currentBotMatchId || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "")
+            : (roomCode || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "");
         if (endGameShownForRoom !== marker) {
             playWinSound();
             endGameShownForRoom = marker;
@@ -2302,11 +2331,40 @@ function recordGameResult() {
     if (!currentState || !currentState.winner) return;
     if (currentState.winner === "draw") return;
     if (!myTelegramId) return;
+    // Лёгкий — тренировочный режим, полностью исключён из публичной статистики.
+    if (isBotGame && botDifficulty === "easy") return;
 
     const didIWin = currentState.winner === myColor;
     
     // Если игра с ботом — пишем в отдельную ветку statsBot
     const statsPath = isBotGame ? "statsBot" : "stats";
+
+    if (isBotGame) {
+        // Medium/Hard считаются раздельно в byLevel, но верхнеуровневые
+        // wins/losses продолжают обновляться параллельно — это сохраняет
+        // существующий leaderboard (сортировка идёт именно по ним) без
+        // единой правки в коде чтения. Старые накопленные результаты (до
+        // появления уровней) остаются как есть — честно разделить их между
+        // Medium/Hard задним числом невозможно, и мы не пытаемся это сделать.
+        const level = (botDifficulty === "medium") ? "medium" : "hard";
+        database.ref(statsPath + "/" + myTelegramId).transaction(function (current) {
+            const result = current || { wins: 0, losses: 0, name: myTelegramName };
+            result.name = myTelegramName;
+            if (!result.byLevel) result.byLevel = {};
+            if (!result.byLevel[level]) result.byLevel[level] = { wins: 0, losses: 0 };
+            if (didIWin) {
+                result.wins = (result.wins || 0) + 1;
+                result.byLevel[level].wins = (result.byLevel[level].wins || 0) + 1;
+            } else {
+                result.losses = (result.losses || 0) + 1;
+                result.byLevel[level].losses = (result.byLevel[level].losses || 0) + 1;
+            }
+            return result;
+        }).catch(function(error) {
+            console.error("Stats write failed:", error);
+        });
+        return;
+    }
 
     database.ref(statsPath + "/" + myTelegramId).transaction(function (current) {
         const result = current || { wins: 0, losses: 0, name: myTelegramName };
@@ -2842,7 +2900,7 @@ function syncBotStateToFirebase() {
 // эвристик или ограничений времени здесь нет — Hard получает ровно то же
 // значение (20), что и раньше, и ведёт себя идентично прежнему production.
 function getMaxDepthForDifficulty(difficulty) {
-    if (difficulty === "easy") return 3;
+    if (difficulty === "easy") return 2;
     if (difficulty === "medium") return 4;
     return 20; // hard — без изменений
 }
@@ -2869,6 +2927,12 @@ btnDifficultyHard.addEventListener("click", function () {
     botDifficultyModal.classList.add("hidden");
     botDifficulty = "hard";
     startOfflineGame();
+});
+btnDifficultyBack.addEventListener("click", function () {
+    botDifficultyModal.classList.add("hidden");
+    isBotGame = false;
+    showScreen(menuScreen);
+    loadActiveRooms();
 });
 
 function startOfflineGame() {
@@ -3454,6 +3518,13 @@ btnCloseGame.addEventListener("click", function () {
     }
     if (isBotGame) {
         stopBotSpectateRoom();
+        // Игра с ботом — просто возвращаемся в меню, Mini App НЕ закрываем.
+        // Явный сброс не обязателен для корректности (все точки входа сами
+        // выставляют isBotGame перед использованием), но соответствует уже
+        // существующему паттерну btnBackBotYes — оставляем для консистентности.
+        isBotGame = false;
+        showScreen(menuScreen);
+        return;
     }
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
 });
@@ -3477,10 +3548,10 @@ btnNewGame.addEventListener("click", function () {
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
     } else if (isBotGame) {
         endGameModal.classList.add("hidden");
-        promptBotDifficultyThenStart();
+        startOfflineGame();
     } else {
         endGameModal.classList.add("hidden");
-        promptBotDifficultyThenStart();
+        startOfflineGame();
     }
 });
 
@@ -3950,7 +4021,7 @@ btnOfflineInviteFriend.addEventListener("click", function () {
 
 // ===== СТАТИСТИКА И РЕЙТИНГ =====
 
-function renderStatsRow(rank, name, wins, losses, coins) {
+function renderStatsRow(rank, name, wins, losses, coins, byLevel) {
     const row = document.createElement("div");
     row.className = "stats-row";
     const rankSpan = document.createElement("span");
@@ -3987,6 +4058,26 @@ function renderStatsRow(rank, name, wins, losses, coins) {
     infoSpan.textContent = "🏆" + wins + " ❌" + losses + coinsPart + " 🎮" + total;
     row.appendChild(rankSpan);
     row.appendChild(infoSpan);
+
+    // Компактная раздельная статистика Medium/Hard — только если у записи
+    // есть byLevel (старые записи до появления уровней сложности его не
+    // имеют, и это нормально — верхние wins/losses уже показаны выше).
+    // Лёгкий здесь намеренно не отображается — он не пишет byLevel вообще.
+    // Оборачиваем в отдельный контейнер, НЕ меняя .stats-row (flex-строка
+    // используется и обычным онлайн-лидербордом, трогать её нельзя).
+    if (byLevel && (byLevel.medium || byLevel.hard)) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "stats-row-wrapper";
+        wrapper.appendChild(row);
+        const levelLine = document.createElement("div");
+        levelLine.className = "stats-bylevel-line";
+        const m = byLevel.medium || { wins: 0, losses: 0 };
+        const h = byLevel.hard || { wins: 0, losses: 0 };
+        levelLine.textContent = "⚖️🏆" + (m.wins || 0) + " ❌" + (m.losses || 0) + "  🔥🏆" + (h.wins || 0) + " ❌" + (h.losses || 0);
+        wrapper.appendChild(levelLine);
+        return wrapper;
+    }
+
     return row;
 }
 
@@ -4073,7 +4164,13 @@ function openStatsModal() {
                 return;
             }
             const entries = Object.keys(data).map(function (key) {
-                return { id: key, name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
+                return {
+                    id: key,
+                    name: data[key].name || "Игрок",
+                    wins: data[key].wins || 0,
+                    losses: data[key].losses || 0,
+                    byLevel: data[key].byLevel || null
+                };
             });
             entries.sort(function (a, b) { return b.wins - a.wins; });
 
@@ -4085,7 +4182,7 @@ function openStatsModal() {
                 });
             })).then(function () {
                 entries.forEach(function (entry, index) {
-                    statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins));
+                    statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins, entry.byLevel));
                 });
             });
         }).catch(function () {
