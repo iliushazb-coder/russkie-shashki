@@ -682,8 +682,12 @@ const translations = {
         btn_start_new_game: "Начать новую игру",
         stats_top_online: "📊 Топ игроков (Онлайн)",
         stats_top_bot: "🤖 Топ игроков (Против бота)",
-        stats_tab_wins: "🏆 Победы",
-        stats_tab_coins: "🪙 Заработано",
+        stats_tab_online: "🌐 Онлайн",
+        stats_tab_bot: "🤖 С ботом",
+        stats_label_wins: "Побед",
+        stats_label_losses: "Поражений",
+        stats_label_games: "Игр",
+        stats_label_bylevel: "По уровням сложности",
         stats_top_coins: "🪙 Топ по заработанным монетам",
         modal_offline_opp: "Соперник офлайн",
         modal_bot_difficulty: "Выберите сложность",
@@ -783,8 +787,12 @@ const translations = {
         btn_start_new_game: "Start new game",
         stats_top_online: "📊 Top players (Online)",
         stats_top_bot: "🤖 Top players (vs Bot)",
-        stats_tab_wins: "🏆 Wins",
-        stats_tab_coins: "🪙 Earned",
+        stats_tab_online: "🌐 Online",
+        stats_tab_bot: "🤖 vs Bot",
+        stats_label_wins: "Wins",
+        stats_label_losses: "Losses",
+        stats_label_games: "Games",
+        stats_label_bylevel: "By difficulty",
         stats_top_coins: "🪙 Top by coins earned",
         modal_offline_opp: "Opponent offline",
         modal_bot_difficulty: "Choose difficulty",
@@ -884,8 +892,12 @@ const translations = {
         btn_start_new_game: "Inizia nuova partita",
         stats_top_online: "📊 Migliori (Online)",
         stats_top_bot: "🤖 Migliori (vs Bot)",
-        stats_tab_wins: "🏆 Vittorie",
-        stats_tab_coins: "🪙 Guadagnate",
+        stats_tab_online: "🌐 Online",
+        stats_tab_bot: "🤖 vs Bot",
+        stats_label_wins: "Vittorie",
+        stats_label_losses: "Sconfitte",
+        stats_label_games: "Partite",
+        stats_label_bylevel: "Per difficoltà",
         stats_top_coins: "🪙 Migliori per monete guadagnate",
         modal_offline_opp: "Avversario offline",
         modal_bot_difficulty: "Scegli la difficoltà",
@@ -4021,64 +4033,125 @@ btnOfflineInviteFriend.addEventListener("click", function () {
 
 // ===== СТАТИСТИКА И РЕЙТИНГ =====
 
-function renderStatsRow(rank, name, wins, losses, coins, byLevel) {
-    const row = document.createElement("div");
-    row.className = "stats-row";
+// Общий рендер "медаль/номер места + имя (кликабельная @ссылка, если есть)".
+// Используется и Online-строкой, и Bot-карточкой, чтобы не дублировать логику.
+function renderRankAndName(rank, name) {
     const rankSpan = document.createElement("span");
     rankSpan.className = "stats-name-block";
+
     const rankNumber = document.createElement("span");
     rankNumber.className = "stats-rank";
-    rankNumber.textContent = rank + ".";
+    const medals = { 1: "🥇", 2: "🥈", 3: "🥉" };
+    rankNumber.textContent = medals[rank] || (rank + ".");
     rankSpan.appendChild(rankNumber);
 
-    // Длинные имена/юзернеймы обрезаем, чтобы строка не переносилась
     const maxNameLength = 14;
     const displayName = (typeof name === "string" && name.length > maxNameLength)
         ? name.substring(0, maxNameLength) + "…"
         : name;
 
-    // Если имя начинается с "@", делаем из него кликабельную ссылку на Telegram
     if (typeof name === 'string' && name.startsWith('@')) {
         const link = document.createElement("a");
         link.href = "https://t.me/" + name.substring(1);
         link.textContent = displayName;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.className = "stats-user-link"; // Добавляем класс для стилизации
+        link.className = "stats-user-link";
         rankSpan.appendChild(link);
     } else {
-        // Иначе оставляем обычный текст
         rankSpan.appendChild(document.createTextNode(displayName));
     }
+    return rankSpan;
+}
+
+// Компактная строка для рейтинга Online: место, имя, победы, поражения, игры.
+// Игры = wins + losses — ничьи в "stats" никогда не учитываются (см.
+// recordGameResult: winner === "draw" выходит раньше записи), поэтому это
+// действительно все ЗАСЧИТАННЫЕ партии, а не предположение.
+function renderOnlineStatsRow(rank, name, wins, losses) {
+    const row = document.createElement("div");
+    row.className = "stats-row";
+    row.appendChild(renderRankAndName(rank, name));
 
     const infoSpan = document.createElement("span");
     infoSpan.className = "stats-info-block";
     const total = wins + losses;
-    const coinsPart = (typeof coins === "number") ? (" 🪙" + coins) : "";
-    infoSpan.textContent = "🏆" + wins + " ❌" + losses + coinsPart + " 🎮" + total;
-    row.appendChild(rankSpan);
+    infoSpan.textContent = "🏆" + wins + " ❌" + losses + " 🎮" + total;
     row.appendChild(infoSpan);
+    return row;
+}
 
-    // Компактная раздельная статистика Medium/Hard — только если у записи
-    // есть byLevel (старые записи до появления уровней сложности его не
-    // имеют, и это нормально — верхние wins/losses уже показаны выше).
-    // Лёгкий здесь намеренно не отображается — он не пишет byLevel вообще.
-    // Оборачиваем в отдельный контейнер, НЕ меняя .stats-row (flex-строка
-    // используется и обычным онлайн-лидербордом, трогать её нельзя).
+// Карточка для рейтинга "С ботом": заголовок с местом/именем, основная
+// строка показателей, и отдельный блок разбивки по Medium/Hard (только если
+// byLevel реально присутствует — у партий до появления уровней сложности
+// его нет, и это нормально; Easy никогда не пишет byLevel и не показывается).
+function renderBotStatsCard(rank, name, wins, losses, coins, byLevel) {
+    const card = document.createElement("div");
+    card.className = "stats-bot-card";
+
+    const header = document.createElement("div");
+    header.className = "stats-bot-card-header";
+    header.appendChild(renderRankAndName(rank, name));
+    card.appendChild(header);
+
+    const main = document.createElement("div");
+    main.className = "stats-bot-card-main";
+    const total = wins + losses;
+    const coinsValue = (typeof coins === "number") ? coins : 0;
+    const stats = [
+        { value: wins, label: "🏆 " + t("stats_label_wins") },
+        { value: losses, label: "❌ " + t("stats_label_losses") },
+        { value: coinsValue, label: "🪙" },
+        { value: total, label: "🎮 " + t("stats_label_games") }
+    ];
+    stats.forEach(function (s) {
+        const item = document.createElement("div");
+        item.className = "stats-stat-item";
+        const val = document.createElement("span");
+        val.className = "stats-stat-value";
+        val.textContent = s.value;
+        const lbl = document.createElement("span");
+        lbl.className = "stats-stat-label";
+        lbl.textContent = s.label;
+        item.appendChild(val);
+        item.appendChild(lbl);
+        main.appendChild(item);
+    });
+    card.appendChild(main);
+
     if (byLevel && (byLevel.medium || byLevel.hard)) {
-        const wrapper = document.createElement("div");
-        wrapper.className = "stats-row-wrapper";
-        wrapper.appendChild(row);
-        const levelLine = document.createElement("div");
-        levelLine.className = "stats-bylevel-line";
+        const levelBlock = document.createElement("div");
+        levelBlock.className = "stats-bylevel-block";
+
+        const title = document.createElement("div");
+        title.className = "stats-bylevel-title";
+        title.textContent = t("stats_label_bylevel");
+        levelBlock.appendChild(title);
+
         const m = byLevel.medium || { wins: 0, losses: 0 };
         const h = byLevel.hard || { wins: 0, losses: 0 };
-        levelLine.textContent = "⚖️🏆" + (m.wins || 0) + " ❌" + (m.losses || 0) + "  🔥🏆" + (h.wins || 0) + " ❌" + (h.losses || 0);
-        wrapper.appendChild(levelLine);
-        return wrapper;
+        [
+            { icon: t("btn_difficulty_medium"), w: m.wins || 0, l: m.losses || 0 },
+            { icon: t("btn_difficulty_hard"), w: h.wins || 0, l: h.losses || 0 }
+        ].forEach(function (lvl) {
+            const lvlRow = document.createElement("div");
+            lvlRow.className = "stats-bylevel-row";
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "stats-bylevel-name";
+            nameSpan.textContent = lvl.icon;
+            const winsSpan = document.createElement("span");
+            winsSpan.textContent = "🏆 " + lvl.w;
+            const lossesSpan = document.createElement("span");
+            lossesSpan.textContent = "❌ " + lvl.l;
+            lvlRow.appendChild(nameSpan);
+            lvlRow.appendChild(winsSpan);
+            lvlRow.appendChild(lossesSpan);
+            levelBlock.appendChild(lvlRow);
+        });
+        card.appendChild(levelBlock);
     }
 
-    return row;
+    return card;
 }
 
 // Отдельная строка для рейтинга "Заработано" — переиспользует те же
@@ -4120,36 +4193,51 @@ function renderCoinRankRow(rank, name, coins) {
     return row;
 }
 
+// Общая сортировка для обоих рейтингов (Online и Bot):
+// 1) больше побед выше; 2) при равенстве — меньше поражений выше;
+// 3) win rate НЕ используется отдельным шагом: если wins И losses уже
+//    совпали на шагах 1-2, то и win rate (wins/(wins+losses)) у них
+//    математически идентичен — как отдельный шаг он ничего не решает;
+// 4) финальный детерминированный tie-break — по id, чтобы позиции
+//    никогда не "прыгали" случайно между обновлениями страницы.
+function compareLeaderboardEntries(a, b) {
+    if (b.wins !== a.wins) return b.wins - a.wins;
+    if (a.losses !== b.losses) return a.losses - b.losses;
+    return String(a.id).localeCompare(String(b.id));
+}
+
 function openStatsModal() {
     statsLeaderboard.innerHTML = "";
-    
+
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
 
     statsModal.classList.remove("hidden");
 
     // --- ОНЛАЙН РЕЙТИНГ ---
-    database.ref("stats").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
+    // limitToLast(10) по одному "wins" был бы недостаточен: Firebase при
+    // равных wins упорядочивает внутри группы по КЛЮЧУ, не по losses — то
+    // есть при большом числе игроков с одинаковым wins можно ДО всякого
+    // JS-tie-break потерять того, кто по-настоящему входит в top-10 по
+    // losses. Берём кандидатов с запасом (50 — впятеро больше цели в 10,
+    // разумный компромисс для проекта такого масштаба: покрывает типичные
+    // случаи массовых ничьих по wins, не читая всю базу целиком), сортируем
+    // честным compareLeaderboardEntries и уже потом обрезаем до 10.
+    database.ref("stats").orderByChild("wins").limitToLast(50).once("value").then(function (snapshot) {
         const data = snapshot.val();
         statsLeaderboard.innerHTML = "";
         if (!data) {
+            statsLeaderboard.textContent = t("stats_no_online_games");
             return;
         }
         const entries = Object.keys(data).map(function (key) {
             return { id: key, name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
         });
-        entries.sort(function (a, b) { return b.wins - a.wins; });
+        entries.sort(compareLeaderboardEntries);
+        const top = entries.slice(0, 10);
 
-        Promise.all(entries.map(function (entry) {
-            return database.ref("economy/" + entry.id + "/balance").once("value").then(function (coinSnap) {
-                entry.coins = coinSnap.val();
-            }).catch(function () {
-                entry.coins = null;
-            });
-        })).then(function () {
-            entries.forEach(function (entry, index) {
-                statsLeaderboard.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins));
-            });
+        top.forEach(function (entry, index) {
+            statsLeaderboard.appendChild(renderOnlineStatsRow(index + 1, entry.name, entry.wins, entry.losses));
         });
     }).catch(function () {
         statsLeaderboard.textContent = t("stats_load_error");
@@ -4157,10 +4245,11 @@ function openStatsModal() {
 
     // --- РЕЙТИНГ ПРОТИВ БОТА ---
     if (statsLeaderboardBot) {
-        database.ref("statsBot").orderByChild("wins").limitToLast(10).once("value").then(function (snapshot) {
+        database.ref("statsBot").orderByChild("wins").limitToLast(50).once("value").then(function (snapshot) {
             const data = snapshot.val();
             statsLeaderboardBot.innerHTML = "";
             if (!data) {
+                statsLeaderboardBot.textContent = t("stats_no_bot_games");
                 return;
             }
             const entries = Object.keys(data).map(function (key) {
@@ -4172,45 +4261,22 @@ function openStatsModal() {
                     byLevel: data[key].byLevel || null
                 };
             });
-            entries.sort(function (a, b) { return b.wins - a.wins; });
+            entries.sort(compareLeaderboardEntries);
+            const top = entries.slice(0, 10);
 
-            Promise.all(entries.map(function (entry) {
+            Promise.all(top.map(function (entry) {
                 return database.ref("economy/" + entry.id + "/balance").once("value").then(function (coinSnap) {
                     entry.coins = coinSnap.val();
                 }).catch(function () {
                     entry.coins = null;
                 });
             })).then(function () {
-                entries.forEach(function (entry, index) {
-                    statsLeaderboardBot.appendChild(renderStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins, entry.byLevel));
+                top.forEach(function (entry, index) {
+                    statsLeaderboardBot.appendChild(renderBotStatsCard(index + 1, entry.name, entry.wins, entry.losses, entry.coins, entry.byLevel));
                 });
             });
         }).catch(function () {
             if (statsLeaderboardBot) statsLeaderboardBot.textContent = t("stats_load_error");
-        });
-    }
-
-    // --- РЕЙТИНГ "ЗАРАБОТАНО" (lifetimeEarned) ---
-    const statsLeaderboardCoins = document.getElementById("stats-leaderboard-coins");
-    if (statsLeaderboardCoins) {
-        statsLeaderboardCoins.innerHTML = "";
-        database.ref("economy").orderByChild("lifetimeEarned").limitToLast(10).once("value").then(function (snapshot) {
-            const data = snapshot.val();
-            statsLeaderboardCoins.innerHTML = "";
-            if (!data) {
-                return;
-            }
-            const entries = Object.keys(data).map(function (key) {
-                return { name: data[key].name || "Игрок", lifetimeEarned: data[key].lifetimeEarned || 0 };
-            });
-            // Сортируем именно по lifetimeEarned — сколько всего заработано за всё время,
-            // не по balance, чтобы будущие траты в магазине не сбивали место в рейтинге.
-            entries.sort(function (a, b) { return b.lifetimeEarned - a.lifetimeEarned; });
-            entries.forEach(function (entry, index) {
-                statsLeaderboardCoins.appendChild(renderCoinRankRow(index + 1, entry.name, entry.lifetimeEarned));
-            });
-        }).catch(function () {
-            statsLeaderboardCoins.textContent = t("stats_load_error");
         });
     }
 }
@@ -4219,24 +4285,25 @@ if (btnShowStats) {
     btnShowStats.addEventListener("click", openStatsModal);
 }
 
-const statsTabWins = document.getElementById("stats-tab-wins");
-const statsTabCoins = document.getElementById("stats-tab-coins");
-const statsViewWins = document.getElementById("stats-view-wins");
-const statsViewCoins = document.getElementById("stats-view-coins");
 
-if (statsTabWins && statsTabCoins && statsViewWins && statsViewCoins) {
-    statsTabWins.addEventListener("click", function () {
-        statsTabWins.classList.add("stats-tab-active");
-        statsTabCoins.classList.remove("stats-tab-active");
-        statsViewWins.classList.remove("hidden");
-        statsViewCoins.classList.add("hidden");
+const statsTabOnline = document.getElementById("stats-tab-online");
+const statsTabBot = document.getElementById("stats-tab-bot");
+const statsViewOnline = document.getElementById("stats-view-online");
+const statsViewBot = document.getElementById("stats-view-bot");
+
+if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
+    statsTabOnline.addEventListener("click", function () {
+        statsTabOnline.classList.add("stats-tab-active");
+        statsTabBot.classList.remove("stats-tab-active");
+        statsViewOnline.classList.remove("hidden");
+        statsViewBot.classList.add("hidden");
     });
 
-    statsTabCoins.addEventListener("click", function () {
-        statsTabCoins.classList.add("stats-tab-active");
-        statsTabWins.classList.remove("stats-tab-active");
-        statsViewCoins.classList.remove("hidden");
-        statsViewWins.classList.add("hidden");
+    statsTabBot.addEventListener("click", function () {
+        statsTabBot.classList.add("stats-tab-active");
+        statsTabOnline.classList.remove("stats-tab-active");
+        statsViewBot.classList.remove("hidden");
+        statsViewOnline.classList.add("hidden");
     });
 }
 
