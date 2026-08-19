@@ -4472,6 +4472,12 @@ function findBestMove(state, color, maxDepth) {
     // но не сохраняется между разными ходами или партиями.
     const tt = {};
 
+    // KILLER MOVES: та же логика жизненного цикла, что и у tt — новая пустая
+    // таблица на каждый вызов findBestMove(), не сохраняется между ходами
+    // бота или партиями. Индексируется по глубине, хранит максимум 2 тихих
+    // хода на глубину, которые недавно вызвали отсечение.
+    const killerTable = {};
+
     let bestMove = moves[0]; // Запасной ход на случай, если время выйдет сразу
     let previousBestMove = null;
     let stableIterations = 0; // Счётчик стабильности лучшего хода
@@ -4502,7 +4508,7 @@ function findBestMove(state, color, maxDepth) {
 
             // Если цепочка взятия не закончена, глубину не уменьшаем
             const nextDepth = (newState.turn === color) ? depth : depth - 1;
-            const score = minimax(newState, nextDepth, alpha, beta, color, tt);
+            const score = minimax(newState, nextDepth, alpha, beta, color, tt, killerTable);
 
             if (botSearchCancelled) break; // Время вышло, прерываем текущую глубину
 
@@ -4639,7 +4645,7 @@ function quiescenceSearch(state, alpha, beta, botColor) {
     }
 }
 
-function minimax(state, depth, alpha, beta, botColor, tt) {
+function minimax(state, depth, alpha, beta, botColor, tt, killerTable) {
     // Проверка лимита времени (каждые 128 узлов, чтобы минимизировать 
     // отставание при просадках скорости или работе сборщика мусора)
     botNodesSearched++;
@@ -4685,7 +4691,7 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
 
     const currentColor = state.turn;
     const isMaximizing = (currentColor === botColor);
-    const moves = getAllLegalMovesForBot(state, currentColor);
+    let moves = getAllLegalMovesForBot(state, currentColor);
 
     if (moves.length === 0) return isMaximizing ? -1000000 : 1000000;
 
@@ -4703,6 +4709,34 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
         }
     }
 
+    // KILLER MOVES: переставляем тихие ходы, недавно вызвавшие отсечение на
+    // этой же глубине, ближе к началу списка тихих ходов — взятия не трогаем,
+    // они уже впереди благодаря существующей сортировке getAllLegalMovesForBot.
+    // TT bestMove (выше) уже стоит первым и остаётся приоритетнее.
+    const killers = killerTable[depth];
+    if (killers && (killers[0] || killers[1])) {
+        const ttMoveAtFront = (ttEntry && ttEntry.bestMove && moves.length > 0 &&
+            moves[0].from.row === ttEntry.bestMove.from.row && moves[0].from.col === ttEntry.bestMove.from.col &&
+            moves[0].to.row === ttEntry.bestMove.to.row && moves[0].to.col === ttEntry.bestMove.to.col) ? moves[0] : null;
+        const rest = ttMoveAtFront ? moves.slice(1) : moves.slice();
+
+        const captureMoves = [];
+        const quietMoves = [];
+        for (const m of rest) {
+            if (isCaptureMove(state.pieces, m)) captureMoves.push(m);
+            else quietMoves.push(m);
+        }
+        quietMoves.sort(function (a, b) {
+            const aIsKiller = (killers[0] && a.from.row === killers[0].from.row && a.from.col === killers[0].from.col && a.to.row === killers[0].to.row && a.to.col === killers[0].to.col) ||
+                               (killers[1] && a.from.row === killers[1].from.row && a.from.col === killers[1].from.col && a.to.row === killers[1].to.row && a.to.col === killers[1].to.col) ? 1 : 0;
+            const bIsKiller = (killers[0] && b.from.row === killers[0].from.row && b.from.col === killers[0].from.col && b.to.row === killers[0].to.row && b.to.col === killers[0].to.col) ||
+                               (killers[1] && b.from.row === killers[1].from.row && b.from.col === killers[1].from.col && b.to.row === killers[1].to.row && b.to.col === killers[1].to.col) ? 1 : 0;
+            return bIsKiller - aIsKiller;
+        });
+
+        moves = (ttMoveAtFront ? [ttMoveAtFront] : []).concat(captureMoves, quietMoves);
+    }
+
     let bestMoveThisNode = null;
 
     if (isMaximizing) {
@@ -4713,7 +4747,7 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
             
             // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
             const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
-            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor, tt);
+            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor, tt, killerTable);
             
             if (botSearchCancelled) return 0;
             
@@ -4722,7 +4756,19 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
                 bestMoveThisNode = move;
             }
             alpha = Math.max(alpha, evalScore);
-            if (beta <= alpha) break; 
+            if (beta <= alpha) {
+                // KILLER MOVES: запоминаем тихий ход, вызвавший отсечение,
+                // только для этой глубины. Взятия не запоминаем — они и так
+                // уже приоритетны через существующую сортировку.
+                if (!isCaptureMove(state.pieces, move)) {
+                    if (!killerTable[depth]) killerTable[depth] = [null, null];
+                    const k = killerTable[depth];
+                    const already = (k[0] && k[0].from.row === move.from.row && k[0].from.col === move.from.col && k[0].to.row === move.to.row && k[0].to.col === move.to.col) ||
+                                     (k[1] && k[1].from.row === move.from.row && k[1].from.col === move.from.col && k[1].to.row === move.to.row && k[1].to.col === move.to.col);
+                    if (!already) { k[1] = k[0]; k[0] = move; }
+                }
+                break;
+            }
         }
 
         // КРИТИЧНО: если мы дошли сюда, botSearchCancelled точно false —
@@ -4748,7 +4794,7 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
             
             // Не уменьшаем глубину, если ход не передан сопернику (идёт цепочка взятия)
             const nextDepth = (newState.turn === currentColor) ? depth : depth - 1;
-            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor, tt);
+            const evalScore = minimax(newState, nextDepth, alpha, beta, botColor, tt, killerTable);
             
             if (botSearchCancelled) return 0;
             
@@ -4757,7 +4803,16 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
                 bestMoveThisNode = move;
             }
             beta = Math.min(beta, evalScore);
-            if (beta <= alpha) break;
+            if (beta <= alpha) {
+                if (!isCaptureMove(state.pieces, move)) {
+                    if (!killerTable[depth]) killerTable[depth] = [null, null];
+                    const k = killerTable[depth];
+                    const already = (k[0] && k[0].from.row === move.from.row && k[0].from.col === move.from.col && k[0].to.row === move.to.row && k[0].to.col === move.to.col) ||
+                                     (k[1] && k[1].from.row === move.from.row && k[1].from.col === move.from.col && k[1].to.row === move.to.row && k[1].to.col === move.to.col);
+                    if (!already) { k[1] = k[0]; k[0] = move; }
+                }
+                break;
+            }
         }
 
         let flag;
