@@ -736,6 +736,20 @@ h1 {
     margin-left: 10px;
 }
 
+/* Компактная раздельная строка Medium/Hard под основной строкой статистики бота */
+.stats-row-wrapper {
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-bylevel-line {
+    font-size: 11px;
+    opacity: 0.75;
+    padding: 0 12px 4px 12px;
+    white-space: nowrap;
+    overflow-x: auto;
+}
+
 /* Стиль для кликабельного имени игрока в статистике */
 .stats-user-link {
     color: #fff3d6;
