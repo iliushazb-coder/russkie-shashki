@@ -4539,6 +4539,106 @@ function findBestMove(state, color, maxDepth) {
     return bestMove;
 }
 
+// ===== QUIESCENCE SEARCH v1 =====
+// Продолжает поиск за пределы обычной глубины ТОЛЬКО пока позиция "неспокойная":
+// либо продолжается цепочка взятия (mustContinueFrom), либо у стороны, чей ход,
+// есть обязательное взятие. Никакого отдельного qDepth — расширение конечно,
+// потому что одна и та же побитая фигура не может быть взята повторно благодаря
+// pendingRemovals, а после завершения серии материал реально уменьшается —
+// фигур на доске максимум 24, и это ограничение работает вместе с уже
+// существующим общим лимитом времени (BOT_MAX_THINK_TIME_MS).
+// Не читает и не пишет обычную Transposition Table — отдельный, изолированный путь.
+// Настоящая проверка "является ли этот ход взятием" — сканирует путь между
+// from и to на наличие фигуры соперника. Расстояние в клетках здесь НЕ
+// показатель: у дамки обычный тихий ход тоже может быть на любое число клеток
+// по диагонали, поэтому "distance > 1" ошибочно принял бы длинный тихий ход
+// дамки за взятие и уходил в бесконечную рекурсию.
+function isCaptureMove(pieces, move) {
+    const dRow = move.to.row - move.from.row;
+    const dCol = move.to.col - move.from.col;
+    const dist = Math.abs(dRow);
+    if (dist < 2) return false;
+    const stepRow = dRow / dist;
+    const stepCol = dCol / dist;
+    for (let i = 1; i < dist; i++) {
+        const key = (move.from.row + stepRow * i) + "_" + (move.from.col + stepCol * i);
+        if (pieces[key]) return true; // По правилам между from и to может быть только одна фигура — соперника
+    }
+    return false;
+}
+
+function quiescenceSearch(state, alpha, beta, botColor) {
+    botNodesSearched++;
+    if (botNodesSearched % 128 === 0) {
+        if (Date.now() - botStartTime > BOT_MAX_THINK_TIME_MS) {
+            botSearchCancelled = true;
+        }
+    }
+    if (botSearchCancelled) return 0;
+
+    if (state.winner) {
+        return evaluateBoard(state, botColor);
+    }
+
+    const currentColor = state.turn;
+    const moves = getAllLegalMovesForBot(state, currentColor);
+
+    // Позиция "неспокойная", если цепочка взятия ещё не закончена, либо среди
+    // ходов есть хотя бы одно взятие — определяется через isCaptureMove(),
+    // которая проверяет наличие фигуры на пути легального хода (не по дистанции,
+    // так как у дамки обычный тихий ход тоже может быть на любое расстояние).
+    // Не используем hasMandatoryCapture() напрямую — она не учитывает mustContinueFrom/
+    // pendingRemovals и может ошибочно учитывать чужую, не относящуюся к делу
+    // шашку. Список из getAllLegalMovesForBot() уже корректно ограничен одной
+    // шашкой во время цепочки — этого достаточно для проверки.
+    const isNoisy = state.mustContinueFrom !== null || moves.some(function (m) {
+        return isCaptureMove(state.pieces, m);
+    });
+
+    if (!isNoisy) {
+        // Тихий лист — никакого stand-pat не нужно, это и есть обычная оценка.
+        return evaluateBoard(state, botColor);
+    }
+
+    // Рассматриваем только реальные взятия — тихие ходы в этом списке (если они
+    // там есть при mustContinueFrom === null и живом взятии у другой шашки) всё
+    // равно были бы отклонены attemptMove() как нелегальные, поэтому фильтруем
+    // их здесь заранее, не тратя на них попытки впустую.
+    const captureMoves = moves.filter(function (m) {
+        return isCaptureMove(state.pieces, m);
+    });
+
+    const isMaximizing = (currentColor === botColor);
+
+    if (isMaximizing) {
+        let maxEval = -Infinity;
+        for (const move of captureMoves) {
+            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
+            if (!newState) continue;
+            const evalScore = quiescenceSearch(newState, alpha, beta, botColor);
+            if (botSearchCancelled) return 0;
+            if (evalScore > maxEval) maxEval = evalScore;
+            alpha = Math.max(alpha, evalScore);
+            if (beta <= alpha) break;
+        }
+        // Защита: если по какой-то причине ни один ход не оказался легальным —
+        // просто отдаём обычную статичную оценку, не оставляем -Infinity.
+        return maxEval === -Infinity ? evaluateBoard(state, botColor) : maxEval;
+    } else {
+        let minEval = Infinity;
+        for (const move of captureMoves) {
+            const newState = attemptMove(state, move.from.row, move.from.col, move.to.row, move.to.col, currentColor);
+            if (!newState) continue;
+            const evalScore = quiescenceSearch(newState, alpha, beta, botColor);
+            if (botSearchCancelled) return 0;
+            if (evalScore < minEval) minEval = evalScore;
+            beta = Math.min(beta, evalScore);
+            if (beta <= alpha) break;
+        }
+        return minEval === Infinity ? evaluateBoard(state, botColor) : minEval;
+    }
+}
+
 function minimax(state, depth, alpha, beta, botColor, tt) {
     // Проверка лимита времени (каждые 128 узлов, чтобы минимизировать 
     // отставание при просадках скорости или работе сборщика мусора)
@@ -4550,8 +4650,15 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
     }
     if (botSearchCancelled) return 0; // Возвращаем 0, результат будет проигнорирован
 
-    if (depth === 0 || state.winner) {
+    if (state.winner) {
         return evaluateBoard(state, botColor);
+    }
+
+    if (depth === 0) {
+        // QUIESCENCE SEARCH v1: не отдаём оценку сразу, если позиция "неспокойная" —
+        // продолжаем ТОЛЬКО по обязательным взятиям, до полностью тихой позиции.
+        // Не читает и не пишет обычную TT — отдельный, изолированный путь оценки.
+        return quiescenceSearch(state, alpha, beta, botColor);
     }
 
     // Сохраняем ИСХОДНЫЕ границы окна поиска — тип записи TT (EXACT/LOWER/UPPER)
