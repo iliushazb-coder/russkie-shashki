@@ -705,6 +705,12 @@ h1 {
     width: 100%;
 }
 
+/* Bot-карточки крупнее и визуально самостоятельнее строк Online —
+   чуть больший отступ между ними для аккуратной разбивки. */
+#stats-leaderboard-bot.stats-leaderboard {
+    gap: 10px;
+}
+
 .stats-row {
     display: flex;
     align-items: center;
@@ -736,18 +742,87 @@ h1 {
     margin-left: 10px;
 }
 
-/* Компактная раздельная строка Medium/Hard под основной строкой статистики бота */
-.stats-row-wrapper {
+/* Карточка игрока в рейтинге "С ботом" — заголовок, сетка показателей,
+   отдельный блок разбивки Medium/Hard. Мобильно-ориентированная: сетка 2x2
+   вместо попытки уместить 4 значения в одну строку. */
+.stats-bot-card {
     display: flex;
     flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 14px;
+    background: rgba(255,225,170,0.06);
+    border: 1px solid rgba(255,210,130,0.15);
 }
 
-.stats-bylevel-line {
-    font-size: 11px;
-    opacity: 0.75;
-    padding: 0 12px 4px 12px;
+.stats-bot-card-header {
+    display: flex;
+    align-items: center;
+}
+
+.stats-bot-card-main {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 10px;
+}
+
+.stats-stat-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: rgba(255,225,170,0.05);
+    border-radius: 8px;
+    padding: 6px 4px;
+    min-width: 0;
+}
+
+.stats-stat-value {
+    font-size: 16px;
+    font-weight: 800;
+    color: #fff3d6;
+    line-height: 1.3;
+}
+
+.stats-stat-label {
+    font-size: 10px;
+    color: #cbb98a;
     white-space: nowrap;
-    overflow-x: auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+.stats-bylevel-block {
+    border-top: 1px solid rgba(255,210,130,0.15);
+    padding-top: 8px;
+    margin-top: 2px;
+}
+
+.stats-bylevel-title {
+    font-size: 11px;
+    color: #cbb98a;
+    opacity: 0.85;
+    margin-bottom: 6px;
+    text-align: left;
+}
+
+.stats-bylevel-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 12px;
+    color: #f0d9ae;
+    padding: 3px 0;
+    gap: 8px;
+}
+
+.stats-bylevel-name {
+    flex: 1 1 auto;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 /* Стиль для кликабельного имени игрока в статистике */
