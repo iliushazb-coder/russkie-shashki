@@ -1287,6 +1287,133 @@ function checkWinCondition(pieces, opponentColor) {
     return null;
 }
 
+// ===== АВТОМАТИЧЕСКАЯ НИЧЬЯ (IDF 7.2.3 / 7.2.5 / 7.2.6) — ТОЛЬКО ДЛЯ РЕАЛЬНОЙ ПАРТИИ =====
+// ВАЖНО: эти три функции вызываются ТОЛЬКО из performMove(), никогда из attemptMove()
+// или minimax() — draw-счётчики/история не должны участвовать в симуляциях бота.
+// Ключ позиции здесь намеренно ОТДЕЛЬНЫЙ от getTTKey() бота — это разные задачи,
+// хранится как строковое ЗНАЧЕНИЕ внутри массива, а не как ключ узла Firebase
+// (запрещённые символы Firebase — ".", "$", "#", "[", "]", "/" — недопустимы именно
+// в именах узлов, но полностью разрешены внутри строковых значений).
+function getDrawPositionKey(pieces, turn) {
+    let s = "";
+    for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+            if ((row + col) % 2 === 0) continue;
+            const p = pieces[row + "_" + col];
+            if (!p) { s += "."; continue; }
+            if (p.color === "light") s += p.king ? "L" : "l";
+            else s += p.king ? "D" : "d";
+        }
+    }
+    return s + "_" + turn;
+}
+
+// Проверяет пороги 7.2.5 (только дамки, 15 ходов) и 7.2.6 (30/60 ходов без
+// изменения материального баланса, у обеих сторон есть дамка) и 7.2.3
+// (троекратное повторение). Ничего не мутирует, только читает переданные значения.
+function checkAutomaticDraw(pieces, kingOnlyStreak, noProgressStreak, positionHistory, newPositionKey) {
+    // 7.2.5 — 15 полностью завершённых ходов только дамками, без взятий и без
+    // движения простых шашек.
+    if (kingOnlyStreak >= 15) {
+        return "kings_only_15";
+    }
+
+    // 7.2.6 — материальный баланс не менялся заданное число ходов, при условии,
+    // что у ОБЕИХ сторон сейчас есть хотя бы одна дамка.
+    let totalPieces = 0;
+    let lightHasKing = false;
+    let darkHasKing = false;
+    for (const key in pieces) {
+        totalPieces++;
+        const p = pieces[key];
+        if (p.king) {
+            if (p.color === "light") lightHasKing = true;
+            else darkHasKing = true;
+        }
+    }
+    if (lightHasKing && darkHasKing) {
+        if (totalPieces >= 4 && totalPieces <= 5 && noProgressStreak >= 30) {
+            return "no_progress_30";
+        }
+        if (totalPieces >= 6 && totalPieces <= 7 && noProgressStreak >= 60) {
+            return "no_progress_60";
+        }
+    }
+
+    // 7.2.3 — троекратное повторение одной и той же позиции при ходе одной
+    // и той же стороны. Ключ уже включает turn, поэтому условие "тот же
+    // игрок должен ходить" выполняется автоматически.
+    let repeatCount = 0;
+    for (let i = 0; i < positionHistory.length; i++) {
+        if (positionHistory[i] === newPositionKey) repeatCount++;
+    }
+    if (repeatCount >= 3) {
+        return "threefold_repetition";
+    }
+
+    return null;
+}
+
+// Главная точка входа — вызывается ИСКЛЮЧИТЕЛЬНО из performMove(), один раз,
+// ровно в момент завершения РЕАЛЬНОГО хода (не на промежуточных прыжках цепочки).
+// prevState — состояние ДО этого конкретного прыжка; result — то, что вернул
+// attemptMove для этого прыжка; movingPieceWasKing — была ли шашка дамкой ДО хода.
+function computeNextDrawState(prevState, result, movingPieceWasKing) {
+    const prevKingOnlyStreak = prevState.kingOnlyStreak || 0;
+    const prevNoProgressStreak = prevState.noProgressStreak || 0;
+    const prevHistory = prevState.positionHistory || [];
+
+    // Цепочка взятия ещё не закончена — многоходовое взятие целиком считается
+    // ОДНИМ ходом, поэтому счётчики трогать рано, ждём финального прыжка.
+    if (result.mustContinueFrom !== null) {
+        return {
+            kingOnlyStreak: prevKingOnlyStreak,
+            noProgressStreak: prevNoProgressStreak,
+            positionHistory: prevHistory,
+            drawReason: null
+        };
+    }
+
+    const prevCapturedTotal = (prevState.capturedDark || 0) + (prevState.capturedLight || 0);
+    const newCapturedTotal = (result.capturedDark || 0) + (result.capturedLight || 0);
+    const wasCapture = newCapturedTotal > prevCapturedTotal;
+
+    const destKey = result.lastMove.to.row + "_" + result.lastMove.to.col;
+    const movedPieceNowKing = !!(result.pieces[destKey] && result.pieces[destKey].king);
+    const becamePromoted = !movingPieceWasKing && movedPieceNowKing;
+
+    let newKingOnlyStreak;
+    if (wasCapture || !movingPieceWasKing) {
+        // Взятие, либо ходила простая шашка (независимо от превращения) —
+        // серия "только дамки без взятий" прерывается.
+        newKingOnlyStreak = 0;
+    } else {
+        // Ходила именно дамка, и взятия не было.
+        newKingOnlyStreak = prevKingOnlyStreak + 1;
+    }
+
+    let newNoProgressStreak;
+    if (wasCapture || becamePromoted) {
+        newNoProgressStreak = 0;
+    } else {
+        newNoProgressStreak = prevNoProgressStreak + 1;
+    }
+
+    const newPositionKey = getDrawPositionKey(result.pieces, result.turn);
+    const newHistory = prevHistory.concat([newPositionKey]);
+
+    const drawReason = result.winner
+        ? null // Партия уже закончилась обычной победой — автоматическую ничью не проверяем поверх неё
+        : checkAutomaticDraw(result.pieces, newKingOnlyStreak, newNoProgressStreak, newHistory, newPositionKey);
+
+    return {
+        kingOnlyStreak: newKingOnlyStreak,
+        noProgressStreak: newNoProgressStreak,
+        positionHistory: newHistory,
+        drawReason: drawReason
+    };
+}
+
 function attemptMove(state, fromRow, fromCol, toRow, toCol, actingColor) {
     const pieces = {};
     for (const k in state.pieces) {
@@ -2236,6 +2363,9 @@ function forceResyncFromServer() {
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
             matchNumber: room.matchNumber || 0,
+            kingOnlyStreak: room.kingOnlyStreak || 0,
+            noProgressStreak: room.noProgressStreak || 0,
+            positionHistory: room.positionHistory || [],
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -2293,6 +2423,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
 
         const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
 
+        const drawState = computeNextDrawState(currentState, optimisticResult, movingPieceWasKing);
+
         currentState.pieces = optimisticResult.pieces;
         currentState.turn = optimisticResult.turn;
         currentState.mustContinueFrom = optimisticResult.mustContinueFrom;
@@ -2304,6 +2436,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.lastMovePath = optimisticResult.lastMovePath;
         currentState.lastCapturedSquares = optimisticResult.lastCapturedSquares;
         currentState.pendingRemovals = optimisticResult.pendingRemovals;
+        currentState.kingOnlyStreak = drawState.kingOnlyStreak;
+        currentState.noProgressStreak = drawState.noProgressStreak;
+        currentState.positionHistory = drawState.positionHistory;
 
         if (optimisticResult.mustContinueFrom === null && currentState.timeControlSeconds > 0) {
             currentState.turnStartedAt = Date.now();
@@ -2312,6 +2447,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         if (optimisticResult.winner) {
             currentState.winner = optimisticResult.winner;
             currentState.winReason = optimisticResult.winReason;
+        } else if (drawState.drawReason) {
+            currentState.winner = "draw";
+            currentState.winReason = drawState.drawReason;
         }
         selectedFrom = optimisticResult.mustContinueFrom
             ? { row: optimisticResult.mustContinueFrom.row, col: optimisticResult.mustContinueFrom.col }
@@ -2337,11 +2475,18 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                     moveCount: room.moveCount || 0,
                     lastMovePath: room.lastMovePath || null,
                     lastCapturedSquares: room.lastCapturedSquares || null,
-                    pendingRemovals: room.pendingRemovals || null
+                    pendingRemovals: room.pendingRemovals || null,
+                    kingOnlyStreak: room.kingOnlyStreak || 0,
+                    noProgressStreak: room.noProgressStreak || 0,
+                    positionHistory: room.positionHistory || []
                 };
+
+                const movingPieceWasKing = !!(room.pieces[fromRow + "_" + fromCol] && room.pieces[fromRow + "_" + fromCol].king);
 
                 const result = attemptMove(state, fromRow, fromCol, toRow, toCol, myColor);
                 if (!result) return;
+
+                const drawState = computeNextDrawState(state, result, movingPieceWasKing);
 
                 const newRoom = {};
                 for (const key in room) newRoom[key] = room[key];
@@ -2356,12 +2501,19 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 newRoom.lastMovePath = result.lastMovePath;
                 newRoom.lastCapturedSquares = result.lastCapturedSquares;
                 newRoom.pendingRemovals = result.pendingRemovals;
+                newRoom.kingOnlyStreak = drawState.kingOnlyStreak;
+                newRoom.noProgressStreak = drawState.noProgressStreak;
+                newRoom.positionHistory = drawState.positionHistory;
                 
                 if (result.mustContinueFrom === null) newRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
                 
                 if (result.winner) {
                     newRoom.winner = result.winner;
                     newRoom.winReason = result.winReason;
+                    newRoom.status = "finished";
+                } else if (drawState.drawReason) {
+                    newRoom.winner = "draw";
+                    newRoom.winReason = drawState.drawReason;
                     newRoom.status = "finished";
                 }
                 return newRoom;
@@ -2378,6 +2530,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
         if (result) {
             const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
+            const drawState = computeNextDrawState(currentState, result, movingPieceWasKing);
             currentState.pieces = result.pieces;
             currentState.turn = result.turn;
             currentState.mustContinueFrom = result.mustContinueFrom;
@@ -2389,9 +2542,15 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             currentState.lastMovePath = result.lastMovePath;
             currentState.lastCapturedSquares = result.lastCapturedSquares;
             currentState.pendingRemovals = result.pendingRemovals;
+            currentState.kingOnlyStreak = drawState.kingOnlyStreak;
+            currentState.noProgressStreak = drawState.noProgressStreak;
+            currentState.positionHistory = drawState.positionHistory;
             if (result.winner) {
                 currentState.winner = result.winner;
                 currentState.winReason = result.winReason;
+            } else if (drawState.drawReason) {
+                currentState.winner = "draw";
+                currentState.winReason = drawState.drawReason;
             }
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
             playSoundForMoveType(result.moveType, movingPieceWasKing);
@@ -2469,6 +2628,9 @@ function startOnlineGame() {
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
             matchNumber: room.matchNumber || 0,
+            kingOnlyStreak: room.kingOnlyStreak || 0,
+            noProgressStreak: room.noProgressStreak || 0,
+            positionHistory: room.positionHistory || [],
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -2722,6 +2884,9 @@ function startOfflineGame() {
         capturedDark: 0,
         capturedLight: 0,
         moveCount: 0,
+        kingOnlyStreak: 0,
+        noProgressStreak: 0,
+        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -2878,6 +3043,9 @@ function createOnlineRoom() {
         capturedLight: 0,
         moveCount: 0,
         matchNumber: 0,
+        kingOnlyStreak: 0,
+        noProgressStreak: 0,
+        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -2966,6 +3134,9 @@ function createRoomAndShowWaiting() {
         capturedLight: 0,
         moveCount: 0,
         matchNumber: 0,
+        kingOnlyStreak: 0,
+        noProgressStreak: 0,
+        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -3273,6 +3444,12 @@ function performRematchReset() {
     // Каждая партия внутри одной комнаты получает новый номер.
     // Первая партия = 0, первый реванш = 1, второй = 2 и т.д.
     updates["matchNumber"] = (currentState.matchNumber || 0) + 1;
+
+    // Полный сброс автоматической ничьей — новая партия начинается с чистой
+    // историей, стартовая позиция сразу считается первым появлением.
+    updates["kingOnlyStreak"] = 0;
+    updates["noProgressStreak"] = 0;
+    updates["positionHistory"] = [getDrawPositionKey(createInitialPieces(), "light")];
 
     updates["moveType"] = null;
     updates["lastMove"] = null;
@@ -3997,6 +4174,9 @@ function addToMatchmakingQueue() {
             capturedLight: 0,
             moveCount: 0,
             matchNumber: 0,
+            kingOnlyStreak: 0,
+            noProgressStreak: 0,
+            positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
             lastMove: null,
             lastMovePath: null,
             lastCapturedSquares: null,
@@ -4487,6 +4667,7 @@ function minimax(state, depth, alpha, beta, botColor, tt) {
 }
 
 function evaluateBoard(state, botColor) {
+    if (state.winner === "draw") return 0;
     if (state.winner === botColor) return 1000000;
     if (state.winner && state.winner !== botColor) return -1000000;
 
