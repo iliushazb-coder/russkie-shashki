@@ -675,6 +675,10 @@ const translations = {
         stats_tab_coins: "🪙 Заработано",
         stats_top_coins: "🪙 Топ по заработанным монетам",
         modal_offline_opp: "Соперник офлайн",
+        modal_bot_difficulty: "Выберите сложность",
+        btn_difficulty_easy: "🌱 Лёгкий",
+        btn_difficulty_medium: "⚖️ Средний",
+        btn_difficulty_hard: "🔥 Сложный",
         btn_play_bot_offline: "🤖 Играть с ботом",
         btn_invite_other: "👥 Пригласить другого друга",
         btn_accept: "✅ Принять",
@@ -772,6 +776,10 @@ const translations = {
         stats_tab_coins: "🪙 Earned",
         stats_top_coins: "🪙 Top by coins earned",
         modal_offline_opp: "Opponent offline",
+        modal_bot_difficulty: "Choose difficulty",
+        btn_difficulty_easy: "🌱 Easy",
+        btn_difficulty_medium: "⚖️ Medium",
+        btn_difficulty_hard: "🔥 Hard",
         btn_play_bot_offline: "🤖 Play with bot",
         btn_invite_other: "👥 Invite another friend",
         btn_accept: "✅ Accept",
@@ -869,6 +877,10 @@ const translations = {
         stats_tab_coins: "🪙 Guadagnate",
         stats_top_coins: "🪙 Migliori per monete guadagnate",
         modal_offline_opp: "Avversario offline",
+        modal_bot_difficulty: "Scegli la difficoltà",
+        btn_difficulty_easy: "🌱 Facile",
+        btn_difficulty_medium: "⚖️ Medio",
+        btn_difficulty_hard: "🔥 Difficile",
         btn_play_bot_offline: "🤖 Gioca con il bot",
         btn_invite_other: "👥 Invita un altro amico",
         btn_accept: "✅ Accetta",
@@ -973,6 +985,10 @@ const statsLeaderboard = document.getElementById("stats-leaderboard");
 const statsLeaderboardLosses = document.getElementById("stats-leaderboard-losses");
 const btnStatsClose = document.getElementById("btn-stats-close");
 const offlineOpponentModal = document.getElementById("offline-opponent-modal");
+const botDifficultyModal = document.getElementById("bot-difficulty-modal");
+const btnDifficultyEasy = document.getElementById("btn-difficulty-easy");
+const btnDifficultyMedium = document.getElementById("btn-difficulty-medium");
+const btnDifficultyHard = document.getElementById("btn-difficulty-hard");
 const offlineOpponentText = document.getElementById("offline-opponent-text");
 const btnOfflinePlayBot = document.getElementById("btn-offline-play-bot");
 const btnOfflineInviteFriend = document.getElementById("btn-offline-invite-friend");
@@ -1037,6 +1053,10 @@ let activeMatchRef = null;
 let matchmakingDecisionMade = false; // защита от гонки условий: решение "создать/присоединиться" принимается один раз
 let isBotGame = false;
 let botColor = "dark"; // Больше не константа, меняется от игры к игре
+// Уровень сложности текущей партии с ботом. Устанавливается заново при
+// каждом новом запуске (см. promptBotDifficultyThenStart) — намеренно НЕ
+// сохраняется ни в localStorage, ни в Firebase, ни между партиями.
+let botDifficulty = "hard";
 
 // Флаг для защиты от гонки условий в матчмейкинге
 let isMatchmakingResolved = false;
@@ -2816,6 +2836,41 @@ function syncBotStateToFirebase() {
     });
 }
 
+// Соответствие уровня сложности и максимальной глубины поиска. Единственное
+// изменение силы бота — параметр maxDepth, уже принимаемый существующим
+// findBestMove(state, color, maxDepth). Никакой новой поисковой логики,
+// эвристик или ограничений времени здесь нет — Hard получает ровно то же
+// значение (20), что и раньше, и ведёт себя идентично прежнему production.
+function getMaxDepthForDifficulty(difficulty) {
+    if (difficulty === "easy") return 3;
+    if (difficulty === "medium") return 4;
+    return 20; // hard — без изменений
+}
+
+// Единая точка показа выбора сложности — используется всеми путями запуска
+// игры с ботом, чтобы не дублировать одну и ту же логику трижды. Сама
+// партия стартует только после выбора одной из трёх кнопок; ничего не
+// сохраняется между вызовами — botDifficulty выставляется заново каждый раз.
+function promptBotDifficultyThenStart() {
+    botDifficultyModal.classList.remove("hidden");
+}
+
+btnDifficultyEasy.addEventListener("click", function () {
+    botDifficultyModal.classList.add("hidden");
+    botDifficulty = "easy";
+    startOfflineGame();
+});
+btnDifficultyMedium.addEventListener("click", function () {
+    botDifficultyModal.classList.add("hidden");
+    botDifficulty = "medium";
+    startOfflineGame();
+});
+btnDifficultyHard.addEventListener("click", function () {
+    botDifficultyModal.classList.add("hidden");
+    botDifficulty = "hard";
+    startOfflineGame();
+});
+
 function startOfflineGame() {
     isOnlineGame = false;
     isSpectator = false;
@@ -3197,7 +3252,7 @@ btnShareLink.addEventListener("click", function () {
 btnPlayBot.addEventListener("click", function () {
     isBotGame = true;
     showScreen(gameScreen);
-    startOfflineGame();
+    promptBotDifficultyThenStart();
 });
 
 // ===== СДАТЬСЯ =====
@@ -3422,10 +3477,10 @@ btnNewGame.addEventListener("click", function () {
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
     } else if (isBotGame) {
         endGameModal.classList.add("hidden");
-        startOfflineGame();
+        promptBotDifficultyThenStart();
     } else {
         endGameModal.classList.add("hidden");
-        startOfflineGame();
+        promptBotDifficultyThenStart();
     }
 });
 
@@ -3875,7 +3930,7 @@ btnOfflinePlayBot.addEventListener("click", function () {
     roomCode = null;
     showScreen(gameScreen);
     isBotGame = true;
-    startOfflineGame();
+    promptBotDifficultyThenStart();
 });
 
 btnOfflineInviteFriend.addEventListener("click", function () {
@@ -4416,9 +4471,13 @@ function triggerBotMove() {
     // отдельного пути выполнения хода здесь нет.
     const bookMove = getOpeningBookMove(currentState, botColor);
 
-    // Передаем максимальную глубину 20. Бот сам остановится по лимиту времени.
-    // Это спасает от зависаний в позициях с дамками, где дерево вариантов огромно.
-    const bestMove = bookMove || findBestMove(currentState, botColor, 20);
+    // Максимальная глубина зависит от выбранной сложности партии — единственный
+    // параметр, который меняется между уровнями. Для "hard" это ровно 20, как
+    // было всегда; findBestMove() сам останавливается по лимиту времени —
+    // логика не менялась. Opening Book/TT/QS/Killer/Move Ordering одинаковы
+    // на всех уровнях.
+    const maxDepthForThisMove = getMaxDepthForDifficulty(botDifficulty);
+    const bestMove = bookMove || findBestMove(currentState, botColor, maxDepthForThisMove);
     if (bestMove) {
         performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
     }
