@@ -1014,6 +1014,8 @@ const infoModal = document.getElementById("info-modal");
 const infoModalText = document.getElementById("info-modal-text");
 const btnInfoNewGame = document.getElementById("btn-info-new-game");
 const btnInfoClose = document.getElementById("btn-info-close");
+const spectatorInterruptedModal = document.getElementById("spectator-interrupted-modal");
+const btnSpectatorInterruptedOk = document.getElementById("btn-spectator-interrupted-ok");
 const btnShowStats = document.getElementById("btn-show-stats");
 const statsModal = document.getElementById("stats-modal");
 const statsMySummary = document.getElementById("stats-my-summary");
@@ -1100,6 +1102,11 @@ const RECONNECT_GRACE_MS = 60000; // Перенесли наверх для по
 // себе. Заметно больше heartbeat-интервала (4с), чтобы обычный джиттер
 // сети не мигал "офлайн" на каждый пропущенный тик.
 const PRESENCE_STALE_WARNING_MS = 12000;
+// Показана ли уже модалка "Игра прервана" в ТЕКУЩЕЙ spectator-сессии — не
+// даёт показывать её повторно на каждый тик updatePresenceOnly() (раз в
+// секунду), пока зритель не уйдёт сам. Сбрасывается на новый вход в
+// watchGroupRoomAsSpectator().
+let spectatorInterruptedModalShown = false;
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
@@ -2396,27 +2403,30 @@ function renderBoard() {
     // зрителя (myColor === null) выражение корректно даёт false — та же
     // ориентация, что и раньше.
     flipped = (myColor === "dark");
-    // Кнопка "Назад" для зрителя — видна ТОЛЬКО пока партия ещё идёт
-    // (isSpectator && нет winner). Для завершённой партии уже есть кнопка
-    // "В меню" внутри модалки конца игры (renderEndGameModal) — эта кнопка
-    // ей не дублируется, а закрывает пробел ИМЕННО во время активной
-    // партии, когда раньше у зрителя не было вообще никакого способа
-    // выйти, кроме полного закрытия Mini App. Тот же принцип "пересчитать
-    // на каждом рендере", что и у flipped выше — не нужно вручную
-    // помнить о переключении в каждой из множества точек входа.
-    if (btnBackSpectator) {
-        btnBackSpectator.classList.toggle("hidden", !(isSpectator && currentState && !currentState.winner));
+    // Единая структурно взаимоисключающая точка выбора кнопки "Назад".
+    // Раньше здесь было два НЕЗАВИСИМЫХ условия (isSpectator&&... для одной
+    // кнопки, isBotGame&&!isSpectator&&!ownerSessionAttached&&... для
+    // другой) — по булевой алгебре они действительно взаимоисключающие, но
+    // такая схема хрупкая: любое неучтённое сочетание флагов (например,
+    // если какой-то путь входа забудет сбросить isBotGame/ownerSessionAttached,
+    // как это уже случалось с flipped) может привести к тому, что обе
+    // покажутся или обе спрячутся. if/else-if ниже выбирает РОВНО ОДИН режим
+    // структурно — гарантия "не может быть двух" не зависит от того,
+    // насколько аккуратно отдельные модули поддерживают свои флаги.
+    let backButtonMode = "none";
+    if (isSpectator && currentState && !currentState.winner) {
+        backButtonMode = "spectator";
+    } else if (isBotGame && !isSpectator && !ownerSessionAttached && currentState && !currentState.winner) {
+        // legacy-путь прямой игры с ботом (НЕ owner-synced, НЕ зритель) —
+        // для завершённой партии уже есть кнопка "В меню" внутри модалки
+        // конца игры (renderEndGameModal), эта кнопка её не дублирует.
+        backButtonMode = "bot";
     }
-    // btnBackBot — legacy-путь прямой игры с ботом (НЕ owner-synced, НЕ
-    // зритель). Раньше переключалась только в startOnlineGame()/
-    // startOfflineGame() и никогда не пересчитывалась при переходе в
-    // spectator-режим — если до этого пользователь был в legacy-режиме
-    // (кнопка показана), а затем стал зрителем, обе кнопки "Назад"
-    // показывались одновременно. Тот же принцип пересчёта на каждом
-    // рендере, что и выше — гарантирует ровно одну (или ноль) видимых
-    // кнопок "Назад" независимо от истории переходов между режимами.
+    if (btnBackSpectator) {
+        btnBackSpectator.classList.toggle("hidden", backButtonMode !== "spectator");
+    }
     if (btnBackBot) {
-        btnBackBot.classList.toggle("hidden", !(isBotGame && !isSpectator && !ownerSessionAttached && currentState && !currentState.winner));
+        btnBackBot.classList.toggle("hidden", backButtonMode !== "bot");
     }
     ensureBoardBuilt();
     const capturedSnapshotsForGhost = captureCapturedPieceSnapshotsBeforeUpdate();
@@ -4527,15 +4537,29 @@ if (btnBackBotYes) {
 // spectator-сценариев (bot-зеркало и обычная online-партия) — оба идут
 // через один и тот же watchGroupRoomAsSpectator()/roomListenerRef, спецкейса
 // для ботов здесь нет и не нужно. ---
+// --- Общий выход из spectator-режима: отписка от комнаты, удаление своей
+// записи "я смотрю", возврат в лобби. Переиспользуется и кнопкой "Назад",
+// и модалкой "Игра прервана" — оба места делают ровно одно и то же. ---
+function leaveSpectatorAndReturnToLobby() {
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+    if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
+    isSpectator = false;
+    isOnlineGame = false;
+    isBotGame = false;
+    currentState = null;
+    showGroupLobby();
+}
+
 if (btnBackSpectator) {
     btnBackSpectator.addEventListener("click", function () {
-        if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-        if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
-        isSpectator = false;
-        isOnlineGame = false;
-        isBotGame = false;
-        currentState = null;
-        showGroupLobby();
+        leaveSpectatorAndReturnToLobby();
+    });
+}
+
+if (btnSpectatorInterruptedOk) {
+    btnSpectatorInterruptedOk.addEventListener("click", function () {
+        if (spectatorInterruptedModal) spectatorInterruptedModal.classList.add("hidden");
+        leaveSpectatorAndReturnToLobby();
     });
 }
 
@@ -4887,6 +4911,26 @@ setInterval(function () {
     }
 }, 1000);
 
+// --- Специально для зрителя: полное истечение grace-периода у РЕАЛЬНОГO
+// игрока (не бота — presence.online у bot-зеркала намеренно никогда не
+// false, но lastSeen всё равно перестаёт обновляться, когда владелец ушёл
+// — см. PRESENCE_STALE_WARNING_MS выше). Не читает Firebase заново — та
+// же presence, что уже пришла с обычным room-listener'ом. checkOpponentAbsence()
+// не подходит — она явно исключает зрителя (у неё другая, игровая
+// семантика для самого игрока, не для наблюдателя). ---
+function checkSpectatorGameInterrupted() {
+    if (!isSpectator || !currentState || currentState.winner) return;
+    if (spectatorInterruptedModalShown) return;
+    const presence = currentState.presence;
+    if (!presence) return;
+    const lightElapsed = presence.light ? (Date.now() - (presence.light.lastSeen || 0)) : Infinity;
+    const darkElapsed = presence.dark ? (Date.now() - (presence.dark.lastSeen || 0)) : Infinity;
+    if (lightElapsed > RECONNECT_GRACE_MS || darkElapsed > RECONNECT_GRACE_MS) {
+        spectatorInterruptedModalShown = true;
+        if (spectatorInterruptedModal) spectatorInterruptedModal.classList.remove("hidden");
+    }
+}
+
 function updatePresenceOnly() {
     if (!isOnlineGame || !currentState) return;
     const topColor = flipped ? "light" : "dark";
@@ -4894,6 +4938,7 @@ function updatePresenceOnly() {
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
     checkOpponentAbsence();
+    if (isSpectator) checkSpectatorGameInterrupted();
 }
 
 function checkTimeout() {
@@ -7036,11 +7081,23 @@ function watchGroupRoomAsSpectator(code) {
     // от presence любой предыдущей роли (например, если до этого был игроком).
     detachMyPresence();
 
+    // Защитный сброс — не полагаемся на то, что isSpectator=true где-то
+    // ниже "перевесит" в условиях видимости кнопок/поведения. Если владелец
+    // каким-то путём попал в spectator-режим, не пройдя через явный "В меню"
+    // (который уже вызывает detachFromOwnerBotSessionLocally), полноценно
+    // отвязываемся здесь — иначе heartbeat/retry-таймер/spectators-listener
+    // owner-сессии продолжили бы фоново работать.
+    if (ownerSessionAttached) {
+        detachFromOwnerBotSessionLocally();
+    }
+    isBotGame = false;
+
     roomCode = code;
     myColor = null; // У наблюдателя нет цвета
     isOnlineGame = true;
     isSpectator = true; // ВАЖНО: Режим наблюдателя
     lastAnimatedMoveCount = null; // Начало просмотра — не анимируем ход, случившийся ДО подключения
+    spectatorInterruptedModalShown = false; // Новая сессия просмотра — модалка ещё не показывалась
 
     stopGroupLobbyListening();
 
