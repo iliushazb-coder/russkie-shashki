@@ -2416,9 +2416,13 @@ function renderBoard() {
     let backButtonMode = "none";
     if (isSpectator && currentState && !currentState.winner) {
         backButtonMode = "spectator";
-    } else if (isBotGame && !isSpectator && !ownerSessionAttached && currentState && !currentState.winner) {
-        // legacy-путь прямой игры с ботом (НЕ owner-synced, НЕ зритель) —
-        // для завершённой партии уже есть кнопка "В меню" внутри модалки
+    } else if (isBotGame && !isSpectator && currentState && !currentState.winner) {
+        // Игрок с ботом — и текущий основной synced-owner путь
+        // (ownerSessionAttached===true), и старый legacy-путь. Раньше
+        // здесь стояло дополнительное условие !ownerSessionAttached,
+        // которое ИСКЛЮЧАЛО именно основной, реально используемый путь —
+        // владелец synced-игры не видел вообще ни одной кнопки "Назад".
+        // Для завершённой партии уже есть кнопка "В меню" внутри модалки
         // конца игры (renderEndGameModal), эта кнопка её не дублирует.
         backButtonMode = "bot";
     }
@@ -3064,7 +3068,9 @@ function startOnlineGame() {
     
     // Показываем кнопки реакций только для онлайн-игр
     if (reactionsRow) reactionsRow.classList.remove("hidden");
-    if (btnBackBot) btnBackBot.classList.add("hidden"); // Прячем кнопку "Назад" для бота
+    // btnBackBot видимость теперь полностью пересчитывается в renderBoard()
+    // на каждом рендере (backButtonMode) — отдельный прямой toggle здесь
+    // больше не нужен и был убран как источник избыточной сложности.
 
     if (roomListenerRef) roomListenerRef.off();
     roomListenerRef = database.ref("rooms/" + roomCode);
@@ -4171,7 +4177,9 @@ function startOfflineGame() {
     
     // Прячем кнопки реакций в игре с ботом
     if (reactionsRow) reactionsRow.classList.add("hidden");
-    if (btnBackBot) btnBackBot.classList.remove("hidden"); // Показываем кнопку "Назад" для бота
+    // btnBackBot видимость теперь полностью пересчитывается в renderBoard()
+    // на каждом рендере (backButtonMode) — отдельный прямой toggle здесь
+    // больше не нужен и был убран как источник избыточной сложности.
     
     // Сохраняем список зрителей перед пересозданием объекта состояния,
     // чтобы при реванше с ботом строчка "Смотрят: ..." не пропадала.
@@ -4524,7 +4532,22 @@ if (btnBackBotNo) {
 if (btnBackBotYes) {
     btnBackBotYes.addEventListener("click", function() {
         if (backConfirmModal) backConfirmModal.classList.add("hidden");
-        stopBotSpectateRoom(); // Удаляем фантомную комнату
+        // Ветвим по типу активной owner-сессии — synced (текущий основной
+        // путь, ownerSessionAttached===true) и legacy используют РАЗНЫЙ
+        // cleanup: detachFromOwnerBotSessionLocally() останавливает
+        // heartbeat/retry-таймер/spectators-listener synced-сессии и
+        // сознательно НЕ удаляет публичную комнату (её жизненный цикл —
+        // отдельный, через lobby stale-sweep). stopBotSpectateRoom() —
+        // legacy-специфичный cleanup совсем других (botSpectate*) полей,
+        // явно удаляющий фантомную комнату. Раньше здесь вызывался ТОЛЬКО
+        // stopBotSpectateRoom(), даже когда кнопка стала показываться и
+        // для synced-владельца — оставляя heartbeat/retry-таймер
+        // работать в фоне после ухода с экрана.
+        if (ownerSessionAttached) {
+            detachFromOwnerBotSessionLocally();
+        } else {
+            stopBotSpectateRoom(); // Удаляем фантомную комнату
+        }
         isBotGame = false;
         showScreen(menuScreen);
         loadActiveRooms();
