@@ -1692,6 +1692,24 @@ let endGameShownForRoom = null;
 let pieceElements = {};
 let lastRenderedSignature = null;
 
+// ===== ГОСТЬ-АНИМАЦИЯ ХОДА — чисто UI-состояние, НЕ часть игрового состояния =====
+// lastAnimatedMoveCount: moveCount последнего хода, для которого уже
+// проигран (или сознательно пропущен) ghost. null означает "ещё не было
+// ни одного рендера с момента подключения к этой партии" — в этом случае
+// НЕ анимируем (иначе спектейтор/reconnect увидел бы анимацию "из ниоткуда"
+// для хода, который случился ДО подключения). moveCount инкрементируется
+// на КАЖДОМ отдельном прыжке (проверено в attemptMove — и quiet-move,
+// и capture-ветка увеличивают его безусловно), поэтому уникален per-hop
+// и корректно различает прыжки одной цепочки взятия.
+let lastAnimatedMoveCount = null;
+// Список функций отмены активных ghost-анимаций — вызываются, если новый
+// рендер приходит раньше, чем предыдущая анимация закончилась, либо при
+// resize/orientationchange. Каждая функция гарантированно восстанавливает
+// видимость спрятанной реальной фигуры перед удалением ghost'а.
+let activeGhostCancelFns = [];
+const MOVE_GHOST_DURATION_MS = 150;
+const CAPTURE_FADE_DURATION_MS = 90;
+
 function getLabels() {
     if (!flipped) {
         return { letters: ["a", "b", "c", "d", "e", "f", "g", "h"], numbers: [8, 7, 6, 5, 4, 3, 2, 1] };
@@ -2140,9 +2158,160 @@ function updateBoardPieces() {
     }
 }
 
+// ===== ГОСТЬ-АНИМАЦИЯ ХОДА =====
+// Чисто визуальный слой поверх уже обновлённой authoritative доски.
+// Ничего здесь не читает и не пишет currentState, не участвует в
+// определении легальности хода, не трогает Firebase. При любой ошибке —
+// просто не анимирует; реальная доска (updateBoardPieces()) уже корректна
+// независимо от этого кода.
+
+// Отменяет все ещё летящие ghost-анимации немедленно — вызывается перед
+// стартом новой анимации (быстрый следующий ход) и на resize/orientationchange.
+// Каждая cancel-функция гарантированно возвращает видимость спрятанной
+// реальной фигуре перед удалением своего ghost'а — доска не может остаться
+// с "пропавшей" фигурой из-за прерванной анимации.
+function cancelActiveGhostAnimations() {
+    const fns = activeGhostCancelFns.slice();
+    activeGhostCancelFns = [];
+    fns.forEach(function (fn) { fn(); });
+}
+
+// --- Точечное чтение существующего DOM ДО того, как updateBoardPieces()
+// удалит сбитые фигуры. Единственная цель — сохранить UI-метаданные
+// (color, king) для captured-ghost эффекта, чтобы сбитая дамка визуально
+// не показалась на 90мс обычной шашкой. НЕ пишет и не читает
+// currentState/game logic, никаких новых игровых полей — чисто временный
+// локальный снимок для рендера, живущий один вызов renderBoard(). ---
+function captureCapturedPieceSnapshotsBeforeUpdate() {
+    if (!currentState || currentState.moveType !== "capture" || !Array.isArray(currentState.lastCapturedSquares)) {
+        return [];
+    }
+    const snapshots = [];
+    currentState.lastCapturedSquares.forEach(function (sq) {
+        const key = sq.row + "_" + sq.col;
+        const el = pieceElements[key];
+        if (!el) return; // защитный выход — просто не будет captured-ghost для этой клетки
+        snapshots.push({
+            key: key,
+            color: el.dataset.pieceColor || "light",
+            king: el.classList.contains("king")
+        });
+    });
+    return snapshots;
+}
+
+// Вызывается ПОСЛЕ updateBoardPieces() — authoritative доска уже полностью
+// корректна к этому моменту. Для ДВИЖУЩЕЙСЯ фигуры всё выводится из уже
+// обновлённого currentState через правила игры (moveType==="king"
+// однозначно значит "дамкой не была до этого хода"), а не из DOM "до" —
+// это надёжнее и не зависит от таймингов. Для СБИТЫХ фигур используется
+// заранее снятый (см. captureCapturedPieceSnapshotsBeforeUpdate) DOM-снимок,
+// поскольку у уже удалённой из pieces фигуры не осталось игровых данных.
+function playMoveGhostAnimation(capturedSnapshots) {
+    cancelActiveGhostAnimations();
+
+    if (!currentState || !currentState.lastMove) {
+        lastAnimatedMoveCount = currentState ? currentState.moveCount : null;
+        return;
+    }
+
+    const isFirstRenderSinceAttach = (lastAnimatedMoveCount === null);
+    const isGenuinelyNewMove = !isFirstRenderSinceAttach && currentState.moveCount !== lastAnimatedMoveCount;
+    lastAnimatedMoveCount = currentState.moveCount;
+    if (!isGenuinelyNewMove) return;
+
+    const move = currentState.lastMove;
+    const fromKey = move.from.row + "_" + move.from.col;
+    const toKey = move.to.row + "_" + move.to.col;
+
+    const fromSquareEl = squareElements[fromKey];
+    const toSquareEl = squareElements[toKey];
+    const realPieceEl = pieceElements[toKey];
+    if (!fromSquareEl || !toSquareEl || !realPieceEl) return; // защитный выход — доска уже корректна без анимации
+
+    const pieceData = currentState.pieces[toKey];
+    if (!pieceData) return;
+
+    const wasKingBeforeThisHop = (currentState.moveType === "king") ? false : !!pieceData.king;
+    const colorClass = pieceData.color === "light" ? "piece-light" : "piece-dark";
+
+    // Минимум измерений — ровно два прямоугольника на ход.
+    const fromRect = fromSquareEl.getBoundingClientRect();
+    const toRect = toSquareEl.getBoundingClientRect();
+    const deltaX = fromRect.left - toRect.left;
+    const deltaY = fromRect.top - toRect.top;
+
+    realPieceEl.classList.add("piece-hidden-for-ghost");
+
+    const ghost = document.createElement("div");
+    ghost.className = "piece " + colorClass + " move-ghost-piece" + (wasKingBeforeThisHop ? " king" : "");
+    ghost.style.transform = "translate(" + deltaX + "px, " + deltaY + "px)";
+    toSquareEl.appendChild(ghost);
+
+    let cancelled = false;
+    function cleanupMoveGhost() {
+        if (cancelled) return;
+        cancelled = true;
+        realPieceEl.classList.remove("piece-hidden-for-ghost");
+        if (ghost.parentNode) ghost.remove();
+        activeGhostCancelFns = activeGhostCancelFns.filter(function (fn) { return fn !== cleanupMoveGhost; });
+    }
+    activeGhostCancelFns.push(cleanupMoveGhost);
+
+    requestAnimationFrame(function () {
+        if (cancelled) return;
+        ghost.style.transition = "transform " + MOVE_GHOST_DURATION_MS + "ms ease-out";
+        ghost.style.transform = "translate(0px, 0px)";
+    });
+    ghost.addEventListener("transitionend", cleanupMoveGhost);
+    setTimeout(cleanupMoveGhost, MOVE_GHOST_DURATION_MS + 60); // страховка, если transitionend не сработал
+
+    // --- Эффект сбитых фигур: отдельный, независимый ghost на каждую
+    // клетку из lastCapturedSquares. Настоящая фигура там УЖЕ удалена
+    // authoritative-рендером — этот ghost её не возвращает в реальный DOM,
+    // это чисто декоративная копия для fade-эффекта, построенная по
+    // заранее снятым (до updateBoardPieces()) UI-метаданным color/king.
+    // pendingRemovals сознательно не используется — это чисто rules-логика,
+    // к визуалу отношения не имеет. ---
+    if (Array.isArray(capturedSnapshots)) {
+        capturedSnapshots.forEach(function (snap) {
+            const capturedSquareEl = squareElements[snap.key];
+            if (!capturedSquareEl) return;
+
+            const capturedColorClass = snap.color === "light" ? "piece-light" : "piece-dark";
+            const capturedGhost = document.createElement("div");
+            capturedGhost.className = "piece " + capturedColorClass + " move-ghost-captured" + (snap.king ? " king" : "");
+            capturedSquareEl.appendChild(capturedGhost);
+
+            let capCancelled = false;
+            function cleanupCapturedGhost() {
+                if (capCancelled) return;
+                capCancelled = true;
+                if (capturedGhost.parentNode) capturedGhost.remove();
+                activeGhostCancelFns = activeGhostCancelFns.filter(function (fn) { return fn !== cleanupCapturedGhost; });
+            }
+            activeGhostCancelFns.push(cleanupCapturedGhost);
+
+            requestAnimationFrame(function () {
+                if (capCancelled) return;
+                capturedGhost.style.transition = "opacity " + CAPTURE_FADE_DURATION_MS + "ms ease-out, transform " + CAPTURE_FADE_DURATION_MS + "ms ease-out";
+                capturedGhost.style.opacity = "0";
+                capturedGhost.style.transform = "scale(0.4)";
+            });
+            capturedGhost.addEventListener("transitionend", cleanupCapturedGhost);
+            setTimeout(cleanupCapturedGhost, CAPTURE_FADE_DURATION_MS + 60);
+        });
+    }
+}
+
+window.addEventListener("resize", cancelActiveGhostAnimations);
+window.addEventListener("orientationchange", cancelActiveGhostAnimations);
+
 function renderBoard() {
     ensureBoardBuilt();
+    const capturedSnapshotsForGhost = captureCapturedPieceSnapshotsBeforeUpdate();
     updateBoardPieces();
+    playMoveGhostAnimation(capturedSnapshotsForGhost);
     renderPlayerPanels();
     renderSpectatorsList();
     renderEndGameModal();
@@ -2753,6 +2922,7 @@ function startOnlineGame() {
     lastSeenMoveCount = -1;
     isLocalStateOptimistic = false; // Сбрасываем флаг при новой игре
     selectedFrom = null;
+    lastAnimatedMoveCount = null; // Новая партия — не анимируем "ход из ниоткуда"
     endGameShownForRoom = null;
     statsRecordedForRoom = null;
     coinRewardAttemptForMatch = null;
@@ -3405,6 +3575,7 @@ function attachOwnerBotGame() {
     isSpectator = false;
     ownerSessionAttached = true;
     lastRenderedOwnerRevision = null;
+    lastAnimatedMoveCount = null; // Новая/возобновлённая сессия — не анимируем "ход из ниоткуда"
     showScreen(gameScreen);
     if (ownerSessionHandle) detachOwnerBotSessionListener(ownerSessionHandle);
     ownerSessionHandle = attachToOwnerBotSession(onOwnerSessionUpdate);
@@ -3782,6 +3953,7 @@ function startOfflineGame() {
     flipped = (myColor === "dark"); // Переворачиваем доску, если я играю чёрными
     
     selectedFrom = null;
+    lastAnimatedMoveCount = null; // Новая партия — не анимируем "ход из ниоткуда"
     endGameShownForRoom = null;
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
@@ -6517,6 +6689,7 @@ function watchGroupRoomAsSpectator(code) {
     myColor = null; // У наблюдателя нет цвета
     isOnlineGame = true;
     isSpectator = true; // ВАЖНО: Режим наблюдателя
+    lastAnimatedMoveCount = null; // Начало просмотра — не анимируем ход, случившийся ДО подключения
 
     if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
 
