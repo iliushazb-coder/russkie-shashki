@@ -1107,6 +1107,23 @@ let isMatchmakingResolved = false;
 
 // ПЕРЕМЕННЫЕ ДЛЯ ЛОББИ ГРУППЫ:
 let groupLobbyListener = null;
+// ===== ЛОББИ: child-события вместо единого value-listener'а на весь rooms =====
+// Раньше любое изменение ЛЮБОЙ комнаты (обычный ход, heartbeat) скачивало
+// и обрабатывало ВСЮ коллекцию rooms целиком у каждого, у кого открыто
+// "Кто играет". child_added/child_changed/child_removed отдают снимок
+// только ОДНОЙ изменившейся комнаты (подтверждено официальной документацией
+// Firebase) — localCache/signature ниже реализуют ту же семантику списка,
+// что и раньше, просто без полного root value listener'а.
+let lobbyRoomsByCode = {}; // последний известный room-объект по коду — чисто локальный UI-кеш
+let lobbySignatureByCode = {}; // последняя "видимая" сигнатура на комнату — для пропуска лишних DOM-рендеров
+let lobbyStaleCheckTimer = null; // локальный JS-таймер (не Firebase-read) для комнат, переставших слать события вообще
+const LOBBY_STALE_CHECK_INTERVAL_MS = 8000;
+// Не null, когда уже запланирован (но ещё не выполнен) один кадр рендера —
+// не даёт нескольким child_added/changed/removed подряд (burst) вызвать
+// несколько отдельных render'ов; requestAnimationFrame сам естественно
+// ограничивает частоту частотой кадров экрана и приостанавливается, когда
+// вкладка/приложение не видны — уместно именно для чисто визуальной задачи.
+let lobbyRenderFrameId = null;
 let myCurrentSpectatorRef = null; // ссылка на мою собственную запись "я смотрю эту партию"
 let botSpectateRoomCode = null; // код "зеркальной" комнаты для игры с ботом, чтобы её было видно в "Играть онлайн"
 let botSpectateListenerRef = null; // Слушатель зрителей для игры с ботом
@@ -6353,10 +6370,7 @@ function resumeOwnActiveRoom(code) {
             return false;
         }
 
-        if (groupLobbyListener) {
-            groupLobbyListener.off();
-            groupLobbyListener = null;
-        }
+        stopGroupLobbyListening();
 
         if (myCurrentSpectatorRef) {
             myCurrentSpectatorRef.remove();
@@ -6385,10 +6399,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (btnBackToMenu) {
         btnBackToMenu.addEventListener("click", function() {
-            if (groupLobbyListener) { 
-                groupLobbyListener.off(); 
-                groupLobbyListener = null; 
-            }
+            stopGroupLobbyListening();
             // Если я сам ждал соперника через "Играть онлайн" — убираем свою
             // запись СРАЗУ ЖЕ при явном выходе, чтобы у остальных она не
             // висела лишнее время. Аварийный выход (закрытие приложения,
@@ -6408,156 +6419,300 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
+// --- Была ли сторона комнаты "давно оффлайн" — та же семантика, что и
+// раньше, но вынесена в отдельную функцию, чтобы переиспользовать и в
+// рендере, и в периодическом sweep'е, не только внутри одного listener'а. ---
+function isRoomPlayerStale(room, color) {
+    const p = room && room.presence && room.presence[color];
+    if (!p) return true;
+    return (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
+}
+
+// --- Сигнатура ТОЛЬКО тех полей, что реально влияют на отображение строки
+// в лобби. Сознательно НЕ включает pieces/moveCount/turn/lastMove (лобби их
+// не показывает) и НЕ включает сырой lastSeen-timestamp (иначе сигнатура
+// менялась бы на каждый heartbeat, сводя на нет всю экономию). Включает
+// lightIsStale — единственный staleness-признак, реально влияющий на
+// видимость waiting-комнаты; вычисляется каждый раз заново от Date.now(),
+// поэтому даже без нового Firebase-события периодический пересчёт (см.
+// runLobbyStaleSweep) корректно улавливает переход "была видна -> стала
+// неактуальна". ---
+function computeLobbyVisibleSignature(room) {
+    if (!room) return null;
+    if (room.status === "finished" || room.winner) return "finished";
+    const lightId = (room.players && room.players.light && room.players.light.id) || "";
+    const lightName = (room.players && room.players.light && room.players.light.name) || "";
+    const darkId = (room.players && room.players.dark && room.players.dark.id) || "";
+    const darkName = (room.players && room.players.dark && room.players.dark.name) || "";
+    const lightIsStale = isRoomPlayerStale(room, "light");
+    return [room.status || "", lightId, lightName, darkId, darkName, lightIsStale].join("|");
+}
+
+// --- Единая точка "мне нужно перерисовать список" — коалесцирует ЛЮБОЕ
+// количество вызовов подряд (initial child_added burst на N существующих
+// комнат, несколько child_changed/child_removed почти одновременно) в
+// МАКСИМУМ один реальный render на кадр экрана. Ничего не теряет: сам
+// renderLobbyListFromCache() всегда читает АКТУАЛЬНЫЙ на момент выполнения
+// кеш, а не снимок на момент планирования — значит объединение нескольких
+// "запланировать рендер" в один реальный вызов совершенно безопасно. ---
+function scheduleLobbyRender() {
+    if (lobbyRenderFrameId !== null) return;
+    lobbyRenderFrameId = requestAnimationFrame(function () {
+        lobbyRenderFrameId = null;
+        renderLobbyListFromCache();
+    });
+}
+
+// --- Полный рендер списка ИЗ УЖЕ ЗАГРУЖЕННОГО ЛОКАЛЬНОГО КЕША — никаких
+// Firebase-чтений здесь нет вообще, это чистая клиентская операция. Не
+// вызывать напрямую из lobby event-flow — использовать scheduleLobbyRender()
+// выше, чтобы burst из нескольких событий не превращался в N рендеров.
+// Логика фильтрации/HTML/кнопок — та же самая, что была в старом
+// value-listener'е, просто источник данных — lobbyRoomsByCode вместо
+// свежего snapshot.val(). ---
+function renderLobbyListFromCache() {
+    const groupRoomsList = document.getElementById("group-rooms-list");
+    if (!groupRoomsList) return;
+
+    let waitingHtml = "";
+    let activeHtml = "";
+
+    for (const code in lobbyRoomsByCode) {
+        const room = lobbyRoomsByCode[code];
+        if (!room) continue;
+
+        // Не показываем завершенные игры
+        if (room.status === "finished" || room.winner) continue;
+
+        const lightIsStale = isRoomPlayerStale(room, "light");
+
+        // Лобби больше никогда само не удаляет комнаты.
+        // Если игрок временно пропал — комнату просто не показываем.
+        if (room.status === "waiting" && lightIsStale) {
+            continue;
+        }
+
+        let lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
+        let darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
+        lightName = escapeHtml(lightName);
+        darkName = escapeHtml(darkName);
+
+        if (room.status === "waiting") {
+            // Не показываем в списке доступных соперников самого себя
+            const isMine = room.players && room.players.light && room.players.light.id === myTelegramId;
+            if (!isMine) {
+                waitingHtml += `
+                    <div class="group-room-card">
+                        <div class="group-room-info waiting">🟡 ${lightName}</div>
+                        <button class="group-join-btn" data-code="${code}">Играть</button>
+                    </div>
+                `;
+            }
+        } else if (room.status === "active") {
+            const isMyActiveGame =
+                (room.players && room.players.light && room.players.light.id === myTelegramId) ||
+                (room.players && room.players.dark && room.players.dark.id === myTelegramId);
+
+            if (isMyActiveGame) {
+                activeHtml += `
+                    <div class="group-room-card">
+                        <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
+                        <button class="group-resume-btn" data-code="${code}">${t("btn_continue")}</button>
+                    </div>
+                `;
+            } else {
+                activeHtml += `
+                    <div class="group-room-card">
+                        <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
+                        <button class="group-watch-btn" data-code="${code}">Смотреть</button>
+                    </div>
+                `;
+            }
+        }
+    }
+
+    let finalHtml = "";
+    if (waitingHtml) {
+        finalHtml += '<p class="section-title">' + t("lobby_waiting") + '</p>' + waitingHtml;
+    }
+    if (activeHtml) {
+        finalHtml += '<p class="section-title" style="margin-top: 15px;">' + t("lobby_active") + '</p>' + activeHtml;
+    }
+    if (!finalHtml) {
+        finalHtml = '<p class="section-title">' + t("lobby_empty") + '</p>';
+    }
+    groupRoomsList.innerHTML = finalHtml;
+
+    // Навешиваем обработчики на кнопки
+    groupRoomsList.querySelectorAll('.group-join-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            joinGroupRoom(this.getAttribute('data-code'));
+        });
+    });
+
+    groupRoomsList.querySelectorAll('.group-watch-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            watchGroupRoom(this.getAttribute('data-code'));
+        });
+    });
+
+    groupRoomsList.querySelectorAll('.group-resume-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const code = this.getAttribute('data-code');
+            resumeOwnActiveRoom(code).then(function (resumed) {
+                if (!resumed) {
+                    showInfoModal(t("err_no_active_game"), false);
+                }
+            });
+        });
+    });
+}
+
+// --- Периодический локальный sweep — НЕ Firebase-чтение, работает только
+// по уже находящемуся в памяти lobbyRoomsByCode. Нужен, потому что
+// комната, полностью переставшая слать события (закрыли приложение),
+// больше не породит child_changed сама по себе — без этого таймера она
+// зависла бы в кеше и в списке навсегда. Та же семантика cleanup, что была
+// в старом value-listener'е (auto-очистка зависшего rematchProposal,
+// ленивое удаление окончательно заброшенных active-комнат) — не вторая
+// параллельная система, тот же самый порог RECONNECT_GRACE_MS. ---
+function runLobbyStaleSweep() {
+    for (const code in lobbyRoomsByCode) {
+        const room = lobbyRoomsByCode[code];
+        if (!room) continue;
+
+        // АВТО-ЧИСТКА: зависшее предложение реванша
+        if (room.rematchProposal) {
+            const proposerColor = room.rematchProposal.by;
+            const answererColor = proposerColor === "light" ? "dark" : "light";
+            if (isRoomPlayerStale(room, answererColor)) {
+                database.ref("rooms/" + code + "/rematchProposal").remove();
+            }
+        }
+
+        if (room.status === "finished" || room.winner) continue;
+
+        const lightIsStale = isRoomPlayerStale(room, "light");
+        const darkIsStale = isRoomPlayerStale(room, "dark");
+
+        // ЛЕНИВАЯ ОЧИСТКА: если партия активна, но оба игрока по-настоящему
+        // давно оффлайн — партия гарантированно заброшена. child_removed
+        // сам уберёт её из кеша/списка, когда remove() ниже реально пройдёт —
+        // здесь кеш вручную не трогаем.
+        if (room.status === "active" && lightIsStale && darkIsStale) {
+            if (room.players && room.players.light && room.players.light.id) {
+                database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
+            }
+            if (room.players && room.players.dark && room.players.dark.id) {
+                database.ref("users/" + room.players.dark.id + "/rooms/" + code).remove();
+            }
+            database.ref("rooms/" + code).remove();
+        }
+    }
+
+    // Нужен именно здесь, но НЕ по причине "обновить UI после remove() выше" —
+    // это было бы избыточно с будущим child_removed, и раньше было бы
+    // проблемой (рендер по ещё не обновлённому кешу). Но раз это теперь
+    // scheduleLobbyRender() (коалесцирует), избыточность с будущим
+    // child_removed уже не имеет значения — оба вызова просто схлопнутся
+    // в один кадр, а renderLobbyListFromCache() всегда читает АКТУАЛЬНЫЙ
+    // кеш на момент фактического исполнения, не снимок на момент вызова.
+    //
+    // Настоящая причина, по которой вызов необходим — waiting-комната,
+    // молча пересекшая порог staleness ЧИСТО по часам (никто не выходил,
+    // просто прошло время) — не порождает вообще НИКАКОГО Firebase-события,
+    // значит НИЧТО, кроме этого периодического таймера, не заметит и не
+    // скроет её из списка.
+    scheduleLobbyRender();
+}
+
+// --- Единая точка остановки всего, что связано с лобби — снимает все три
+// child-listener'а ОДНИМ вызовом .off() без аргументов на том же ref'е
+// (подтверждено документацией Firebase — off() без аргументов снимает все
+// типы событий на этой ссылке разом), останавливает локальный stale-таймер,
+// очищает кеш. Используется и при обычном закрытии лобби, и при переходе в
+// игру, реванш, старт бота — везде, где раньше был просто
+// "if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }". ---
+function stopGroupLobbyListening() {
+    if (groupLobbyListener) {
+        groupLobbyListener.off();
+        groupLobbyListener = null;
+    }
+    if (lobbyStaleCheckTimer) {
+        clearInterval(lobbyStaleCheckTimer);
+        lobbyStaleCheckTimer = null;
+    }
+    if (lobbyRenderFrameId !== null) {
+        cancelAnimationFrame(lobbyRenderFrameId);
+        lobbyRenderFrameId = null;
+    }
+    lobbyRoomsByCode = {};
+    lobbySignatureByCode = {};
+}
+
 function showGroupLobby() {
     const groupLobbyScreen = document.getElementById("group-lobby-screen");
     const groupRoomsList = document.getElementById("group-rooms-list");
-    
+
     if (!groupLobbyScreen || !groupRoomsList) return;
-    
+
     showScreen(groupLobbyScreen);
     groupRoomsList.innerHTML = '<p class="section-title">' + t("loading") + '</p>';
 
     // Важно: отключаем предыдущую "слежку" за списком, если она ещё была
     // активна (например, при повторном входе) — иначе они накапливаются
     // одна поверх другой и начинают работать непредсказуемо.
-    if (groupLobbyListener) {
-        groupLobbyListener.off();
-        groupLobbyListener = null;
-    }
+    stopGroupLobbyListening();
 
     // Показываем ВСЕХ, кто играет, без привязки к коду группы —
     // раньше здесь была фильтрация по GROUP_ID (Telegram chat_instance),
     // но она оказалась ненадёжной и разные люди получали разные коды,
     // из-за чего никто никого не видел.
+    //
+    // child_added/child_changed/child_removed вместо единого value —
+    // каждое событие несёт снимок ТОЛЬКО одной изменившейся комнаты, а не
+    // всей коллекции rooms целиком (подтверждено документацией Firebase).
     groupLobbyListener = database.ref("rooms");
-    groupLobbyListener.on("value", function(snapshot) {
-        const rooms = snapshot.val() || {};
-        groupRoomsList.innerHTML = "";
 
-        let waitingHtml = "";
-        let activeHtml = "";
-
-        for (const code in rooms) {
-            const room = rooms[code];
-
-            const isPlayerStale = function(color) {
-                const p = room.presence && room.presence[color];
-                if (!p) return true;
-                return (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
-            };
-
-            // АВТО-ЧИСТКА: зависшее предложение реванша
-            if (room.rematchProposal) {
-                const proposerColor = room.rematchProposal.by;
-                const answererColor = proposerColor === "light" ? "dark" : "light";
-                if (isPlayerStale(answererColor)) {
-                    database.ref("rooms/" + code + "/rematchProposal").remove();
-                    room.rematchProposal = null;
-                }
-            }
-
-            // Не показываем завершенные игры
-            if (room.status === "finished" || room.winner) continue;
-
-            const lightIsStale = isPlayerStale("light");
-            const darkIsStale = isPlayerStale("dark");
-
-            // Лобби больше никогда само не удаляет комнаты.
-            // Если игрок временно пропал — комнату просто не показываем.
-            if (room.status === "waiting" && lightIsStale) {
-                continue;
-            }
-
-            // ЛЕНИВАЯ ОЧИСТКА: если партия активна, но оба игрока по-настоящему
-            // давно оффлайн (дольше RECONNECT_GRACE_MS через isPlayerStale) —
-            // партия гарантированно заброшена. Удаляет тот, кто первым откроет
-            // "Кто играет?" после истечения этого времени.
-            if (room.status === "active" && lightIsStale && darkIsStale) {
-                if (room.players && room.players.light && room.players.light.id) {
-                    database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
-                }
-                if (room.players && room.players.dark && room.players.dark.id) {
-                    database.ref("users/" + room.players.dark.id + "/rooms/" + code).remove();
-                }
-                database.ref("rooms/" + code).remove();
-                continue;
-            }
-
-            let lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
-            let darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
-            lightName = escapeHtml(lightName);
-            darkName = escapeHtml(darkName);
-
-            if (room.status === "waiting") {
-                // Не показываем в списке доступных соперников самого себя
-                const isMine = room.players && room.players.light && room.players.light.id === myTelegramId;
-                if (!isMine) {
-                    waitingHtml += `
-                        <div class="group-room-card">
-                            <div class="group-room-info waiting">🟡 ${lightName}</div>
-                            <button class="group-join-btn" data-code="${code}">Играть</button>
-                        </div>
-                    `;
-                }
-            } else if (room.status === "active") {
-                const isMyActiveGame =
-                    (room.players && room.players.light && room.players.light.id === myTelegramId) ||
-                    (room.players && room.players.dark && room.players.dark.id === myTelegramId);
-
-                if (isMyActiveGame) {
-                    activeHtml += `
-                        <div class="group-room-card">
-                            <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
-                            <button class="group-resume-btn" data-code="${code}">${t("btn_continue")}</button>
-                        </div>
-                    `;
-                } else {
-                    activeHtml += `
-                        <div class="group-room-card">
-                            <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
-                            <button class="group-watch-btn" data-code="${code}">Смотреть</button>
-                        </div>
-                    `;
-                }
-            }
-        }
-
-        let finalHtml = "";
-        if (waitingHtml) {
-            finalHtml += '<p class="section-title">' + t("lobby_waiting") + '</p>' + waitingHtml;
-        }
-        if (activeHtml) {
-            finalHtml += '<p class="section-title" style="margin-top: 15px;">' + t("lobby_active") + '</p>' + activeHtml;
-        }
-        if (!finalHtml) {
-            finalHtml = '<p class="section-title">' + t("lobby_empty") + '</p>';
-        }
-        groupRoomsList.innerHTML = finalHtml;
-
-        // Навешиваем обработчики на кнопки
-        groupRoomsList.querySelectorAll('.group-join-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                joinGroupRoom(this.getAttribute('data-code'));
-            });
-        });
-
-        groupRoomsList.querySelectorAll('.group-watch-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                watchGroupRoom(this.getAttribute('data-code'));
-            });
-        });
-
-        groupRoomsList.querySelectorAll('.group-resume-btn').forEach(btn => {
-            btn.addEventListener('click', function() {
-                const code = this.getAttribute('data-code');
-                resumeOwnActiveRoom(code).then(function (resumed) {
-                    if (!resumed) {
-                        showInfoModal(t("err_no_active_game"), false);
-                    }
-                });
-            });
-        });
+    groupLobbyListener.on("child_added", function (snapshot) {
+        const code = snapshot.key;
+        const room = snapshot.val();
+        lobbyRoomsByCode[code] = room;
+        lobbySignatureByCode[code] = computeLobbyVisibleSignature(room);
+        scheduleLobbyRender();
     });
+
+    groupLobbyListener.on("child_changed", function (snapshot) {
+        const code = snapshot.key;
+        const room = snapshot.val();
+        const newSignature = computeLobbyVisibleSignature(room);
+        // Всегда обновляем сами данные в кеше (нужны свежие presence/players
+        // для будущего sweep'а и для действий по клику), но DOM трогаем
+        // ТОЛЬКО если что-то реально видимое изменилось — обычный ход
+        // (pieces/moveCount/turn) или heartbeat, не меняющий online-статус,
+        // не должны перерисовывать список.
+        lobbyRoomsByCode[code] = room;
+        if (newSignature === lobbySignatureByCode[code]) {
+            return;
+        }
+        lobbySignatureByCode[code] = newSignature;
+        scheduleLobbyRender();
+    });
+
+    groupLobbyListener.on("child_removed", function (snapshot) {
+        const code = snapshot.key;
+        delete lobbyRoomsByCode[code];
+        delete lobbySignatureByCode[code];
+        scheduleLobbyRender();
+    });
+
+    // Локальный таймер — единственный способ заметить комнату, которая
+    // перестала слать вообще любые события (закрыли приложение), раз мы
+    // больше не читаем всю коллекцию целиком на каждое чужое изменение.
+    // Не Firebase-чтение — работает по уже загруженному кешу.
+    if (!lobbyStaleCheckTimer) {
+        lobbyStaleCheckTimer = setInterval(runLobbyStaleSweep, LOBBY_STALE_CHECK_INTERVAL_MS);
+    }
 }
 
 // Функция присоединения к открытой комнате
@@ -6615,7 +6770,7 @@ function joinGroupRoom(code) {
             // Безопасно убираем создателя из очереди матчмейкинга (если он там был)
             database.ref("matchmakingQueue/" + creatorId).remove();
 
-            if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
+            stopGroupLobbyListening();
             showScreen(gameScreen);
             startOnlineGame();
         }).catch(function(error) {
@@ -6651,7 +6806,7 @@ function watchGroupRoom(code) {
                 const session = sessionSnap.val();
                 const isCurrentActiveSession = !!(session && session.status === "active" && session.spectateRoomCode === code);
                 if (isCurrentActiveSession) {
-                    if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
+                    stopGroupLobbyListening();
                     attachOwnerBotGame(); // сама выставит isBotGame/isOnlineGame=false/showScreen(gameScreen)
                     return;
                 }
@@ -6691,7 +6846,7 @@ function watchGroupRoomAsSpectator(code) {
     isSpectator = true; // ВАЖНО: Режим наблюдателя
     lastAnimatedMoveCount = null; // Начало просмотра — не анимируем ход, случившийся ДО подключения
 
-    if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
+    stopGroupLobbyListening();
 
     // Регистрируем себя как зрителя этой партии (для счётчика "N зрителей"),
     // и сразу настраиваем автоматическое удаление при закрытии приложения.
