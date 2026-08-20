@@ -671,10 +671,51 @@ h1 {
     color: #fff3d6;
 }
 
+/* Scoped-класс именно для окна статистики — НЕ меняет .modal-box глобально
+   для остальных модалок приложения. Почти полноэкранная на мобильном (92vw
+   x 90dvh, с vh-фолбэком на случай, если dvh не поддерживается в конкретном
+   Telegram WebView), с разумным max-width, чтобы не раздуваться на desktop.
+   Header/Body/Footer через flex-колонку: список — единственная скроллящаяся
+   область, вкладки/заголовок сверху и кнопка "Назад" снизу всегда видны. */
+.stats-modal-box {
+    width: 92vw;
+    max-width: 480px;
+    height: 90vh;
+    height: 90dvh;
+    max-height: 90vh;
+    max-height: 90dvh;
+    padding: 16px 14px;
+    display: flex;
+    flex-direction: column;
+}
+
+.stats-modal-header {
+    flex: 0 0 auto;
+}
+
+.stats-modal-body {
+    flex: 1 1 auto;
+    min-height: 0; /* обязательно, иначе flex-контейнер не сожмётся и скролл не сработает */
+    overflow-y: auto;
+}
+
+.stats-modal-footer {
+    flex: 0 0 auto;
+    margin-top: 10px;
+}
+
+.stats-section-title {
+    font-size: 13px;
+    font-weight: 700;
+    margin: 2px 0 8px;
+    color: #f0d9ae;
+    opacity: 0.9;
+}
+
 .stats-tabs {
     display: flex;
     gap: 6px;
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .stats-tab-btn {
@@ -698,27 +739,27 @@ h1 {
 .stats-leaderboard {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    margin-top: 6px;
-    max-height: 240px;
-    overflow-y: auto;
+    gap: 5px;
     width: 100%;
-}
-
-/* Bot-карточки крупнее и визуально самостоятельнее строк Online —
-   чуть больший отступ между ними для аккуратной разбивки. */
-#stats-leaderboard-bot.stats-leaderboard {
-    gap: 10px;
 }
 
 .stats-row {
     display: flex;
     align-items: center;
-    padding: 8px 12px;
+    padding: 7px 10px;
     border-radius: 10px;
     background: rgba(255,225,170,0.06);
     font-size: 13px;
     color: #f0d9ae;
+}
+
+.stats-row-expandable {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.stats-row-expandable:active {
+    background: rgba(255,210,130,0.16);
 }
 
 .stats-row .stats-rank {
@@ -742,68 +783,21 @@ h1 {
     margin-left: 10px;
 }
 
-/* Карточка игрока в рейтинге "С ботом" — заголовок, сетка показателей,
-   отдельный блок разбивки Medium/Hard. Мобильно-ориентированная: сетка 2x2
-   вместо попытки уместить 4 значения в одну строку. */
-.stats-bot-card {
+/* Обёртка одной строки bot-рейтинга + её (изначально скрытая) панель
+   разбивки по уровням — раскрывается по клику на саму строку. */
+.stats-bot-entry {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 12px;
-    border-radius: 14px;
-    background: rgba(255,225,170,0.06);
-    border: 1px solid rgba(255,210,130,0.15);
 }
 
-.stats-bot-card-header {
-    display: flex;
-    align-items: center;
-}
-
-.stats-bot-card-main {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px 10px;
-}
-
-.stats-stat-item {
+.stats-bylevel-panel {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    background: rgba(255,225,170,0.05);
-    border-radius: 8px;
-    padding: 6px 4px;
-    min-width: 0;
-}
-
-.stats-stat-value {
-    font-size: 16px;
-    font-weight: 800;
-    color: #fff3d6;
-    line-height: 1.3;
-}
-
-.stats-stat-label {
-    font-size: 10px;
-    color: #cbb98a;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 100%;
-}
-
-.stats-bylevel-block {
-    border-top: 1px solid rgba(255,210,130,0.15);
-    padding-top: 8px;
+    gap: 2px;
+    padding: 6px 12px 6px 34px;
     margin-top: 2px;
-}
-
-.stats-bylevel-title {
-    font-size: 11px;
-    color: #cbb98a;
-    opacity: 0.85;
-    margin-bottom: 6px;
-    text-align: left;
+    border-radius: 8px;
+    background: rgba(0,0,0,0.15);
 }
 
 .stats-bylevel-row {
@@ -812,7 +806,7 @@ h1 {
     justify-content: space-between;
     font-size: 12px;
     color: #f0d9ae;
-    padding: 3px 0;
+    padding: 2px 0;
     gap: 8px;
 }
 
@@ -840,6 +834,25 @@ h1 {
 .stats-user-link:active {
     color: #ffffff;
     text-decoration-color: #ffffff;
+}
+
+/* Узкие экраны (320-360px) — чуть меньше отступов и шрифта, чтобы 10 строк
+   помещались с минимумом скролла или вовсе без него. */
+@media (max-width: 360px) {
+    .stats-modal-box {
+        width: 95vw;
+        padding: 12px 10px;
+    }
+    .stats-row {
+        padding: 6px 8px;
+        font-size: 12px;
+    }
+    .stats-leaderboard {
+        gap: 4px;
+    }
+    .stats-bylevel-panel {
+        padding-left: 28px;
+    }
 }
 
 /* ===== ПЕРЕКЛЮЧАТЕЛЬ ЯЗЫКА ===== */
