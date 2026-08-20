@@ -644,6 +644,16 @@ const translations = {
         status_connecting: "подключение...",
         status_game_interrupted: "Игра прервана",
         draw_agreed: "🤝 Ничья!\nОба игрока согласились закончить партию.",
+        draw_manual_header: "🤝 НИЧЬЯ",
+        draw_manual_text: "Оба игрока согласились на ничью.",
+        draw_by_rule_header: "🤝 НИЧЬЯ ПО ПРАВИЛАМ",
+        draw_reason_unknown: "Партия завершена автоматически по правилу ничьей",
+        draw_reason_threefold: "Троекратное повторение позиции",
+        draw_reason_kings15: "Лимит 15 ходов только дамками, без взятий",
+        draw_reason_np5: "Лимит 5 ходов в окончании с 2\u20133 фигурами",
+        draw_reason_np30: "Лимит 30 ходов в окончании с 4\u20135 фигурами",
+        draw_reason_np60: "Лимит 60 ходов в окончании с 6\u20137 фигурами",
+        draw_reason_longroad: "Лимит 5 ходов: дамка на большой дороге",
         btn_to_menu: "В меню",
         btn_close: "Закрыть",
         btn_ok: "ОК",
@@ -753,6 +763,16 @@ const translations = {
         status_connecting: "connecting...",
         status_game_interrupted: "Game interrupted",
         draw_agreed: "🤝 Draw!\nBoth players agreed to end the game.",
+        draw_manual_header: "🤝 DRAW",
+        draw_manual_text: "Both players agreed to a draw.",
+        draw_by_rule_header: "🤝 DRAW BY RULE",
+        draw_reason_unknown: "The game ended automatically by a draw rule",
+        draw_reason_threefold: "Threefold repetition of the position",
+        draw_reason_kings15: "15-move limit: kings only, no captures",
+        draw_reason_np5: "5-move limit in a 2\u20133 piece ending",
+        draw_reason_np30: "30-move limit in a 4\u20135 piece ending",
+        draw_reason_np60: "60-move limit in a 6\u20137 piece ending",
+        draw_reason_longroad: "5-move limit: lone king on the long diagonal",
         btn_to_menu: "To menu",
         btn_close: "Close",
         btn_ok: "OK",
@@ -862,6 +882,16 @@ const translations = {
         status_connecting: "connessione...",
         status_game_interrupted: "Partita interrotta",
         draw_agreed: "🤝 Pareggio!\nEntrambi i giocatori hanno concordato di terminare.",
+        draw_manual_header: "🤝 PATTA",
+        draw_manual_text: "Entrambi i giocatori hanno accettato la patta.",
+        draw_by_rule_header: "🤝 PATTA PER REGOLA",
+        draw_reason_unknown: "Partita terminata automaticamente per una regola di patta",
+        draw_reason_threefold: "Triplice ripetizione della posizione",
+        draw_reason_kings15: "Limite di 15 mosse: solo dame, senza catture",
+        draw_reason_np5: "Limite di 5 mosse in un finale con 2\u20133 pezzi",
+        draw_reason_np30: "Limite di 30 mosse in un finale con 4\u20135 pezzi",
+        draw_reason_np60: "Limite di 60 mosse in un finale con 6\u20137 pezzi",
+        draw_reason_longroad: "Limite di 5 mosse: dama sulla diagonale principale",
         btn_to_menu: "Al menu",
         btn_close: "Chiudi",
         btn_ok: "OK",
@@ -994,6 +1024,7 @@ const backConfirmModal = document.getElementById("back-confirm-modal");
 const btnBackBotYes = document.getElementById("btn-back-bot-yes");
 const btnBackBotNo = document.getElementById("btn-back-bot-no");
 const endGameModal = document.getElementById("end-game-modal");
+const endGameSubtext = document.getElementById("end-game-subtext");
 const endGameText = document.getElementById("end-game-text");
 const btnNewGame = document.getElementById("btn-new-game");
 const btnCloseGame = document.getElementById("btn-close-game");
@@ -2744,10 +2775,45 @@ function updateTimerDisplay() {
     turnTimerDiv.textContent = "⏱ " + t("timer_move") + ": " + whoseTurn + " — " + t("timer_time_left") + " " + formatTime(remaining);
 }
 
+// --- ПРЕЗЕНТАЦИОННЫЙ слой окна ничьей. Намеренно отделён от игровой
+// логики: checkAutomaticDraw()/computeNextDrawState() продолжают хранить
+// ТОЛЬКО стабильные коды причин и о текстах ничего не знают. Здесь код
+// превращается в заголовок + человекочитаемую строку.
+//
+// Код "draw" (ручное согласие сторон, см. обработчик btnDrawAccept) в этот
+// словарь СОЗНАТЕЛЬНО не входит: только он вправе показывать текст про
+// согласие игроков, и наоборот — ни одна автоматическая причина (включая
+// нераспознанную) этот текст показать не должна. ---
+const DRAW_REASON_DISPLAY = {
+    threefold_repetition: "draw_reason_threefold",
+    kings_only_15: "draw_reason_kings15",
+    no_progress_5: "draw_reason_np5",
+    no_progress_30: "draw_reason_np30",
+    no_progress_60: "draw_reason_np60",
+    long_road_5: "draw_reason_longroad"
+};
+
+// Возвращает { header, subtext } для текущего ничейного исхода.
+function buildDrawResultText(winReason) {
+    if (winReason === "draw") {
+        // ЕДИНСТВЕННАЯ ветка, где допустим текст про согласие игроков.
+        return { header: t("draw_manual_header"), subtext: t("draw_manual_text") };
+    }
+    const key = DRAW_REASON_DISPLAY[winReason];
+    return {
+        header: t("draw_by_rule_header"),
+        // Нераспознанный автоматический код -> нейтральный текст, но НИКОГДА
+        // не текст про согласие игроков.
+        subtext: key ? t(key) : t("draw_reason_unknown")
+    };
+}
+
 function renderEndGameModal() {
     if (currentState && currentState.winner) {
         if (currentState.winner === "draw") {
-            endGameText.textContent = t("draw_agreed");
+            const drawText = buildDrawResultText(currentState.winReason);
+            endGameText.textContent = drawText.header;
+            if (endGameSubtext) endGameSubtext.textContent = drawText.subtext;
         } else {
             const winnerColor = currentState.winner;
             const loserColor = winnerColor === "light" ? "dark" : "light";
@@ -2759,6 +2825,9 @@ function renderEndGameModal() {
             let text = winnerIcon + " " + winnerName + "\n" + loserIcon + " " + loserName;
 
             endGameText.textContent = text;
+            // Обязательно очищаем: иначе причина ПРОШЛОЙ ничьей осталась бы
+            // висеть под результатом победы (элемент переиспользуется).
+            if (endGameSubtext) endGameSubtext.textContent = "";
         }
         
         endGameModal.classList.remove("hidden");
