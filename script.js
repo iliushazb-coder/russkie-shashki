@@ -986,6 +986,7 @@ const resignConfirmModal = document.getElementById("resign-confirm-modal");
 const btnResignYes = document.getElementById("btn-resign-yes");
 const btnResignNo = document.getElementById("btn-resign-no");
 const btnBackBot = document.getElementById("btn-back-bot");
+const btnBackSpectator = document.getElementById("btn-back-spectator");
 const backConfirmModal = document.getElementById("back-confirm-modal");
 const btnBackBotYes = document.getElementById("btn-back-bot-yes");
 const btnBackBotNo = document.getElementById("btn-back-bot-no");
@@ -1140,6 +1141,43 @@ let ownerSessionAttached = false; // подключены ли мы сейчас
 let ownerSessionHandle = null;    // { ref, listener } — для detach
 let ownerSessionRevision = null;
 let ownerSessionHeartbeatInterval = null; // presence-heartbeat ИМЕННО этого устройства
+// Listener зрителей ДЛЯ SYNCED-OWNER ПУТИ — раньше существовал только у
+// старого legacy startBotSpectateRoom() (botSpectateListenerRef выше);
+// новый (текущий основной) путь его не имел вообще, поэтому владелец не
+// видел "Смотрят: ..." для своей же партии. ownerSpectatorsListenerCode
+// хранит код комнаты, для которого СЕЙЧАС реально навешан listener —
+// нужно, чтобы корректно переподключаться при реванше/замене серии
+// (новый spectateRoomCode), не плодя listener на каждый onOwnerSessionUpdate.
+let ownerSpectatorsListenerRef = null;
+let ownerSpectatorsListenerCode = null;
+// currentState ПОЛНОСТЬЮ заменяется на каждый onOwnerSessionUpdate (обычный
+// ход, heartbeat-триггер, что угодно) — новый объект строится из
+// botSessions, где ПОНЯТИЯ spectators нет вообще (это mirror-state, не
+// owner gameplay state — сознательно НЕ добавляем его в botSessions).
+// Значит currentState.spectators, выставленный listener'ом ниже, стирается
+// при СЛЕДУЮЩЕМ же ходе, даже если реальный список зрителей в Firebase не
+// менялся. Раз сам listener подключается ОДИН раз (пока spectateRoomCode
+// не меняется) — его callback не перевызовется просто от смены currentState
+// и не восстановит поле сам. ownerSpectatorsCache — отдельный, переживающий
+// замену currentState кеш; подмешивается обратно в onOwnerSessionUpdate
+// после КАЖДОГО applyRemoteOwnerState(), не только при реальном изменении
+// списка зрителей.
+let ownerSpectatorsCache = null;
+// Локальный retry-таймер для протухшего botMoveLock — единственный способ
+// живому устройству продолжить ход бота, если владевшее lock'ом устройство
+// закрылось ДО commit и никогда больше не пришлёт новое Firebase-событие.
+let ownerBotMoveRetryTimer = null;
+// Worst-case до фикса (15с): BOT_MOVE_LOCK_TTL_MS (12с) + полный интервал
+// (15с) = 27 секунд от смерти устройства-владельца до реального хода бота
+// на живом устройстве, в наихудшем выравнивании тика таймера относительно
+// момента истечения lock'а. 8с — тот же прецедент "не агрессивно", что уже
+// используется в этом же коде для LOBBY_STALE_CHECK_INTERVAL_MS — даёт
+// worst-case 20с вместо 27с. Более частый тик безопасен: первая строка
+// triggerBotMove() — чисто локальная проверка (currentState.turn !==
+// botColor), без единого обращения к Firebase; в норме бот успевает
+// походить за секунды, и подавляющее большинство тиков этого таймера
+// просто немедленно выходят, ничего не запрашивая у Firebase вообще.
+const OWNER_BOT_MOVE_RETRY_INTERVAL_MS = 8000;
 const BOT_MOVE_LOCK_TTL_MS = 12000;
 const STATS_RECENT_MATCH_IDS_LIMIT = 10;
 
@@ -2325,6 +2363,28 @@ window.addEventListener("resize", cancelActiveGhostAnimations);
 window.addEventListener("orientationchange", cancelActiveGhostAnimations);
 
 function renderBoard() {
+    // Единая надёжная точка пересчёта ориентации доски — myColor
+    // устанавливается более чем в 15 разных местах (новая партия, реванш,
+    // resume, cross-device takeover, разные online-пути), и полагаться на
+    // то, что КАЖДОЕ из них не забудет обновить flipped, было ненадёжно —
+    // именно так наблюдатель/владелец после resume/реванша видел доску
+    // перевёрнутой. renderBoard() — единственная точка, вызываемая перед
+    // КАЖДОЙ фактической отрисовкой, поэтому пересчёт здесь гарантированно
+    // покрывает все существующие и будущие пути установки myColor. Для
+    // зрителя (myColor === null) выражение корректно даёт false — та же
+    // ориентация, что и раньше.
+    flipped = (myColor === "dark");
+    // Кнопка "Назад" для зрителя — видна ТОЛЬКО пока партия ещё идёт
+    // (isSpectator && нет winner). Для завершённой партии уже есть кнопка
+    // "В меню" внутри модалки конца игры (renderEndGameModal) — эта кнопка
+    // ей не дублируется, а закрывает пробел ИМЕННО во время активной
+    // партии, когда раньше у зрителя не было вообще никакого способа
+    // выйти, кроме полного закрытия Mini App. Тот же принцип "пересчитать
+    // на каждом рендере", что и у flipped выше — не нужно вручную
+    // помнить о переключении в каждой из множества точек входа.
+    if (btnBackSpectator) {
+        btnBackSpectator.classList.toggle("hidden", !(isSpectator && currentState && !currentState.winner));
+    }
     ensureBoardBuilt();
     const capturedSnapshotsForGhost = captureCapturedPieceSnapshotsBeforeUpdate();
     updateBoardPieces();
@@ -3555,6 +3615,28 @@ function stopOwnerPresenceHeartbeat() {
     if (ownerSessionHeartbeatInterval) { clearInterval(ownerSessionHeartbeatInterval); ownerSessionHeartbeatInterval = null; }
 }
 
+// --- Retry-таймер для протухшего botMoveLock. Единственная точка, где
+// triggerBotMove() планируется — это renderBoard(), вызываемая только на
+// НОВОЕ Firebase-событие. Если устройство, державшее lock, закрылось ДО
+// commit — никакое новое событие никогда не придёт, и без этого таймера
+// ход бота завис бы навсегда. НЕ агрессивный поллинг: не читает Firebase
+// вообще (currentState уже в памяти), только пытается ЗАПИСАТЬ через ту же
+// самую transaction-based защиту (tryAcquireBotMoveLock), что уже
+// гарантирует невозможность двойного хода. Интервал сознательно больше
+// BOT_MOVE_LOCK_TTL_MS (12с) — не дёргаем впустую, пока владелец лока
+// потенциально ещё жив и может успеть закоммитить сам. triggerBotMove()
+// сама по себе безопасна для повторного вызова — уже содержит собственную
+// проверку "точно ли ещё ход бота". ---
+function startOwnerBotMoveRetryTimer() {
+    if (ownerBotMoveRetryTimer) return;
+    ownerBotMoveRetryTimer = setInterval(function () {
+        triggerBotMove();
+    }, OWNER_BOT_MOVE_RETRY_INTERVAL_MS);
+}
+function stopOwnerBotMoveRetryTimer() {
+    if (ownerBotMoveRetryTimer) { clearInterval(ownerBotMoveRetryTimer); ownerBotMoveRetryTimer = null; }
+}
+
 // --- Локальный выход из owner-сессии ("В меню") — НЕ трогает Firebase
 // вообще: не удаляет сессию, не удаляет публичную комнату. Другое
 // устройство (если открыто) продолжает как ни в чём не бывало. ---
@@ -3563,6 +3645,8 @@ function detachFromOwnerBotSessionLocally() {
     ownerSessionHandle = null;
     ownerSessionAttached = false;
     stopOwnerPresenceHeartbeat();
+    stopOwnerBotMoveRetryTimer();
+    detachOwnerSpectatorsListener();
     if (botMoveTimer) { clearTimeout(botMoveTimer); botMoveTimer = null; }
 }
 
@@ -3570,11 +3654,61 @@ function detachFromOwnerBotSessionLocally() {
 // же успешного commit, и от действий другого устройства. Отличать их не
 // нужно: revision однозначно определяет, действительно ли что-то новое. ---
 let lastRenderedOwnerRevision = null;
+// --- Listener зрителей для synced-owner пути — раньше отсутствовал
+// вообще, поэтому владелец не видел "Смотрят: ...". Переподключается
+// ТОЛЬКО когда botSpectateRoomCode реально изменился (реванш/замена
+// серии создают новый spectateRoomCode) — не на каждый onOwnerSessionUpdate,
+// иначе на каждый ход плодились бы новые listener'ы. ---
+function ensureOwnerSpectatorsListener() {
+    if (!botSpectateRoomCode) return;
+    if (ownerSpectatorsListenerRef && ownerSpectatorsListenerCode === botSpectateRoomCode) return;
+    if (ownerSpectatorsListenerRef) {
+        ownerSpectatorsListenerRef.off();
+        ownerSpectatorsListenerRef = null;
+    }
+    ownerSpectatorsListenerCode = botSpectateRoomCode;
+    ownerSpectatorsListenerRef = database.ref("rooms/" + botSpectateRoomCode + "/spectators");
+    ownerSpectatorsListenerRef.on("value", function (snapshot) {
+        ownerSpectatorsCache = snapshot.val() || {};
+        if (currentState) currentState.spectators = ownerSpectatorsCache;
+        renderSpectatorsList();
+    });
+}
+
+function detachOwnerSpectatorsListener() {
+    if (ownerSpectatorsListenerRef) {
+        ownerSpectatorsListenerRef.off();
+        ownerSpectatorsListenerRef = null;
+    }
+    ownerSpectatorsListenerCode = null;
+    ownerSpectatorsCache = null;
+}
+
 function onOwnerSessionUpdate(session) {
     if (!session) return;
     const isFirstDeliverySinceAttach = (lastRenderedOwnerRevision === null);
 
     applyRemoteOwnerState(session);
+    // currentState только что полностью заменён applyRemoteOwnerState() —
+    // подмешиваем обратно последний известный список зрителей СРАЗУ, не
+    // дожидаясь нового Firebase-события в самом rooms/.../spectators
+    // (которого может не быть ещё долго, если никто не входит/выходит).
+    if (ownerSpectatorsCache) currentState.spectators = ownerSpectatorsCache;
+    ensureOwnerSpectatorsListener();
+
+    // При ПЕРВОЙ доставке после attach (свежий старт ИЛИ resume) явно
+    // пересоздаём публичное зеркало, не дожидаясь ближайшего хода.
+    // Причина: если владелец был offline дольше grace period, лобби могло
+    // физически удалить rooms/<spectateRoomCode> (см. runLobbyStaleSweep).
+    // startOwnerPresenceHeartbeat() сам по себе НЕ пересоздал бы комнату —
+    // он пишет только presence, а реальные Firebase Rules требуют
+    // pieces/players/turn/status на любую запись, создающую узел; запись
+    // одного presence на отсутствующий путь была бы отклонена. Полный
+    // mirror (тот же вызов, что и после каждого хода) гарантированно
+    // восстанавливает комнату сразу при resume, не после первого хода.
+    if (isFirstDeliverySinceAttach && session.status === "active") {
+        mirrorCommittedStateToSpectateRoom(session.spectateRoomCode, session);
+    }
 
     if (!isFirstDeliverySinceAttach && session.revision !== lastRenderedOwnerRevision) {
         playSoundForMoveType(currentState.moveType, currentState.moveType === "king");
@@ -3597,6 +3731,7 @@ function attachOwnerBotGame() {
     if (ownerSessionHandle) detachOwnerBotSessionListener(ownerSessionHandle);
     ownerSessionHandle = attachToOwnerBotSession(onOwnerSessionUpdate);
     startOwnerPresenceHeartbeat();
+    startOwnerBotMoveRetryTimer();
 }
 
 // --- Human move в synced-режиме: НЕ мутирует currentState локально —
@@ -4350,6 +4485,24 @@ if (btnBackBotYes) {
         isBotGame = false;
         showScreen(menuScreen);
         loadActiveRooms();
+    });
+}
+
+// --- Кнопка "Назад" для зрителя во время АКТИВНОЙ партии — без
+// подтверждения, в отличие от btnBackBot: пассивный просмотр ничего не
+// меняет в самой игре, спрашивать "вы уверены" не нужно. Общая для обоих
+// spectator-сценариев (bot-зеркало и обычная online-партия) — оба идут
+// через один и тот же watchGroupRoomAsSpectator()/roomListenerRef, спецкейса
+// для ботов здесь нет и не нужно. ---
+if (btnBackSpectator) {
+    btnBackSpectator.addEventListener("click", function () {
+        if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
+        if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
+        isSpectator = false;
+        isOnlineGame = false;
+        isBotGame = false;
+        currentState = null;
+        showGroupLobby();
     });
 }
 
@@ -6492,6 +6645,18 @@ function renderLobbyListFromCache() {
             continue;
         }
 
+        // Активная партия, где ОБЕ стороны давно оффлайн — гарантированно
+        // заброшена (та же семантика, что и в runLobbyStaleSweep, которая
+        // физически удаляет такую комнату). Скрываем здесь ДОПОЛНИТЕЛЬНО,
+        // на самом рендере — не дожидаясь, пока чьё-то устройство реально
+        // выполнит remove() и это дойдёт как child_removed. Так корректность
+        // ОТОБРАЖЕНИЯ не зависит от того, успел ли где-то физически пройти
+        // sweep — сам факт открытия/обновления лобби у ЛЮБОГО пользователя
+        // уже достаточен, чтобы не показать заведомо мёртвую партию.
+        if (room.status === "active" && lightIsStale && isRoomPlayerStale(room, "dark")) {
+            continue;
+        }
+
         let lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
         let darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
         lightName = escapeHtml(lightName);
@@ -6713,6 +6878,17 @@ function showGroupLobby() {
     if (!lobbyStaleCheckTimer) {
         lobbyStaleCheckTimer = setInterval(runLobbyStaleSweep, LOBBY_STALE_CHECK_INTERVAL_MS);
     }
+
+    // ПЕРВЫЙ sweep — отдельно, с коротким timeout, НЕ дожидаясь первого
+    // тика интервала (8с). Реальный сценарий бага: пользователь открывает
+    // "Кто играет" и почти сразу кликает "Смотреть" — это останавливает
+    // весь lobby listening (включая интервал) через stopGroupLobbyListening()
+    // раньше, чем интервал успевает сработать хотя бы раз. 1500мс — запас,
+    // чтобы initial child_added burst успел наполнить кеш, но заметно
+    // быстрее типичного "открыл и сразу кликнул".
+    setTimeout(function () {
+        if (lobbyStaleCheckTimer) runLobbyStaleSweep();
+    }, 1500);
 }
 
 // Функция присоединения к открытой комнате
