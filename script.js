@@ -642,6 +642,7 @@ const translations = {
         status_left: "осталось",
         sec: "с",
         status_connecting: "подключение...",
+        status_game_interrupted: "Игра прервана",
         draw_agreed: "🤝 Ничья!\nОба игрока согласились закончить партию.",
         btn_to_menu: "В меню",
         btn_close: "Закрыть",
@@ -750,6 +751,7 @@ const translations = {
         status_left: "left",
         sec: "s",
         status_connecting: "connecting...",
+        status_game_interrupted: "Game interrupted",
         draw_agreed: "🤝 Draw!\nBoth players agreed to end the game.",
         btn_to_menu: "To menu",
         btn_close: "Close",
@@ -858,6 +860,7 @@ const translations = {
         status_left: "rimasti",
         sec: "s",
         status_connecting: "connessione...",
+        status_game_interrupted: "Partita interrotta",
         draw_agreed: "🤝 Pareggio!\nEntrambi i giocatori hanno concordato di terminare.",
         btn_to_menu: "Al menu",
         btn_close: "Chiudi",
@@ -1090,6 +1093,13 @@ let presenceHeartbeatInterval = null;
 let opponentAbsenceHandled = false;
 const STALE_MS = 20000; 
 const RECONNECT_GRACE_MS = 60000; // Перенесли наверх для порядка
+// Порог "возможно офлайн" по времени с последнего lastSeen — нужен ТОЛЬКО
+// потому, что у bot-зеркала сознательно нет onDisconnect() (небезопасно
+// при двух owner-устройствах — см. mirrorCommittedStateToSpectateRoom),
+// значит presence.online для bot-игр никогда не становится false сам по
+// себе. Заметно больше heartbeat-интервала (4с), чтобы обычный джиттер
+// сети не мигал "офлайн" на каждый пропущенный тик.
+const PRESENCE_STALE_WARNING_MS = 12000;
 const BOT_USERNAME = "russkie_shashki_bot";
 
 let matchmakingQueueRef = null;
@@ -1825,9 +1835,21 @@ function statusForColor(color) {
     if (!presence) {
         return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
     }
-    if (presence.online === false) {
+
+    const elapsed = Date.now() - (presence.lastSeen || Date.now());
+    // presence.online === false — настоящий disconnect для online-партий
+    // (onDisconnect().update там есть и срабатывает почти сразу). elapsed —
+    // единственный источник истины для bot-зеркала, где onDisconnect
+    // сознательно не установлен: presence.online там навсегда останется
+    // true, даже когда владелец давно закрыл Mini App — двигается только
+    // lastSeen (последний heartbeat), пока он писался.
+    const isStale = presence.online === false || elapsed > PRESENCE_STALE_WARNING_MS;
+
+    if (elapsed > RECONNECT_GRACE_MS) {
+        return { text: t("status_game_interrupted"), cls: "status-left" };
+    }
+    if (isStale) {
         // Считаем оставшееся время до конца "минуты форы"
-        const elapsed = Date.now() - (presence.lastSeen || Date.now());
         let remaining = Math.ceil((RECONNECT_GRACE_MS - elapsed) / 1000);
         if (remaining < 0) remaining = 0;
         return { text: ratingPrefix + t("status_offline") + " (" + t("status_left") + " " + remaining + t("sec") + ")", cls: "status-left" };
@@ -2384,6 +2406,17 @@ function renderBoard() {
     // помнить о переключении в каждой из множества точек входа.
     if (btnBackSpectator) {
         btnBackSpectator.classList.toggle("hidden", !(isSpectator && currentState && !currentState.winner));
+    }
+    // btnBackBot — legacy-путь прямой игры с ботом (НЕ owner-synced, НЕ
+    // зритель). Раньше переключалась только в startOnlineGame()/
+    // startOfflineGame() и никогда не пересчитывалась при переходе в
+    // spectator-режим — если до этого пользователь был в legacy-режиме
+    // (кнопка показана), а затем стал зрителем, обе кнопки "Назад"
+    // показывались одновременно. Тот же принцип пересчёта на каждом
+    // рендере, что и выше — гарантирует ровно одну (или ноль) видимых
+    // кнопок "Назад" независимо от истории переходов между режимами.
+    if (btnBackBot) {
+        btnBackBot.classList.toggle("hidden", !(isBotGame && !isSpectator && !ownerSessionAttached && currentState && !currentState.winner));
     }
     ensureBoardBuilt();
     const capturedSnapshotsForGhost = captureCapturedPieceSnapshotsBeforeUpdate();
@@ -6674,6 +6707,22 @@ function renderLobbyListFromCache() {
                 `;
             }
         } else if (room.status === "active") {
+            // Свою bot-партию не показываем себе вообще — единственный
+            // официальный путь продолжить её: "Играть с ботом" -> "Продолжить"
+            // (owner-synced flow через botSessions). Раньше "Кто играет" вела
+            // на владельческий путь, который на практике оказался ненадёжен
+            // при повторном входе — проще и безопаснее вообще не показывать
+            // здесь свою же bot-игру, чем поддерживать два owner-flow.
+            // Проверка по id ("bot" — жёстко прописанная строка, см.
+            // mirrorCommittedStateToSpectateRoom, не пользовательское имя),
+            // не по имени.
+            const isMyBotGame =
+                (room.players && room.players.light && room.players.light.id === "bot" &&
+                    room.players.dark && room.players.dark.id === myTelegramId) ||
+                (room.players && room.players.dark && room.players.dark.id === "bot" &&
+                    room.players.light && room.players.light.id === myTelegramId);
+            if (isMyBotGame) continue;
+
             const isMyActiveGame =
                 (room.players && room.players.light && room.players.light.id === myTelegramId) ||
                 (room.players && room.players.dark && room.players.dark.id === myTelegramId);
@@ -6959,46 +7008,17 @@ function joinGroupRoom(code) {
 }
 
 // Функция просмотра чужой игры (Наблюдатель)
-// Точка входа при клике по комнате в "Кто играет". Сначала проверяет, не
-// является ли эта комната МОЕЙ СОБСТВЕННОЙ активной bot-игрой (с другого
-// устройства того же Telegram ID) — если да, подключается как владелец, а
-// не зритель. Для чужой bot-игры и для online-комнат поведение полностью
-// прежнее (watchGroupRoomAsSpectator).
-// Точка входа при клике по комнате в "Кто играет". Сначала проверяет, не
-// является ли эта комната МОЕЙ СОБСТВЕННОЙ активной bot-игрой (с другого
-// устройства того же Telegram ID) — если да, подключается как владелец, а
-// не зритель. Для чужой bot-игры и для online-комнат поведение полностью
-// прежнее (watchGroupRoomAsSpectator).
+// Точка входа при клике по комнате в "Кто играет".
+// Единственный официальный путь просмотра ЧУЖОЙ игры (online или bot) —
+// свою активную bot-партию lobby теперь вообще не показывает и не даёт
+// на неё кликнуть (см. renderLobbyListFromCache), поэтому отдельная
+// owner-detection ветка здесь больше не нужна: раньше она вела на owner-
+// attach через "Кто играет", который на практике оказался ненадёжным
+// вторым owner-flow (синхронизация могла сломаться, бот — зависнуть).
+// Единственный официальный способ продолжить свою bot-игру теперь —
+// "Играть с ботом" -> "Продолжить" (owner-synced flow через botSessions).
 function watchGroupRoom(code) {
-    database.ref("rooms/" + code).once("value").then(function (snapshot) {
-        const room = snapshot.val();
-        if (isMyOwnBotGameRoom(room)) {
-            // Структурно комната "моя" (бот против меня), но это ещё не
-            // значит, что она соответствует ТЕКУЩЕЙ активной сессии — она
-            // могла устареть (реванш/замена серии уже создали новую
-            // комнату с другим кодом, а старая на секунду ещё видна в
-            // лобби). Сверяем именно код, а не только факт принадлежности.
-            database.ref("botSessions/" + myTelegramId).once("value").then(function (sessionSnap) {
-                const session = sessionSnap.val();
-                const isCurrentActiveSession = !!(session && session.status === "active" && session.spectateRoomCode === code);
-                if (isCurrentActiveSession) {
-                    stopGroupLobbyListening();
-                    attachOwnerBotGame(); // сама выставит isBotGame/isOnlineGame=false/showScreen(gameScreen)
-                    return;
-                }
-                // Устаревшая собственная комната — не подключаем ни как
-                // owner (это не текущая сессия), ни как зритель самого
-                // себя (не имеет смысла). Сообщаем и остаёмся в лобби.
-                showInfoModal(t("err_game_closed"), false);
-            }).catch(function () {
-                showInfoModal(t("err_game_closed"), false);
-            });
-            return;
-        }
-        watchGroupRoomAsSpectator(code);
-    }).catch(function () {
-        watchGroupRoomAsSpectator(code); // на всякий случай не блокируем обычный spectator-путь при ошибке чтения
-    });
+    watchGroupRoomAsSpectator(code);
 }
 
 function watchGroupRoomAsSpectator(code) {
