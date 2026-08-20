@@ -2514,7 +2514,6 @@ function handleClick(row, col) {
     }
 
     if (selectedFrom) {
-        console.log("[XSYNC] HUMAN_CLICK xdev=" + botClientInstanceId.slice(0, 8) + " selectedFrom=" + JSON.stringify(selectedFrom) + " target=" + row + "_" + col + " ownerSessionAttached=" + ownerSessionAttached + " isBotGame=" + isBotGame + " currentBotMatchId=" + currentBotMatchId + " ownerSessionRevision=" + ownerSessionRevision + " myColor=" + myColor + " turn=" + (currentState && currentState.turn));
         if (isBotGame && ownerSessionAttached) {
             attemptOwnerHumanMove(selectedFrom.row, selectedFrom.col, row, col);
         } else {
@@ -3019,21 +3018,19 @@ function applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol) {
     const expectedMatchId = currentBotMatchId;
     const expectedRevision = ownerSessionRevision;
     const myColorAtCallTime = myColor;
-    console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " EXPECTED matchId=" + expectedMatchId + " revision=" + expectedRevision + " myColor=" + myColorAtCallTime);
 
     return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
-        if (!session) { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=no_session"); return; }
-        console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " callback SEEN matchId=" + session.matchId + " revision=" + session.revision + " status=" + session.status);
-        if (session.status !== "active") { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=status_not_active status=" + session.status); return; }
-        if (session.matchId !== expectedMatchId) { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=matchId_mismatch seen=" + session.matchId + " expected=" + expectedMatchId); return; }
-        if (session.revision !== expectedRevision) { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=revision_mismatch seen=" + session.revision + " expected=" + expectedRevision); return; }
+        if (!session) return;
+        if (session.status !== "active") return;
+        if (session.matchId !== expectedMatchId) return;
+        if (session.revision !== expectedRevision) return;
 
         const gameState = deserializeOwnerBotState(session.state);
-        if (gameState.turn !== myColorAtCallTime) { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=turn_mismatch seenTurn=" + gameState.turn + " myColor=" + myColorAtCallTime); return; }
-        if (gameState.winner) { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=already_has_winner"); return; }
+        if (gameState.turn !== myColorAtCallTime) return;
+        if (gameState.winner) return;
 
         const result = attemptMove(gameState, fromRow, fromCol, toRow, toCol, myColorAtCallTime);
-        if (!result) { console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=attemptMove_illegal"); return; }
+        if (!result) return;
 
         const movingPieceWasKing = !!(gameState.pieces[fromRow + "_" + fromCol] && gameState.pieces[fromRow + "_" + fromCol].king);
         const drawState = computeNextDrawState(gameState, result, movingPieceWasKing);
@@ -3092,7 +3089,6 @@ function attemptOwnerSurrender() {
 // --- Bot move: lock через ВСЮ сессию (не только child) — устаревшее
 // локальное представление отсеивается СРАЗУ, не тратя впустую Hard-поиск. ---
 function tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotColor) {
-    console.log("[XSYNC] LOCK xdev=" + botClientInstanceId.slice(0, 8) + " EXPECTED matchId=" + expectedMatchId + " revision=" + expectedRevision + " botColor=" + expectedBotColor);
     return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
         if (!session) return;
         if (session.status !== "active") return;
@@ -3104,43 +3100,40 @@ function tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotCol
         if (gameState.winner) return;
 
         const now = getEstimatedServerNow();
-        const existingLock = session.botMoveLock;
-        console.log("[XSYNC] LOCK xdev=" + botClientInstanceId.slice(0, 8) + " existingLockHolder=" + (existingLock && existingLock.holder) + " existingLockRevision=" + (existingLock && existingLock.revision) + " existingLockExpiresAt=" + (existingLock && existingLock.expiresAt) + " serverNow=" + now);
         if (session.botMoveLock && session.botMoveLock.expiresAt > now) return;
 
         const newSession = Object.assign({}, session);
         newSession.botMoveLock = { holder: botClientInstanceId, matchId: expectedMatchId, revision: expectedRevision, expiresAt: now + BOT_MOVE_LOCK_TTL_MS };
         return newSession;
     }).then(function (result) {
-        if (!result.committed) { console.log("[XSYNC] LOCK xdev=" + botClientInstanceId.slice(0, 8) + " acquired=false (transaction not committed)"); return { acquired: false }; }
+        if (!result.committed) return { acquired: false };
         const session = result.snapshot.val();
-        if (!session.botMoveLock || session.botMoveLock.holder !== botClientInstanceId) { console.log("[XSYNC] LOCK xdev=" + botClientInstanceId.slice(0, 8) + " acquired=false (holder mismatch after commit)"); return { acquired: false }; }
-        console.log("[XSYNC] LOCK xdev=" + botClientInstanceId.slice(0, 8) + " acquired=true holder=" + botClientInstanceId);
+        if (!session.botMoveLock || session.botMoveLock.holder !== botClientInstanceId) return { acquired: false };
         return { acquired: true, sessionSnapshot: session };
     });
 }
 
 function commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, bestMove) {
     return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
-        if (!session) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=no_session"); return; }
-        if (session.matchId !== expectedMatchId) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=matchId_mismatch"); return; }
-        if (session.revision !== expectedRevision) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=revision_mismatch seen=" + session.revision + " expected=" + expectedRevision); return; }
-        if (!session.botMoveLock || session.botMoveLock.holder !== botClientInstanceId) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=holder_mismatch seenHolder=" + (session.botMoveLock && session.botMoveLock.holder) + " myInstanceId=" + botClientInstanceId); return; }
-        if (session.botMoveLock.revision !== expectedRevision) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=lock_revision_mismatch"); return; }
+        if (!session) return;
+        if (session.matchId !== expectedMatchId) return;
+        if (session.revision !== expectedRevision) return;
+        if (!session.botMoveLock || session.botMoveLock.holder !== botClientInstanceId) return;
+        if (session.botMoveLock.revision !== expectedRevision) return;
         // Технически на данный момент недостижимо иначе (rematch/replace —
         // единственные операции, меняющие session.matchId, и обе тут же
         // обнуляют botMoveLock в null) — session.matchId уже проверен выше,
         // и lock не может пережить смену matchId. Проверяем явно как
         // самодокументирующийся инвариант и защиту от будущих изменений,
         // которые могли бы случайно нарушить это соответствие.
-        if (session.botMoveLock.matchId !== expectedMatchId) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=lock_matchId_mismatch"); return; }
+        if (session.botMoveLock.matchId !== expectedMatchId) return;
 
         const gameState = deserializeOwnerBotState(session.state);
-        if (gameState.turn !== expectedBotColor) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=turn_mismatch"); return; }
-        if (gameState.winner) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=already_has_winner"); return; }
+        if (gameState.turn !== expectedBotColor) return;
+        if (gameState.winner) return;
 
         const result = attemptMove(gameState, bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col, expectedBotColor);
-        if (!result) { console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " ABORT reason=attemptMove_illegal"); return; }
+        if (!result) return;
 
         const movingPieceWasKing = !!(gameState.pieces[bestMove.from.row + "_" + bestMove.from.col] && gameState.pieces[bestMove.from.row + "_" + bestMove.from.col].king);
         const drawState = computeNextDrawState(gameState, result, movingPieceWasKing);
@@ -3161,9 +3154,6 @@ function commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, best
         newSession.botMoveLock = null;
         newSession.updatedAt = firebase.database.ServerValue.TIMESTAMP;
         return newSession;
-    }).then(function (result) {
-        console.log("[XSYNC] BOT_COMMIT xdev=" + botClientInstanceId.slice(0, 8) + " committed=" + result.committed);
-        return result;
     });
 }
 
@@ -3395,7 +3385,6 @@ function detachFromOwnerBotSessionLocally() {
 let lastRenderedOwnerRevision = null;
 function onOwnerSessionUpdate(session) {
     if (!session) return;
-    console.log("[XSYNC] OWNER_UPDATE xdev=" + botClientInstanceId.slice(0, 8) + " matchId=" + session.matchId + " revision=" + session.revision + " moveCount=" + (session.state && session.state.moveCount) + " turn=" + (session.state && session.state.turn) + " updatedAt=" + session.updatedAt);
     const isFirstDeliverySinceAttach = (lastRenderedOwnerRevision === null);
 
     applyRemoteOwnerState(session);
@@ -3416,7 +3405,6 @@ function attachOwnerBotGame() {
     isSpectator = false;
     ownerSessionAttached = true;
     lastRenderedOwnerRevision = null;
-    console.log("[XSYNC] ATTACH_OWNER xdev=" + botClientInstanceId.slice(0, 8) + " myTelegramId=" + myTelegramId + " isBotGame=" + isBotGame + " isOnlineGame=" + isOnlineGame + " isSpectator=" + isSpectator + " ownerSessionAttached=" + ownerSessionAttached);
     showScreen(gameScreen);
     if (ownerSessionHandle) detachOwnerBotSessionListener(ownerSessionHandle);
     ownerSessionHandle = attachToOwnerBotSession(onOwnerSessionUpdate);
@@ -3428,7 +3416,6 @@ function attachOwnerBotGame() {
 // подтверждённое состояние (или ничего не изменит при abort). ---
 function attemptOwnerHumanMove(fromRow, fromCol, toRow, toCol) {
     applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol).then(function (result) {
-        console.log("[XSYNC] HUMAN_TX xdev=" + botClientInstanceId.slice(0, 8) + " RESULT committed=" + result.committed + " snapshotRevision=" + (result.snapshot && result.snapshot.val() && result.snapshot.val().revision));
         if (result.committed) {
             // selectedFrom — чисто локальный UI-концепт, Firebase о нём не
             // знает и не обязан синхронизировать. Сбрасываем СРАЗУ после
@@ -5544,7 +5531,7 @@ function triggerOwnerSyncedBotMove() {
         botMoveWaitingForServerTime = false;
         return tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotColor);
     }).then(function (lockResult) {
-        if (!lockResult.acquired) { console.log("[XSYNC] LOCK_BUSY_NO_RETRY xdev=" + botClientInstanceId.slice(0, 8) + " matchId=" + expectedMatchId + " revision=" + expectedRevision); return; } // другое устройство уже считает — просто ждём его commit через listener
+        if (!lockResult.acquired) return; // другое устройство уже считает — просто ждём его commit через listener
 
         const lockedGameState = deserializeOwnerBotState(lockResult.sessionSnapshot.state);
         const lockedDifficulty = lockResult.sessionSnapshot.botDifficulty;
@@ -6480,11 +6467,8 @@ function joinGroupRoom(code) {
 // не зритель. Для чужой bot-игры и для online-комнат поведение полностью
 // прежнее (watchGroupRoomAsSpectator).
 function watchGroupRoom(code) {
-    console.log("[XSYNC] WATCH_ROOM xdev=" + botClientInstanceId.slice(0, 8) + " clickedRoomCode=" + code);
     database.ref("rooms/" + code).once("value").then(function (snapshot) {
         const room = snapshot.val();
-        const ownRoomDetected = isMyOwnBotGameRoom(room);
-        console.log("[XSYNC] WATCH_ROOM xdev=" + botClientInstanceId.slice(0, 8) + " ownRoomDetected=" + ownRoomDetected);
         if (isMyOwnBotGameRoom(room)) {
             // Структурно комната "моя" (бот против меня), но это ещё не
             // значит, что она соответствует ТЕКУЩЕЙ активной сессии — она
@@ -6494,7 +6478,6 @@ function watchGroupRoom(code) {
             database.ref("botSessions/" + myTelegramId).once("value").then(function (sessionSnap) {
                 const session = sessionSnap.val();
                 const isCurrentActiveSession = !!(session && session.status === "active" && session.spectateRoomCode === code);
-                console.log("[XSYNC] WATCH_ROOM xdev=" + botClientInstanceId.slice(0, 8) + " sessionMatchId=" + (session && session.matchId) + " sessionSpectateRoomCode=" + (session && session.spectateRoomCode) + " isCurrentActiveSession=" + isCurrentActiveSession);
                 if (isCurrentActiveSession) {
                     if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
                     attachOwnerBotGame(); // сама выставит isBotGame/isOnlineGame=false/showScreen(gameScreen)
