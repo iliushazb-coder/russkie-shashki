@@ -4081,52 +4081,41 @@ function renderOnlineStatsRow(rank, name, wins, losses) {
     return row;
 }
 
-// Карточка для рейтинга "С ботом": заголовок с местом/именем, основная
-// строка показателей, и отдельный блок разбивки по Medium/Hard (только если
-// byLevel реально присутствует — у партий до появления уровней сложности
-// его нет, и это нормально; Easy никогда не пишет byLevel и не показывается).
-function renderBotStatsCard(rank, name, wins, losses, coins, byLevel) {
-    const card = document.createElement("div");
-    card.className = "stats-bot-card";
+// Отслеживаем единственную раскрытую строку bot-рейтинга за раз — это
+// сбрасывается заново при каждом openStatsModal() (см. ниже), так что
+// повторное открытие модалки всегда начинается со свёрнутого состояния.
+let statsExpandedBotEntry = null;
 
-    const header = document.createElement("div");
-    header.className = "stats-bot-card-header";
-    header.appendChild(renderRankAndName(rank, name));
-    card.appendChild(header);
+// Компактная строка для рейтинга "С ботом": место, имя, победы, поражения,
+// монеты, игры — визуально на одном уровне с Online-строкой. Если у записи
+// есть byLevel (Medium/Hard появились после введения уровней сложности —
+// у старых партий его нет, и это нормально), строка кликабельна и по
+// нажатию раскрывает компактную панель разбивки. Easy никогда не пишет
+// byLevel и здесь не появляется.
+function renderBotStatsRow(rank, name, wins, losses, coins, byLevel) {
+    const entry = document.createElement("div");
+    entry.className = "stats-bot-entry";
 
-    const main = document.createElement("div");
-    main.className = "stats-bot-card-main";
+    const row = document.createElement("div");
+    row.className = "stats-row";
+    const nameNode = renderRankAndName(rank, name);
+    row.appendChild(nameNode);
+
+    const infoSpan = document.createElement("span");
+    infoSpan.className = "stats-info-block";
     const total = wins + losses;
     const coinsValue = (typeof coins === "number") ? coins : 0;
-    const stats = [
-        { value: wins, label: "🏆 " + t("stats_label_wins") },
-        { value: losses, label: "❌ " + t("stats_label_losses") },
-        { value: coinsValue, label: "🪙" },
-        { value: total, label: "🎮 " + t("stats_label_games") }
-    ];
-    stats.forEach(function (s) {
-        const item = document.createElement("div");
-        item.className = "stats-stat-item";
-        const val = document.createElement("span");
-        val.className = "stats-stat-value";
-        val.textContent = s.value;
-        const lbl = document.createElement("span");
-        lbl.className = "stats-stat-label";
-        lbl.textContent = s.label;
-        item.appendChild(val);
-        item.appendChild(lbl);
-        main.appendChild(item);
-    });
-    card.appendChild(main);
+    infoSpan.textContent = "🏆" + wins + " ❌" + losses + " 🪙" + coinsValue + " 🎮" + total;
+    row.appendChild(infoSpan);
+    entry.appendChild(row);
 
-    if (byLevel && (byLevel.medium || byLevel.hard)) {
-        const levelBlock = document.createElement("div");
-        levelBlock.className = "stats-bylevel-block";
+    const hasLevels = byLevel && (byLevel.medium || byLevel.hard);
 
-        const title = document.createElement("div");
-        title.className = "stats-bylevel-title";
-        title.textContent = t("stats_label_bylevel");
-        levelBlock.appendChild(title);
+    if (hasLevels) {
+        row.classList.add("stats-row-expandable");
+
+        const panel = document.createElement("div");
+        panel.className = "stats-bylevel-panel hidden";
 
         const m = byLevel.medium || { wins: 0, losses: 0 };
         const h = byLevel.hard || { wins: 0, losses: 0 };
@@ -4146,12 +4135,31 @@ function renderBotStatsCard(rank, name, wins, losses, coins, byLevel) {
             lvlRow.appendChild(nameSpan);
             lvlRow.appendChild(winsSpan);
             lvlRow.appendChild(lossesSpan);
-            levelBlock.appendChild(lvlRow);
+            panel.appendChild(lvlRow);
         });
-        card.appendChild(levelBlock);
+        entry.appendChild(panel);
+
+        // Клик по ссылке-нику не должен раскрывать/сворачивать строку —
+        // ссылка обрабатывает переход в Telegram сама по себе.
+        row.addEventListener("click", function (event) {
+            if (event.target && event.target.classList && event.target.classList.contains("stats-user-link")) {
+                return; // клик именно по ссылке — не раскрываем/не сворачиваем
+            }
+            const isOpen = !panel.classList.contains("hidden");
+            if (statsExpandedBotEntry && statsExpandedBotEntry !== panel) {
+                statsExpandedBotEntry.classList.add("hidden");
+            }
+            if (isOpen) {
+                panel.classList.add("hidden");
+                statsExpandedBotEntry = null;
+            } else {
+                panel.classList.remove("hidden");
+                statsExpandedBotEntry = panel;
+            }
+        });
     }
 
-    return card;
+    return entry;
 }
 
 // Отдельная строка для рейтинга "Заработано" — переиспользует те же
@@ -4211,6 +4219,10 @@ function openStatsModal() {
 
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
+
+    // Новое открытие модалки всегда начинается со свёрнутых bot-строк —
+    // старая ссылка на DOM-узел из прошлого открытия больше не актуальна.
+    statsExpandedBotEntry = null;
 
     statsModal.classList.remove("hidden");
 
@@ -4272,7 +4284,7 @@ function openStatsModal() {
                 });
             })).then(function () {
                 top.forEach(function (entry, index) {
-                    statsLeaderboardBot.appendChild(renderBotStatsCard(index + 1, entry.name, entry.wins, entry.losses, entry.coins, entry.byLevel));
+                    statsLeaderboardBot.appendChild(renderBotStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins, entry.byLevel));
                 });
             });
         }).catch(function () {
@@ -4290,6 +4302,8 @@ const statsTabOnline = document.getElementById("stats-tab-online");
 const statsTabBot = document.getElementById("stats-tab-bot");
 const statsViewOnline = document.getElementById("stats-view-online");
 const statsViewBot = document.getElementById("stats-view-bot");
+const statsTitleOnline = document.getElementById("stats-title-online");
+const statsTitleBot = document.getElementById("stats-title-bot");
 
 if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
     statsTabOnline.addEventListener("click", function () {
@@ -4297,6 +4311,8 @@ if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
         statsTabBot.classList.remove("stats-tab-active");
         statsViewOnline.classList.remove("hidden");
         statsViewBot.classList.add("hidden");
+        if (statsTitleOnline) statsTitleOnline.classList.remove("hidden");
+        if (statsTitleBot) statsTitleBot.classList.add("hidden");
     });
 
     statsTabBot.addEventListener("click", function () {
@@ -4304,6 +4320,8 @@ if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
         statsTabOnline.classList.remove("stats-tab-active");
         statsViewBot.classList.remove("hidden");
         statsViewOnline.classList.add("hidden");
+        if (statsTitleBot) statsTitleBot.classList.remove("hidden");
+        if (statsTitleOnline) statsTitleOnline.classList.add("hidden");
     });
 }
 
