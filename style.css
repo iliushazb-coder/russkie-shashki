@@ -347,6 +347,46 @@ h1 {
     will-change: transform, box-shadow;
 }
 
+/* ===== ГОСТЬ-АНИМАЦИЯ ХОДА (визуальный слой поверх authoritative доски) =====
+   Ghost — временная копия шашки, летящая from -> to. Реальная authoritative
+   доска (updateBoardPieces()) обновляется мгновенно и независимо от этого —
+   ghost НИКОГДА не влияет на currentState/легальность/Firebase, чисто
+   декоративный оверлей. Использует только transform/opacity (дёшево, без
+   layout thrashing) — позиционируется абсолютно ВНУТРИ клетки-назначения,
+   поэтому её собственные grid/flex-координаты (в т.ч. с учётом переворота
+   доски) не нужно пересчитывать вручную. */
+.move-ghost-piece {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 5;
+    will-change: transform, opacity;
+    animation: none !important; /* не наследуем pieceAppear у .piece — ghost сам управляет своим transform */
+}
+
+.move-ghost-captured {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 4;
+    will-change: transform, opacity;
+    animation: none !important;
+}
+
+/* Реальная фигура на клетке-назначении, пока над ней летит ghost. */
+.piece-hidden-for-ghost {
+    opacity: 0 !important;
+    animation: none !important;
+}
+
 @keyframes pieceAppear {
     0% { transform: scale(0.5); opacity: 0.3; }
     100% { transform: scale(1); opacity: 1; }
