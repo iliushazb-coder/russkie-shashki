@@ -1495,11 +1495,67 @@ function getDrawPositionKey(pieces, turn) {
     return s + "_" + turn;
 }
 
-// Проверяет пороги 7.2.5 (только дамки, 15 ходов) и 7.2.6 (30/60 ходов без
-// изменения материального баланса, у обеих сторон есть дамка) и 7.2.3
-// (троекратное повторение). Ничего не мутирует, только читает переданные значения.
-function checkAutomaticDraw(pieces, kingOnlyStreak, noProgressStreak, positionHistory, newPositionKey) {
-    // 7.2.5 — 15 полностью завершённых ходов только дамками, без взятий и без
+// --- Большая дорога (диагональ a1-h8). В нашей системе координат это
+// РОВНО клетки, где row + col === 7 — проверено сверкой с нотацией ФШР:
+// (7,0)=a1, (6,1)=b2, (5,2)=c3, (4,3)=d4, (3,4)=e5, (2,5)=f6, (1,6)=g7,
+// (0,7)=h8. Все 8 клеток игровые (тёмные). Контроль: начальная расстановка
+// белых по ФШР (a1,a3,b2,c1,c3,d2,e1,e3,f2,g1,g3,h2) ложится ровно на
+// rows 5,6,7 — совпадает с createInitialPieces(). ---
+function isOnLongRoad(row, col) {
+    return (row + col) === 7;
+}
+
+// --- Специальное окончание ФШР: "участник, имея в окончании партии три
+// шашки (три дамки, две дамки и простую шашку, дамку и две простые шашки,
+// три простые шашки) против одинокой дамки соперника, находящейся на
+// «большой дороге», своим 5-м ходом не сможет совершить взятие дамки
+// соперника". Перечисление в тексте покрывает ВСЕ составы из трёх фигур,
+// поэтому проверяем именно количество (ровно 3), не качество. У слабой
+// стороны — ровно одна фигура, и она обязана быть дамкой НА большой дороге.
+// Возвращает null, если позиция не соответствует; иначе { attacker }. ---
+function analyzeLongRoadEnding(pieces) {
+    let lightCount = 0, darkCount = 0;
+    let lastLightKey = null, lastDarkKey = null;
+    for (const key in pieces) {
+        if (pieces[key].color === "light") { lightCount++; lastLightKey = key; }
+        else { darkCount++; lastDarkKey = key; }
+    }
+    function loneKingOnRoad(key) {
+        const p = pieces[key];
+        if (!p || !p.king) return false;
+        const parts = key.split("_");
+        return isOnLongRoad(parseInt(parts[0], 10), parseInt(parts[1], 10));
+    }
+    if (lightCount === 3 && darkCount === 1 && loneKingOnRoad(lastDarkKey)) {
+        return { attacker: "light" };
+    }
+    if (darkCount === 3 && lightCount === 1 && loneKingOnRoad(lastLightKey)) {
+        return { attacker: "dark" };
+    }
+    return null;
+}
+
+// Проверяет пороги: 15 ходов только дамками; 5/30/60 ходов без изменения
+// соотношения сил (2-3 / 4-5 / 6-7 фигур, у обеих сторон есть дамки);
+// специальное окончание "3 фигуры против одинокой дамки на большой дороге"
+// (5 СОБСТВЕННЫХ ходов сильной стороны); троекратное повторение.
+// Ничего не мутирует, только читает переданные значения.
+function checkAutomaticDraw(pieces, kingOnlyStreak, noProgressStreak, positionHistory, newPositionKey, longRoadStreak) {
+    // Специальное окончание "3 фигуры против одинокой дамки на большой
+    // дороге" проверяется ПЕРВЫМ как наиболее частное (lex specialis).
+    // ВАЖНО, честная оговорка: официального порядка применения ничейных
+    // правил в текстах ФШР/Минспорта НЕТ (проверено). Порядок здесь влияет
+    // ТОЛЬКО на код причины, но не на исход — во всех пересекающихся
+    // случаях обе нормы дают одну и ту же ничью. Практически пересечение
+    // возможно лишь когда одинокая дамка ВСТУПАЕТ на большую дорогу
+    // (без взятия и превращения), поэтому kingOnlyStreak к этому моменту
+    // мог быть уже накоплен; при обычном же установлении соотношения
+    // через взятие kingOnlyStreak обнуляется и конфликта не возникает.
+    if (longRoadStreak >= 5 && analyzeLongRoadEnding(pieces)) {
+        return "long_road_5";
+    }
+
+    // 15 полностью завершённых ходов только дамками, без взятий и без
     // движения простых шашек.
     if (kingOnlyStreak >= 15) {
         return "kings_only_15";
@@ -1519,6 +1575,13 @@ function checkAutomaticDraw(pieces, kingOnlyStreak, noProgressStreak, positionHi
         }
     }
     if (lightHasKing && darkHasKing) {
+        // Диапазон 2-3 фигуры — естественное продолжение того же
+        // noProgress-механизма, что уже применяется для 4-5 и 6-7.
+        // Единица счёта та же самая (отдельный ход одной стороны), как и
+        // требовалось: не создаём параллельную систему подсчёта.
+        if (totalPieces >= 2 && totalPieces <= 3 && noProgressStreak >= 5) {
+            return "no_progress_5";
+        }
         if (totalPieces >= 4 && totalPieces <= 5 && noProgressStreak >= 30) {
             return "no_progress_30";
         }
@@ -1549,6 +1612,8 @@ function computeNextDrawState(prevState, result, movingPieceWasKing) {
     const prevKingOnlyStreak = prevState.kingOnlyStreak || 0;
     const prevNoProgressStreak = prevState.noProgressStreak || 0;
     const prevHistory = prevState.positionHistory || [];
+    const prevLongRoadAttacker = prevState.longRoadAttacker || null;
+    const prevLongRoadStreak = prevState.longRoadStreak || 0;
 
     // Цепочка взятия ещё не закончена — многоходовое взятие целиком считается
     // ОДНИМ ходом, поэтому счётчики трогать рано, ждём финального прыжка.
@@ -1557,6 +1622,8 @@ function computeNextDrawState(prevState, result, movingPieceWasKing) {
             kingOnlyStreak: prevKingOnlyStreak,
             noProgressStreak: prevNoProgressStreak,
             positionHistory: prevHistory,
+            longRoadAttacker: prevLongRoadAttacker,
+            longRoadStreak: prevLongRoadStreak,
             drawReason: null
         };
     }
@@ -1586,17 +1653,58 @@ function computeNextDrawState(prevState, result, movingPieceWasKing) {
         newNoProgressStreak = prevNoProgressStreak + 1;
     }
 
+    // Специальное окончание "3 фигуры против одинокой дамки на большой
+    // дороге": считаем ТОЛЬКО собственные ходы сильной стороны.
+    // prevState.turn — цвет, который только что СДЕЛАЛ этот ход (result.turn
+    // уже переключён на соперника). Устанавливающий соотношение ход в счёт
+    // пяти НЕ входит — отсчёт стартует со следующего хода сильной стороны
+    // (по аналогии с формулировкой "считая с момента установления
+    // соотношения сил"; сам текст этого частного пункта момент старта
+    // явно не оговаривает).
+    //
+    // Пока позиция соответствует условию правила (3 фигуры сильной стороны
+    // против одинокой дамки соперника НА большой дороге) — специальный
+    // счётчик идёт; как только позиция перестаёт ему соответствовать,
+    // режим прекращается и счётчик обнуляется.
+    //
+    // ЭТО ИНТЕРПРЕТАЦИЯ ДЛЯ АВТОМАТИЗАЦИИ, а НЕ предписание ФШР. Текст
+    // правил описывает дамку как "находящуюся на большой дороге", но
+    // НИЧЕГО не говорит о том, что делать со счётчиком, если она оттуда
+    // ушла; момент старта отсчёта в этом пункте тоже не оговорён.
+    // Положение на большаке трактуется как часть условия правила наравне
+    // с материальным соотношением: специальный счётчик действует ровно
+    // столько, сколько существует описанная в правиле позиция.
+    const moverColor = prevState.turn;
+    const longRoadNow = analyzeLongRoadEnding(result.pieces);
+    let newLongRoadAttacker;
+    let newLongRoadStreak;
+    if (!longRoadNow) {
+        newLongRoadAttacker = null;
+        newLongRoadStreak = 0;
+    } else if (prevLongRoadAttacker !== longRoadNow.attacker) {
+        newLongRoadAttacker = longRoadNow.attacker;
+        newLongRoadStreak = 0;
+    } else if (moverColor === longRoadNow.attacker) {
+        newLongRoadAttacker = longRoadNow.attacker;
+        newLongRoadStreak = prevLongRoadStreak + 1;
+    } else {
+        newLongRoadAttacker = longRoadNow.attacker;
+        newLongRoadStreak = prevLongRoadStreak;
+    }
+
     const newPositionKey = getDrawPositionKey(result.pieces, result.turn);
     const newHistory = prevHistory.concat([newPositionKey]);
 
     const drawReason = result.winner
         ? null // Партия уже закончилась обычной победой — автоматическую ничью не проверяем поверх неё
-        : checkAutomaticDraw(result.pieces, newKingOnlyStreak, newNoProgressStreak, newHistory, newPositionKey);
+        : checkAutomaticDraw(result.pieces, newKingOnlyStreak, newNoProgressStreak, newHistory, newPositionKey, newLongRoadStreak);
 
     return {
         kingOnlyStreak: newKingOnlyStreak,
         noProgressStreak: newNoProgressStreak,
         positionHistory: newHistory,
+        longRoadAttacker: newLongRoadAttacker,
+        longRoadStreak: newLongRoadStreak,
         drawReason: drawReason
     };
 }
@@ -2836,6 +2944,8 @@ function forceResyncFromServer() {
             kingOnlyStreak: room.kingOnlyStreak || 0,
             noProgressStreak: room.noProgressStreak || 0,
             positionHistory: room.positionHistory || [],
+            longRoadAttacker: room.longRoadAttacker || null,
+            longRoadStreak: room.longRoadStreak || 0,
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -2909,6 +3019,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.kingOnlyStreak = drawState.kingOnlyStreak;
         currentState.noProgressStreak = drawState.noProgressStreak;
         currentState.positionHistory = drawState.positionHistory;
+        currentState.longRoadAttacker = drawState.longRoadAttacker;
+        currentState.longRoadStreak = drawState.longRoadStreak;
 
         if (optimisticResult.mustContinueFrom === null && currentState.timeControlSeconds > 0) {
             currentState.turnStartedAt = Date.now();
@@ -2948,7 +3060,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                     pendingRemovals: room.pendingRemovals || null,
                     kingOnlyStreak: room.kingOnlyStreak || 0,
                     noProgressStreak: room.noProgressStreak || 0,
-                    positionHistory: room.positionHistory || []
+                    positionHistory: room.positionHistory || [],
+                    longRoadAttacker: room.longRoadAttacker || null,
+                    longRoadStreak: room.longRoadStreak || 0,
                 };
 
                 const movingPieceWasKing = !!(room.pieces[fromRow + "_" + fromCol] && room.pieces[fromRow + "_" + fromCol].king);
@@ -2974,6 +3088,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 newRoom.kingOnlyStreak = drawState.kingOnlyStreak;
                 newRoom.noProgressStreak = drawState.noProgressStreak;
                 newRoom.positionHistory = drawState.positionHistory;
+                newRoom.longRoadAttacker = drawState.longRoadAttacker;
+                newRoom.longRoadStreak = drawState.longRoadStreak;
                 
                 if (result.mustContinueFrom === null) newRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
                 
@@ -3015,6 +3131,8 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             currentState.kingOnlyStreak = drawState.kingOnlyStreak;
             currentState.noProgressStreak = drawState.noProgressStreak;
             currentState.positionHistory = drawState.positionHistory;
+            currentState.longRoadAttacker = drawState.longRoadAttacker;
+            currentState.longRoadStreak = drawState.longRoadStreak;
             if (result.winner) {
                 currentState.winner = result.winner;
                 currentState.winReason = result.winReason;
@@ -3104,6 +3222,8 @@ function startOnlineGame() {
             kingOnlyStreak: room.kingOnlyStreak || 0,
             noProgressStreak: room.noProgressStreak || 0,
             positionHistory: room.positionHistory || [],
+            longRoadAttacker: room.longRoadAttacker || null,
+            longRoadStreak: room.longRoadStreak || 0,
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -3207,6 +3327,8 @@ function serializeOwnerBotState(state) {
         kingOnlyStreak: orNull(state.kingOnlyStreak) || 0,
         noProgressStreak: orNull(state.noProgressStreak) || 0,
         positionHistory: orNull(state.positionHistory) || [],
+        longRoadAttacker: orNull(state.longRoadAttacker),
+        longRoadStreak: orNull(state.longRoadStreak) || 0,
         winner: orNull(state.winner),
         winReason: orNull(state.winReason),
         players: orNull(state.players) || {}
@@ -3231,6 +3353,8 @@ function deserializeOwnerBotState(raw) {
         kingOnlyStreak: num(raw.kingOnlyStreak),
         noProgressStreak: num(raw.noProgressStreak),
         positionHistory: arr(raw.positionHistory),
+        longRoadAttacker: raw.longRoadAttacker || null,
+        longRoadStreak: num(raw.longRoadStreak),
         winner: raw.winner || null,
         winReason: raw.winReason || null,
         players: raw.players || {}
@@ -3336,7 +3460,9 @@ function applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol) {
         const newGameState = Object.assign({}, gameState, result, {
             kingOnlyStreak: drawState.kingOnlyStreak,
             noProgressStreak: drawState.noProgressStreak,
-            positionHistory: drawState.positionHistory
+            positionHistory: drawState.positionHistory,
+            longRoadAttacker: drawState.longRoadAttacker,
+            longRoadStreak: drawState.longRoadStreak,
         });
         if (!result.winner && drawState.drawReason) {
             newGameState.winner = "draw";
@@ -3439,7 +3565,9 @@ function commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, best
         const newGameState = Object.assign({}, gameState, result, {
             kingOnlyStreak: drawState.kingOnlyStreak,
             noProgressStreak: drawState.noProgressStreak,
-            positionHistory: drawState.positionHistory
+            positionHistory: drawState.positionHistory,
+            longRoadAttacker: drawState.longRoadAttacker,
+            longRoadStreak: drawState.longRoadStreak,
         });
         if (!result.winner && drawState.drawReason) {
             newGameState.winner = "draw";
@@ -4115,6 +4243,8 @@ function buildFreshBotGameState() {
         kingOnlyStreak: 0,
         noProgressStreak: 0,
         positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+        longRoadAttacker: null,
+        longRoadStreak: 0,
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -4199,6 +4329,8 @@ function startOfflineGame() {
         kingOnlyStreak: 0,
         noProgressStreak: 0,
         positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+        longRoadAttacker: null,
+        longRoadStreak: 0,
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -4358,6 +4490,8 @@ function createOnlineRoom() {
         kingOnlyStreak: 0,
         noProgressStreak: 0,
         positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+        longRoadAttacker: null,
+        longRoadStreak: 0,
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -4449,6 +4583,8 @@ function createRoomAndShowWaiting() {
         kingOnlyStreak: 0,
         noProgressStreak: 0,
         positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+        longRoadAttacker: null,
+        longRoadStreak: 0,
         lastMove: null,
         lastMovePath: null,
         lastCapturedSquares: null,
@@ -4853,6 +4989,8 @@ function performRematchReset() {
     updates["kingOnlyStreak"] = 0;
     updates["noProgressStreak"] = 0;
     updates["positionHistory"] = [getDrawPositionKey(createInitialPieces(), "light")];
+    updates["longRoadAttacker"] = null;
+    updates["longRoadStreak"] = 0;
 
     updates["moveType"] = null;
     updates["lastMove"] = null;
@@ -5700,6 +5838,8 @@ function addToMatchmakingQueue() {
             kingOnlyStreak: 0,
             noProgressStreak: 0,
             positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+            longRoadAttacker: null,
+            longRoadStreak: 0,
             lastMove: null,
             lastMovePath: null,
             lastCapturedSquares: null,
