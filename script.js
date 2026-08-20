@@ -691,6 +691,9 @@ const translations = {
         stats_top_coins: "🪙 Топ по заработанным монетам",
         modal_offline_opp: "Соперник офлайн",
         modal_bot_difficulty: "Выберите сложность",
+        modal_continue_or_new: "У вас уже есть партия с ботом",
+        btn_continue_existing: "▶️ Продолжить текущую",
+        btn_start_new_session: "🆕 Начать новую",
         btn_difficulty_easy: "🌱 Лёгкий",
         btn_difficulty_medium: "⚖️ Средний",
         btn_difficulty_hard: "🔥 Сложный",
@@ -796,6 +799,9 @@ const translations = {
         stats_top_coins: "🪙 Top by coins earned",
         modal_offline_opp: "Opponent offline",
         modal_bot_difficulty: "Choose difficulty",
+        modal_continue_or_new: "You already have a game with the bot",
+        btn_continue_existing: "▶️ Continue current",
+        btn_start_new_session: "🆕 Start new",
         btn_difficulty_easy: "🌱 Easy",
         btn_difficulty_medium: "⚖️ Medium",
         btn_difficulty_hard: "🔥 Hard",
@@ -901,6 +907,9 @@ const translations = {
         stats_top_coins: "🪙 Migliori per monete guadagnate",
         modal_offline_opp: "Avversario offline",
         modal_bot_difficulty: "Scegli la difficoltà",
+        modal_continue_or_new: "Hai già una partita con il bot",
+        btn_continue_existing: "▶️ Continua quella attuale",
+        btn_start_new_session: "🆕 Inizia una nuova",
         btn_difficulty_easy: "🌱 Facile",
         btn_difficulty_medium: "⚖️ Medio",
         btn_difficulty_hard: "🔥 Difficile",
@@ -1013,6 +1022,10 @@ const btnDifficultyEasy = document.getElementById("btn-difficulty-easy");
 const btnDifficultyMedium = document.getElementById("btn-difficulty-medium");
 const btnDifficultyHard = document.getElementById("btn-difficulty-hard");
 const btnDifficultyBack = document.getElementById("btn-difficulty-back");
+const continueOrNewModal = document.getElementById("continue-or-new-modal");
+const btnContinueExistingSession = document.getElementById("btn-continue-existing-session");
+const btnStartNewSession = document.getElementById("btn-start-new-session");
+const btnContinueOrNewBack = document.getElementById("btn-continue-or-new-back");
 const offlineOpponentText = document.getElementById("offline-opponent-text");
 const btnOfflinePlayBot = document.getElementById("btn-offline-play-bot");
 const btnOfflineInviteFriend = document.getElementById("btn-offline-invite-friend");
@@ -1099,6 +1112,57 @@ let botSpectateRoomCode = null; // код "зеркальной" комнаты 
 let botSpectateListenerRef = null; // Слушатель зрителей для игры с ботом
 let botSpectatePresenceInterval = null;
 let botMoveTimer = null; // Защита от накопления таймеров хода бота
+
+// ===== CROSS-DEVICE OWNER BOT SESSION =====
+// Уникальный на конкретный запуск Mini App, НЕ сохраняется ни в localStorage,
+// ни где-либо ещё — каждая полная перезагрузка получает новый.
+const botClientInstanceId = (typeof crypto !== "undefined" && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : "inst_" + Date.now() + "_" + Math.random().toString(36).slice(2, 10);
+let ownerSessionAttached = false; // подключены ли мы сейчас к общей botSessions/<uid>
+let ownerSessionHandle = null;    // { ref, listener } — для detach
+let ownerSessionRevision = null;
+let ownerSessionHeartbeatInterval = null; // presence-heartbeat ИМЕННО этого устройства
+const BOT_MOVE_LOCK_TTL_MS = 12000;
+const STATS_RECENT_MATCH_IDS_LIMIT = 10;
+
+// --- Единый временной базис против рассинхронизации локальных часов PC/Phone.
+// ServerValue.TIMESTAMP нельзя сравнивать внутри transaction (это просто
+// сентинел, разрешаемый сервером только В МОМЕНТ записи, не число для
+// сравнения "на лету"). Стандартный путь RTDB — .info/serverTimeOffset:
+// Firebase сам поддерживает и обновляет разницу между часами клиента и
+// сервера. getEstimatedServerNow() — то, что нужно использовать ВМЕСТО
+// голого Date.now() везде, где сравнивается expiresAt между устройствами. ---
+let cachedServerTimeOffsetMs = 0;
+// --- Startup race: Mini App могла только что загрузиться, и Firebase ещё
+// не доставил ПЕРВОЕ значение .info/serverTimeOffset (cachedServerTimeOffsetMs
+// пока честный 0) — если бот попытается взять lock именно в этот момент,
+// getEstimatedServerNow() выродится в голый Date.now(), и clock-skew риск
+// вернётся именно для самого первого lock.
+//
+// НЕТ fallback по таймауту: захват botMoveLock ждёт НАСТОЯЩЕЙ первой
+// доставки offset, сколько бы это ни заняло. Это осознанно безопасно —
+// если Firebase/сеть недоступны, сама lock-транзакция ВСЁ РАВНО не
+// пройдёт, так что деградация на локальные часы здесь ничего не выиграла
+// бы, только вернула бы clock-skew риск ради иллюзии прогресса. ---
+let serverTimeOffsetReady = false;
+let resolveServerTimeOffsetReady;
+const serverTimeOffsetReadyPromise = new Promise(function (resolve) { resolveServerTimeOffsetReady = resolve; });
+database.ref(".info/serverTimeOffset").on("value", function (snapshot) {
+    cachedServerTimeOffsetMs = snapshot.val() || 0;
+    if (!serverTimeOffsetReady) {
+        serverTimeOffsetReady = true;
+        resolveServerTimeOffsetReady();
+    }
+});
+function getEstimatedServerNow() {
+    return Date.now() + cachedServerTimeOffsetMs;
+}
+function waitForServerTimeOffsetReady() {
+    if (serverTimeOffsetReady) return Promise.resolve();
+    return serverTimeOffsetReadyPromise;
+}
+
 let isSpectator = false;
 // Используем chat_instance для определения группы при открытии по прямой ссылке
 const GROUP_ID = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.chat_instance != null) ? Telegram.WebApp.initDataUnsafe.chat_instance.toString() : "private_chat";
@@ -2324,7 +2388,19 @@ function renderEndGameModal() {
             playWinSound();
             endGameShownForRoom = marker;
         }
-        if (statsRecordedForRoom !== marker) {
+        if (isBotGame) {
+            // Bot-ветка: НЕ ставим statsRecordedForRoom заранее — только
+            // после того, как Firebase реально подтвердил результат (успех
+            // ИЛИ committed:false из-за уже засчитанного matchId — оба это
+            // легитимное "готово", в отличие от network reject). Пока запрос
+            // ещё летит — statsInFlightForRoom не даёт запустить второй
+            // параллельный запрос при повторном renderEndGameModal().
+            if (statsRecordedForRoom !== currentBotMatchId && statsInFlightForRoom !== currentBotMatchId) {
+                statsInFlightForRoom = currentBotMatchId;
+                recordGameResult();
+            }
+        } else if (statsRecordedForRoom !== marker) {
+            // Online-ветка — поведение НЕ меняется.
             statsRecordedForRoom = marker;
             recordGameResult();
         }
@@ -2336,6 +2412,7 @@ function renderEndGameModal() {
 }
 
 let statsRecordedForRoom = null;
+let statsInFlightForRoom = null; // только для bot-ветки — см. recordGameResult()
 
 function recordGameResult() {
     if (isSpectator) return; // Зритель никогда не участвует в статистике
@@ -2358,22 +2435,25 @@ function recordGameResult() {
         // единой правки в коде чтения. Старые накопленные результаты (до
         // появления уровней) остаются как есть — честно разделить их между
         // Medium/Hard задним числом невозможно, и мы не пытаемся это сделать.
+        // Идемпотентность от ЗАДВОЕНИЯ обеспечивает САМА транзакция
+        // (recentMatchIds). Но statsRecordedForRoom/statsInFlightForRoom
+        // здесь — не просто UI-оптимизация: раньше statsRecordedForRoom
+        // ставился ДО результата записи, и network-сбой без второго
+        // устройства означал НАВСЕГДА потерянный +1 (recentMatchIds спасает
+        // от ЗАДВОЕНИЯ, но не от ПОТЕРИ). Теперь statsRecordedForRoom
+        // ставится только по факту подтверждённого исхода (успех ИЛИ
+        // committed:false из-за уже известного matchId — оба легитимны),
+        // а reject оставляет возможность повтора на следующем render.
         const level = (botDifficulty === "medium") ? "medium" : "hard";
-        database.ref(statsPath + "/" + myTelegramId).transaction(function (current) {
-            const result = current || { wins: 0, losses: 0, name: myTelegramName };
-            result.name = myTelegramName;
-            if (!result.byLevel) result.byLevel = {};
-            if (!result.byLevel[level]) result.byLevel[level] = { wins: 0, losses: 0 };
-            if (didIWin) {
-                result.wins = (result.wins || 0) + 1;
-                result.byLevel[level].wins = (result.byLevel[level].wins || 0) + 1;
-            } else {
-                result.losses = (result.losses || 0) + 1;
-                result.byLevel[level].losses = (result.byLevel[level].losses || 0) + 1;
-            }
-            return result;
-        }).catch(function(error) {
+        const thisMatchId = currentBotMatchId;
+        recordBotGameResultIdempotent(thisMatchId, didIWin, level).then(function () {
+            statsRecordedForRoom = thisMatchId;
+            statsInFlightForRoom = null;
+        }).catch(function (error) {
             console.error("Stats write failed:", error);
+            // НЕ помечаем как записанную — statsInFlightForRoom освобождаем,
+            // чтобы следующий renderEndGameModal() смог повторить попытку.
+            statsInFlightForRoom = null;
         });
         return;
     }
@@ -2434,7 +2514,11 @@ function handleClick(row, col) {
     }
 
     if (selectedFrom) {
-        performMove(selectedFrom.row, selectedFrom.col, row, col);
+        if (isBotGame && ownerSessionAttached) {
+            attemptOwnerHumanMove(selectedFrom.row, selectedFrom.col, row, col);
+        } else {
+            performMove(selectedFrom.row, selectedFrom.col, row, col);
+        }
     }
 }
 
@@ -2798,6 +2882,566 @@ function startOnlineGame() {
     });
 }
 
+// ===== CROSS-DEVICE OWNER BOT SESSION (botSessions/<telegramId>) =====
+// Общая для нескольких устройств одного Telegram ID сессия bot-игры.
+// Firebase — source of truth: локальный currentState обновляется ТОЛЬКО
+// через applyRemoteOwnerState() (слушатель), никогда не мутируется напрямую
+// в обход transaction, пока ownerSessionAttached === true.
+
+// --- Сериализация: RTDB не различает "пустой массив" и "отсутствует" —
+// при обратном чтении пустой массив часто становится null. deserialize
+// обязан явно превращать null обратно в [] для всех массивных полей. ---
+function serializeOwnerBotState(state) {
+    function orNull(v) { return (v === undefined) ? null : v; }
+    return {
+        pieces: orNull(state.pieces) || {},
+        turn: orNull(state.turn),
+        mustContinueFrom: orNull(state.mustContinueFrom),
+        pendingRemovals: orNull(state.pendingRemovals) || [],
+        capturedDark: orNull(state.capturedDark) || 0,
+        capturedLight: orNull(state.capturedLight) || 0,
+        moveCount: orNull(state.moveCount) || 0,
+        moveType: orNull(state.moveType),
+        lastMove: orNull(state.lastMove),
+        lastMovePath: orNull(state.lastMovePath) || [],
+        lastCapturedSquares: orNull(state.lastCapturedSquares) || [],
+        kingOnlyStreak: orNull(state.kingOnlyStreak) || 0,
+        noProgressStreak: orNull(state.noProgressStreak) || 0,
+        positionHistory: orNull(state.positionHistory) || [],
+        winner: orNull(state.winner),
+        winReason: orNull(state.winReason),
+        players: orNull(state.players) || {}
+    };
+}
+
+function deserializeOwnerBotState(raw) {
+    function arr(v) { return Array.isArray(v) ? v : []; }
+    function num(v) { return (typeof v === "number") ? v : 0; }
+    return {
+        pieces: raw.pieces || {},
+        turn: raw.turn || "light",
+        mustContinueFrom: raw.mustContinueFrom || null,
+        pendingRemovals: arr(raw.pendingRemovals),
+        capturedDark: num(raw.capturedDark),
+        capturedLight: num(raw.capturedLight),
+        moveCount: num(raw.moveCount),
+        moveType: raw.moveType || null,
+        lastMove: raw.lastMove || null,
+        lastMovePath: arr(raw.lastMovePath),
+        lastCapturedSquares: arr(raw.lastCapturedSquares),
+        kingOnlyStreak: num(raw.kingOnlyStreak),
+        noProgressStreak: num(raw.noProgressStreak),
+        positionHistory: arr(raw.positionHistory),
+        winner: raw.winner || null,
+        winReason: raw.winReason || null,
+        players: raw.players || {}
+    };
+}
+
+// --- Создание новой owner-сессии (первая партия серии или явная замена).
+// ВАЖНО: через transaction, не set() — два устройства могут почти
+// одновременно не увидеть активную сессию и оба попытаться создать свою
+// (с разными matchId/spectateRoomCode). transaction гарантирует, что
+// реально запишется только ОДНА — вторая попытка увидит уже записанную
+// active-сессию и корректно abort'ится вместо слепой перезаписи. ---
+function createOwnerBotSession(chosenDifficulty, initialGameState) {
+    const newBotColor = "dark";
+    const newMyColor = "light";
+    const matchId = "bot_" + myTelegramId + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    const spectCode = generateRoomCode();
+    const botName = "🤖 Компьютер";
+    const humanName = myTelegramName || "Игрок";
+    const stateWithCorrectPlayers = Object.assign({}, initialGameState, {
+        players: newBotColor === "light" ? { light: { name: botName }, dark: { name: humanName } } : { light: { name: humanName }, dark: { name: botName } }
+    });
+    const candidateSession = {
+        status: "active",
+        matchId: matchId,
+        revision: 0,
+        spectateRoomCode: spectCode,
+        botDifficulty: chosenDifficulty,
+        botColor: newBotColor,
+        myColor: newMyColor,
+        createdAt: firebase.database.ServerValue.TIMESTAMP,
+        updatedAt: firebase.database.ServerValue.TIMESTAMP,
+        state: serializeOwnerBotState(stateWithCorrectPlayers),
+        botMoveLock: null
+    };
+
+    return database.ref("botSessions/" + myTelegramId).transaction(function (existing) {
+        // Разрешаем создание, если сейчас пусто ИЛИ прошлая сессия уже
+        // завершена. Отказываем, только если там уже ЖИВАЯ active-сессия —
+        // именно её нельзя перетирать вслепую.
+        if (existing && existing.status === "active") return; // abort — кто-то уже успел
+        return candidateSession;
+    }).then(function (result) {
+        // committed=true: РЕАЛЬНО мы создали (candidateSession записан).
+        // committed=false: кто-то другой уже успел раньше — используем ТО,
+        // что реально в Firebase (result.snapshot.val()), а не свой
+        // локальный candidateSession, который не был записан.
+        return { committed: result.committed, session: result.snapshot.val() };
+    });
+}
+
+// --- Подписка на общую сессию. onUpdate вызывается при каждом новом
+// значении, включая самое первое. ---
+function attachToOwnerBotSession(onUpdate) {
+    const ref = database.ref("botSessions/" + myTelegramId);
+    const listener = ref.on("value", function (snapshot) { onUpdate(snapshot.val()); });
+    return { ref: ref, listener: listener };
+}
+
+function detachOwnerBotSessionListener(handle) {
+    if (handle && handle.ref && handle.listener) handle.ref.off("value", handle.listener);
+}
+
+// --- Применение того, что реально пришло из Firebase, локально. Не пишет
+// обратно, не вызывает triggerBotMove напрямую — решение "мой ли сейчас ход
+// бота" принимает вызывающий код снаружи, глядя на уже применённое
+// состояние (см. onOwnerSessionUpdate). ---
+function applyRemoteOwnerState(session) {
+    if (!session) return;
+    const gameState = deserializeOwnerBotState(session.state);
+    currentState = gameState;
+    botDifficulty = session.botDifficulty;
+    botColor = session.botColor;
+    myColor = session.myColor;
+    currentBotMatchId = session.matchId;
+    ownerSessionRevision = session.revision;
+    botSpectateRoomCode = session.spectateRoomCode;
+}
+
+// --- Human move через shared transaction. Callback ЧИСТ: использует только
+// доказанно чистую attemptMove(), не мутирует ничего снаружи, не делает
+// побочных эффектов — Firebase может вызвать его больше одного раза. ---
+function applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol) {
+    const expectedMatchId = currentBotMatchId;
+    const expectedRevision = ownerSessionRevision;
+    const myColorAtCallTime = myColor;
+
+    return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
+        if (!session) return;
+        if (session.status !== "active") return;
+        if (session.matchId !== expectedMatchId) return;
+        if (session.revision !== expectedRevision) return;
+
+        const gameState = deserializeOwnerBotState(session.state);
+        if (gameState.turn !== myColorAtCallTime) return;
+        if (gameState.winner) return;
+
+        const result = attemptMove(gameState, fromRow, fromCol, toRow, toCol, myColorAtCallTime);
+        if (!result) return;
+
+        const movingPieceWasKing = !!(gameState.pieces[fromRow + "_" + fromCol] && gameState.pieces[fromRow + "_" + fromCol].king);
+        const drawState = computeNextDrawState(gameState, result, movingPieceWasKing);
+        const newGameState = Object.assign({}, gameState, result, {
+            kingOnlyStreak: drawState.kingOnlyStreak,
+            noProgressStreak: drawState.noProgressStreak,
+            positionHistory: drawState.positionHistory
+        });
+        if (!result.winner && drawState.drawReason) {
+            newGameState.winner = "draw";
+            newGameState.winReason = drawState.drawReason;
+        }
+
+        const newSession = Object.assign({}, session);
+        newSession.state = serializeOwnerBotState(newGameState);
+        newSession.revision = session.revision + 1;
+        newSession.status = newGameState.winner ? "finished" : "active";
+        newSession.botMoveLock = null;
+        newSession.updatedAt = firebase.database.ServerValue.TIMESTAMP;
+        return newSession;
+    });
+}
+
+// --- Сдача партии в synced-режиме — раньше этого пути не было вообще: сдача
+// молча мутировала только локальный currentState и уходила через старый
+// syncBotStateToFirebase(), полностью в обход общей сессии, так что второе
+// устройство никогда бы не узнало о сдаче. Callback чист — использует
+// только gameState.turn из свежего session, ничего внешнего. ---
+function attemptOwnerSurrender() {
+    const expectedMatchId = currentBotMatchId;
+    const expectedRevision = ownerSessionRevision;
+
+    return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
+        if (!session) return;
+        if (session.status !== "active") return;
+        if (session.matchId !== expectedMatchId) return;
+        if (session.revision !== expectedRevision) return;
+
+        const gameState = deserializeOwnerBotState(session.state);
+        if (gameState.winner) return;
+
+        const newGameState = Object.assign({}, gameState);
+        newGameState.winner = gameState.turn === "light" ? "dark" : "light";
+        newGameState.winReason = "resign";
+
+        const newSession = Object.assign({}, session);
+        newSession.state = serializeOwnerBotState(newGameState);
+        newSession.revision = session.revision + 1;
+        newSession.status = "finished";
+        newSession.botMoveLock = null;
+        newSession.updatedAt = firebase.database.ServerValue.TIMESTAMP;
+        return newSession;
+    });
+}
+
+// --- Bot move: lock через ВСЮ сессию (не только child) — устаревшее
+// локальное представление отсеивается СРАЗУ, не тратя впустую Hard-поиск. ---
+function tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotColor) {
+    return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
+        if (!session) return;
+        if (session.status !== "active") return;
+        if (session.matchId !== expectedMatchId) return;
+        if (session.revision !== expectedRevision) return;
+
+        const gameState = deserializeOwnerBotState(session.state);
+        if (gameState.turn !== expectedBotColor) return;
+        if (gameState.winner) return;
+
+        const now = getEstimatedServerNow();
+        if (session.botMoveLock && session.botMoveLock.expiresAt > now) return;
+
+        const newSession = Object.assign({}, session);
+        newSession.botMoveLock = { holder: botClientInstanceId, matchId: expectedMatchId, revision: expectedRevision, expiresAt: now + BOT_MOVE_LOCK_TTL_MS };
+        return newSession;
+    }).then(function (result) {
+        if (!result.committed) return { acquired: false };
+        const session = result.snapshot.val();
+        if (!session.botMoveLock || session.botMoveLock.holder !== botClientInstanceId) return { acquired: false };
+        return { acquired: true, sessionSnapshot: session };
+    });
+}
+
+function commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, bestMove) {
+    return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
+        if (!session) return;
+        if (session.matchId !== expectedMatchId) return;
+        if (session.revision !== expectedRevision) return;
+        if (!session.botMoveLock || session.botMoveLock.holder !== botClientInstanceId) return;
+        if (session.botMoveLock.revision !== expectedRevision) return;
+        // Технически на данный момент недостижимо иначе (rematch/replace —
+        // единственные операции, меняющие session.matchId, и обе тут же
+        // обнуляют botMoveLock в null) — session.matchId уже проверен выше,
+        // и lock не может пережить смену matchId. Проверяем явно как
+        // самодокументирующийся инвариант и защиту от будущих изменений,
+        // которые могли бы случайно нарушить это соответствие.
+        if (session.botMoveLock.matchId !== expectedMatchId) return;
+
+        const gameState = deserializeOwnerBotState(session.state);
+        if (gameState.turn !== expectedBotColor) return;
+        if (gameState.winner) return;
+
+        const result = attemptMove(gameState, bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col, expectedBotColor);
+        if (!result) return;
+
+        const movingPieceWasKing = !!(gameState.pieces[bestMove.from.row + "_" + bestMove.from.col] && gameState.pieces[bestMove.from.row + "_" + bestMove.from.col].king);
+        const drawState = computeNextDrawState(gameState, result, movingPieceWasKing);
+        const newGameState = Object.assign({}, gameState, result, {
+            kingOnlyStreak: drawState.kingOnlyStreak,
+            noProgressStreak: drawState.noProgressStreak,
+            positionHistory: drawState.positionHistory
+        });
+        if (!result.winner && drawState.drawReason) {
+            newGameState.winner = "draw";
+            newGameState.winReason = drawState.drawReason;
+        }
+
+        const newSession = Object.assign({}, session);
+        newSession.state = serializeOwnerBotState(newGameState);
+        newSession.revision = session.revision + 1;
+        newSession.status = newGameState.winner ? "finished" : "active";
+        newSession.botMoveLock = null;
+        newSession.updatedAt = firebase.database.ServerValue.TIMESTAMP;
+        return newSession;
+    });
+}
+
+// --- Rematch: atomic, цвет вычисляется из ПРЕДЫДУЩЕЙ общей session, не из
+// localStorage — второе устройство могло иметь другую локальную историю.
+// matchId генерируется ОДИН РАЗ здесь, а не внутри transaction callback —
+// Firebase может вызвать callback повторно при конфликте, и Math.random()
+// внутри дал бы РАЗНЫЕ значения на разных попытках; при optimistic-apply
+// клиента это могло бы на мгновение "просветить" наружу matchId, который
+// затем не станет финальным committed значением. botColor/players НАМЕРЕННО
+// остаются внутри callback — они честно зависят от свежего session (какой
+// цвет был у ПРЕДЫДУЩЕЙ партии), это чистая функция входа, не источник
+// новой недетерминированности. ---
+function applyRematchViaSession(expectedOldMatchId, freshInitialGameState) {
+    const newMatchId = "bot_" + myTelegramId + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
+        if (!session) return;
+        if (session.status !== "finished") return;
+        if (expectedOldMatchId && session.matchId !== expectedOldMatchId) return;
+
+        const newBotColor = session.botColor === "light" ? "dark" : "light";
+        const newMyColor = newBotColor === "light" ? "dark" : "light";
+        const botName = "🤖 Компьютер";
+        const humanName = myTelegramName || "Игрок";
+        const stateWithCorrectPlayers = Object.assign({}, freshInitialGameState, {
+            players: newBotColor === "light" ? { light: { name: botName }, dark: { name: humanName } } : { light: { name: humanName }, dark: { name: botName } }
+        });
+
+        return {
+            status: "active",
+            matchId: newMatchId,
+            revision: 0,
+            spectateRoomCode: session.spectateRoomCode,
+            botDifficulty: session.botDifficulty,
+            botColor: newBotColor,
+            myColor: newMyColor,
+            createdAt: session.createdAt,
+            updatedAt: firebase.database.ServerValue.TIMESTAMP,
+            state: serializeOwnerBotState(stateWithCorrectPlayers),
+            botMoveLock: null
+        };
+    });
+}
+
+// --- Замена активной сессии новой серией (после подтверждения пользователя).
+// matchId/spectateRoomCode/весь candidateSession строятся ОДИН РАЗ здесь, а
+// не внутри transaction callback — newBotColor для новой серии всегда
+// фиксирован ("dark"), поэтому ничего в candidateSession не должно зависеть
+// от свежего session на каждой попытке; единственное, что действительно
+// нужно читать из session внутри callback — проверка expectedOldMatchIdOrNull.
+// Старый spectateRoomCode здесь НЕ извлекается вообще (раньше это делалось
+// мутацией closure-переменной изнутри callback — Firebase мог вызвать
+// callback повторно и переписать её нечестно) — вызывающий код уже знает
+// старый код заранее, из того же чтения, что дало ему expectedOldMatchIdOrNull. ---
+function replaceOwnerBotSessionWithNew(expectedOldMatchIdOrNull, chosenDifficulty, freshInitialGameState) {
+    const newMatchId = "bot_" + myTelegramId + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    const newSpectateRoomCode = generateRoomCode();
+    const newBotColor = "dark";
+    const newMyColor = "light";
+    const botName = "🤖 Компьютер";
+    const humanName = myTelegramName || "Игрок";
+    const stateWithCorrectPlayers = Object.assign({}, freshInitialGameState, {
+        players: { light: { name: humanName }, dark: { name: botName } } // newBotColor фиксирован "dark"
+    });
+    const candidateSession = {
+        status: "active",
+        matchId: newMatchId,
+        revision: 0,
+        spectateRoomCode: newSpectateRoomCode,
+        botDifficulty: chosenDifficulty,
+        botColor: newBotColor,
+        myColor: newMyColor,
+        createdAt: firebase.database.ServerValue.TIMESTAMP,
+        updatedAt: firebase.database.ServerValue.TIMESTAMP,
+        state: serializeOwnerBotState(stateWithCorrectPlayers),
+        botMoveLock: null
+    };
+
+    return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
+        if (expectedOldMatchIdOrNull && session && session.matchId !== expectedOldMatchIdOrNull) return; // кто-то уже успел раньше
+        return candidateSession;
+    }).then(function (result) {
+        return { committed: result.committed, newSession: result.committed ? result.snapshot.val() : null };
+    });
+}
+
+// --- Статистика Medium/Hard: ограниченный (10) список matchId в ОДНОЙ
+// атомарной транзакции — исключает и двойной +1, и crash-окно потери. ---
+// --- RTDB не гарантирует, что "массив" вернётся именно как плотный JS
+// Array — при определённых обстоятельствах (в частности, sparse-структура)
+// snapshot.val() может дать обычный объект с числовыми строковыми ключами
+// ({"0":"id1","1":"id2"}) вместо ["id1","id2"]. Array.isArray() на такое
+// вернёт false — и наивная проверка "не массив -> считаем пустым" молча
+// потеряла бы уже сохранённые matchId, что привело бы ИМЕННО к тому
+// задвоению, от которого вся эта функция должна защищать. Нормализуем
+// оба представления явно, плюс отфильтровываем нестроковый мусор. ---
+function normalizeRecentMatchIds(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) {
+        return value.filter(function (v) { return typeof v === "string"; });
+    }
+    if (typeof value === "object") {
+        return Object.keys(value)
+            .sort(function (a, b) { return Number(a) - Number(b); })
+            .map(function (k) { return value[k]; })
+            .filter(function (v) { return typeof v === "string"; });
+    }
+    return [];
+}
+
+function recordBotGameResultIdempotent(matchId, didIWin, level) {
+    return database.ref("statsBot/" + myTelegramId).transaction(function (current) {
+        const result = current || { wins: 0, losses: 0, name: myTelegramName, recentMatchIds: [] };
+        result.name = myTelegramName;
+        const recent = normalizeRecentMatchIds(result.recentMatchIds);
+        if (recent.indexOf(matchId) !== -1) return; // уже засчитано
+
+        if (!result.byLevel) result.byLevel = {};
+        if (!result.byLevel[level]) result.byLevel[level] = { wins: 0, losses: 0 };
+        if (didIWin) {
+            result.wins = (result.wins || 0) + 1;
+            result.byLevel[level].wins = (result.byLevel[level].wins || 0) + 1;
+        } else {
+            result.losses = (result.losses || 0) + 1;
+            result.byLevel[level].losses = (result.byLevel[level].losses || 0) + 1;
+        }
+        const newRecent = recent.concat([matchId]);
+        while (newRecent.length > STATS_RECENT_MATCH_IDS_LIMIT) newRecent.shift();
+        result.recentMatchIds = newRecent;
+        return result;
+    });
+}
+
+// --- "Кто играет": определить, что комната — это МОЯ собственная bot-игра,
+// а не чужая (для которой поведение зрителя остаётся прежним). ---
+function isMyOwnBotGameRoom(room) {
+    if (!room || !room.players) return false;
+    const lightP = room.players.light;
+    const darkP = room.players.dark;
+    const botSlot = (lightP && lightP.id === "bot") ? lightP : ((darkP && darkP.id === "bot") ? darkP : null);
+    if (!botSlot) return false;
+    const humanSlot = (lightP && lightP.id !== "bot") ? lightP : darkP;
+    return !!(humanSlot && humanSlot.id === myTelegramId);
+}
+
+// --- Единственная точка, пишущая/обновляющая публичную spectate room из
+// committed owner state. Вызывается тем устройством, чья owner-транзакция
+// только что реально закоммитилась — оно уже держит свежий snapshot.
+//
+// КРИТИЧНО: реальные Firebase Rules для rooms/$room требуют при ЛЮБОЙ
+// записи (когда newData.exists()) обязательные pieces/players/turn/status,
+// players/light — id+name. Update() на пустую комнату БЕЗ players был бы
+// отклонён Rules — именно поэтому players пишется здесь ВСЕГДА, на каждый
+// вызов, не только при первом создании. Это же попутно решает обновление
+// цветов после реванша: players пересчитывается из АКТУАЛЬНОГО
+// committedSession.botColor на каждый вызов, а не кешируется один раз.
+//
+// НЕ ставим onDisconnect().remove() — уже установлено ранее, что это
+// небезопасно при двух owner-устройствах (чужой поздний disconnect может
+// стереть чужой, более новый lock/комнату). ---
+function mirrorCommittedStateToSpectateRoom(spectateCode, committedSession) {
+    if (!spectateCode || !committedSession) return Promise.resolve();
+    const gameState = deserializeOwnerBotState(committedSession.state);
+    const botPlayer = { id: "bot", name: "🤖 Компьютер" };
+    const humanPlayer = { id: myTelegramId, name: myTelegramName || "Игрок" };
+    const playersObj = committedSession.botColor === "light"
+        ? { light: botPlayer, dark: humanPlayer }
+        : { light: humanPlayer, dark: botPlayer };
+    const now = firebase.database.ServerValue.TIMESTAMP;
+
+    return database.ref("rooms/" + spectateCode).update({
+        pieces: gameState.pieces,
+        turn: gameState.turn,
+        mustContinueFrom: gameState.mustContinueFrom,
+        pendingRemovals: gameState.pendingRemovals,
+        capturedDark: gameState.capturedDark,
+        capturedLight: gameState.capturedLight,
+        moveCount: gameState.moveCount,
+        moveType: gameState.moveType,
+        lastMove: gameState.lastMove,
+        lastMovePath: gameState.lastMovePath,
+        lastCapturedSquares: gameState.lastCapturedSquares,
+        winner: gameState.winner || null,
+        winReason: gameState.winReason || null,
+        status: gameState.winner ? "finished" : "active",
+        players: playersObj,
+        timeControlSeconds: 0,
+        turnStartedAt: now,
+        presence: {
+            light: { online: true, lastSeen: now },
+            dark: { online: true, lastSeen: now }
+        }
+    });
+}
+
+// --- Presence-heartbeat ИМЕННО этого устройства для owner-сессии — не
+// трогает саму сессию/комнату, только поддерживает "я жив" на уже
+// существующей spectate room. Останавливается независимо на каждом
+// устройстве при локальном выходе в меню. ---
+function startOwnerPresenceHeartbeat() {
+    if (ownerSessionHeartbeatInterval) return;
+    ownerSessionHeartbeatInterval = setInterval(function () {
+        if (!botSpectateRoomCode) return;
+        const now = firebase.database.ServerValue.TIMESTAMP;
+        database.ref("rooms/" + botSpectateRoomCode + "/presence").update({
+            light: { online: true, lastSeen: now },
+            dark: { online: true, lastSeen: now }
+        });
+    }, 4000);
+}
+function stopOwnerPresenceHeartbeat() {
+    if (ownerSessionHeartbeatInterval) { clearInterval(ownerSessionHeartbeatInterval); ownerSessionHeartbeatInterval = null; }
+}
+
+// --- Локальный выход из owner-сессии ("В меню") — НЕ трогает Firebase
+// вообще: не удаляет сессию, не удаляет публичную комнату. Другое
+// устройство (если открыто) продолжает как ни в чём не бывало. ---
+function detachFromOwnerBotSessionLocally() {
+    detachOwnerBotSessionListener(ownerSessionHandle);
+    ownerSessionHandle = null;
+    ownerSessionAttached = false;
+    stopOwnerPresenceHeartbeat();
+    if (botMoveTimer) { clearTimeout(botMoveTimer); botMoveTimer = null; }
+}
+
+// --- Единая точка обработки любого обновления общей сессии — и от своего
+// же успешного commit, и от действий другого устройства. Отличать их не
+// нужно: revision однозначно определяет, действительно ли что-то новое. ---
+let lastRenderedOwnerRevision = null;
+function onOwnerSessionUpdate(session) {
+    if (!session) return;
+    const isFirstDeliverySinceAttach = (lastRenderedOwnerRevision === null);
+
+    applyRemoteOwnerState(session);
+
+    if (!isFirstDeliverySinceAttach && session.revision !== lastRenderedOwnerRevision) {
+        playSoundForMoveType(currentState.moveType, currentState.moveType === "king");
+    }
+    lastRenderedOwnerRevision = session.revision;
+
+    renderBoard(); // renderBoard() сама планирует triggerBotMove(), если сейчас ход бота
+}
+
+// --- Подключение к своей owner-сессии — используется и при обычном старте,
+// и при attach через "Кто играет" со второго устройства. ---
+function attachOwnerBotGame() {
+    isBotGame = true;
+    isOnlineGame = false;
+    isSpectator = false;
+    ownerSessionAttached = true;
+    lastRenderedOwnerRevision = null;
+    showScreen(gameScreen);
+    if (ownerSessionHandle) detachOwnerBotSessionListener(ownerSessionHandle);
+    ownerSessionHandle = attachToOwnerBotSession(onOwnerSessionUpdate);
+    startOwnerPresenceHeartbeat();
+}
+
+// --- Human move в synced-режиме: НЕ мутирует currentState локально —
+// Firebase единственный источник истины, собственный listener доставит
+// подтверждённое состояние (или ничего не изменит при abort). ---
+function attemptOwnerHumanMove(fromRow, fromCol, toRow, toCol) {
+    applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol).then(function (result) {
+        if (result.committed) {
+            // selectedFrom — чисто локальный UI-концепт, Firebase о нём не
+            // знает и не обязан синхронизировать. Сбрасываем СРАЗУ после
+            // успешного commit (не внутри transaction — там это было бы
+            // побочным эффектом чистого callback'а), той же логикой, что и
+            // старый performMove(): либо null, либо новая клетка, если
+            // цепочка взятия ещё не завершена.
+            const newGameState = deserializeOwnerBotState(result.snapshot.val().state);
+            const oldSel = selectedFrom;
+            selectedFrom = newGameState.mustContinueFrom
+                ? { row: newGameState.mustContinueFrom.row, col: newGameState.mustContinueFrom.col }
+                : null;
+            updateSelectionDom(oldSel, selectedFrom);
+            // Именно spectateRoomCode ИЗ committed snapshot, не глобальный
+            // botSpectateRoomCode — между commit'ом и этим callback'ом
+            // глобал мог уже относиться к другой/новой сессии (реванш,
+            // замена серии), а эта запись обязана попасть в комнату ИМЕННО
+            // той партии, которая только что реально закоммитилась.
+            mirrorCommittedStateToSpectateRoom(result.snapshot.val().spectateRoomCode, result.snapshot.val());
+        }
+        // Если abort — ничего не делаем: локальный currentState/selectedFrom
+        // не менялись, listener (если что-то реально изменилось у другого
+        // устройства) сам доставит актуальное состояние.
+    });
+}
+
 // ===== ЗЕРКАЛО ИГРЫ С БОТОМ (чтобы её было видно в "Играть онлайн") =====
 
 function startBotSpectateRoom() {
@@ -2922,30 +3566,189 @@ function getMaxDepthForDifficulty(difficulty) {
 // партия стартует только после выбора одной из трёх кнопок; ничего не
 // сохраняется между вызовами — botDifficulty выставляется заново каждый раз.
 function promptBotDifficultyThenStart() {
-    botDifficultyModal.classList.remove("hidden");
+    // Перед показом выбора уровня — проверяем, нет ли уже АКТИВНОЙ общей
+    // сессии (например, партия начата на другом устройстве). Молча
+    // уничтожать её нельзя — предлагаем явный выбор.
+    if (!myTelegramId) { botDifficultyModal.classList.remove("hidden"); return; }
+    database.ref("botSessions/" + myTelegramId).once("value").then(function (snapshot) {
+        const existing = snapshot.val();
+        if (existing && existing.status === "active") {
+            pendingExistingSessionForResume = existing;
+            continueOrNewModal.classList.remove("hidden");
+        } else {
+            // Сессии нет вообще, либо она уже FINISHED — пойдём через
+            // createOwnerBotSession() напрямую. Но если это именно
+            // FINISHED (не null), у неё есть spectateRoomCode, которую
+            // showGroupLobby() НИКОГДА не удалит сама (lazy-очистка стоит
+            // только на status==="active" — проверено по коду, не
+            // предположение) — запоминаем заранее, чтобы аккуратно
+            // подчистить ПОСЛЕ успешного создания новой сессии.
+            pendingOldSpectateCodeForCleanup = (existing && existing.spectateRoomCode) ? existing.spectateRoomCode : null;
+            botDifficultyModal.classList.remove("hidden");
+        }
+    }).catch(function () {
+        botDifficultyModal.classList.remove("hidden"); // офлайн/ошибка — не блокируем игру
+    });
 }
+
+let pendingOldSpectateCodeForCleanup = null;
+
+let pendingExistingSessionForResume = null;
+let pendingReplaceExistingSession = null;
+
+btnContinueExistingSession.addEventListener("click", function () {
+    continueOrNewModal.classList.add("hidden");
+    const existing = pendingExistingSessionForResume;
+    pendingExistingSessionForResume = null;
+    if (!existing) return;
+    attachOwnerBotGame(); // сама выставит isBotGame/isOnlineGame=false/showScreen(gameScreen)
+});
+
+btnStartNewSession.addEventListener("click", function () {
+    continueOrNewModal.classList.add("hidden");
+    pendingReplaceExistingSession = pendingExistingSessionForResume;
+    pendingExistingSessionForResume = null;
+    botDifficultyModal.classList.remove("hidden");
+});
+
+btnContinueOrNewBack.addEventListener("click", function () {
+    continueOrNewModal.classList.add("hidden");
+    pendingExistingSessionForResume = null;
+    showScreen(menuScreen);
+    loadActiveRooms();
+});
 
 btnDifficultyEasy.addEventListener("click", function () {
     botDifficultyModal.classList.add("hidden");
-    botDifficulty = "easy";
-    startOfflineGame();
+    startOwnerBotGameWithDifficulty("easy");
 });
 btnDifficultyMedium.addEventListener("click", function () {
     botDifficultyModal.classList.add("hidden");
-    botDifficulty = "medium";
-    startOfflineGame();
+    startOwnerBotGameWithDifficulty("medium");
 });
 btnDifficultyHard.addEventListener("click", function () {
     botDifficultyModal.classList.add("hidden");
-    botDifficulty = "hard";
-    startOfflineGame();
+    startOwnerBotGameWithDifficulty("hard");
 });
 btnDifficultyBack.addEventListener("click", function () {
     botDifficultyModal.classList.add("hidden");
     isBotGame = false;
+    // Отменённый flow не должен переживать себя: если пользователь дошёл
+    // сюда через "Начать новую" (pendingReplaceExistingSession уже
+    // выставлен) и передумал — без этой очистки устаревшее значение могло
+    // бы неожиданно повлиять на СОВЕРШЕННО ДРУГОЙ, более поздний запуск
+    // startOwnerBotGameWithDifficulty(), заставив его ошибочно пойти по
+    // ветке "замена", а не "создание с чистого места".
+    pendingReplaceExistingSession = null;
+    pendingExistingSessionForResume = null;
+    pendingOldSpectateCodeForCleanup = null;
     showScreen(menuScreen);
     loadActiveRooms();
 });
+
+// --- Единая точка запуска новой bot-серии (и с чистого места, и как явная
+// замена уже существующей активной сессии после подтверждения). ---
+function startOwnerBotGameWithDifficulty(chosenDifficulty) {
+    isOnlineGame = false;
+    isSpectator = false;
+    isBotGame = true;
+    showScreen(gameScreen);
+
+    const freshState = buildFreshBotGameState();
+
+    if (pendingReplaceExistingSession) {
+        const oldMatchId = pendingReplaceExistingSession.matchId;
+        const oldSpectateCode = pendingReplaceExistingSession.spectateRoomCode;
+        pendingReplaceExistingSession = null;
+        replaceOwnerBotSessionWithNew(oldMatchId, chosenDifficulty, freshState).then(function (result) {
+            if (!result.committed) {
+                // Кто-то уже успел раньше (например, второе устройство тоже
+                // нажало "Начать новую" почти одновременно) — не создаём
+                // вторую, но и не оставляем пользователя ни с чем: тот, кто
+                // реально выиграл гонку, уже что-то создал — подключаемся к
+                // ЭТОЙ актуальной сессии как owner, а не показываем ошибку.
+                attachOwnerBotGame();
+                return;
+            }
+            // Старую публичную комнату удаляем ТОЛЬКО после успешной замены, не до неё.
+            if (oldSpectateCode && oldSpectateCode !== result.newSession.spectateRoomCode) {
+                database.ref("rooms/" + oldSpectateCode).remove().catch(function () {
+                    // Не критично: осиротевшая комната лениво подчистится
+                    // существующим stale-room механизмом showGroupLobby()
+                    // при следующем открытии "Кто играет" кем угодно —
+                    // не блокируем и не откатываем уже успешную замену сессии из-за этого.
+                });
+            }
+            // Публичную комнату для НОВОЙ серии создаём СРАЗУ, до первого
+            // хода — иначе "Кто играет" не увидит партию, пока кто-то не
+            // сходит (а по реальным Rules пустая комната без players вообще
+            // не прошла бы первую запись через move-triggered mirror).
+            mirrorCommittedStateToSpectateRoom(result.newSession.spectateRoomCode, result.newSession);
+            attachOwnerBotGame();
+        }).catch(function () {
+            // Настоящая ошибка Firebase (не abort, а, например, сеть) —
+            // не оставляем пользователя молча зависшим на gameScreen.
+            // Явно сбрасываем isBotGame — тот же паттерн, что уже принят в
+            // проекте для аналогичных error-путей (см. join-room/matchmaking).
+            isBotGame = false;
+            showInfoModal(t("err_join_failed"), false);
+        });
+    } else {
+        const oldFinishedSpectateCode = pendingOldSpectateCodeForCleanup;
+        pendingOldSpectateCodeForCleanup = null;
+        createOwnerBotSession(chosenDifficulty, freshState).then(function (result) {
+            // committed=false здесь означает то же самое: кто-то другой
+            // (например, это же устройство, если пользователь дважды
+            // быстро нажал) уже создал активную сессию раньше нас —
+            // attachOwnerBotGame() всё равно корректно подключится к
+            // РЕАЛЬНОЙ (не обязательно "нашей") сессии через listener.
+            if (result.committed && oldFinishedSpectateCode && oldFinishedSpectateCode !== result.session.spectateRoomCode) {
+                // showGroupLobby() lazy-очистка стоит только на
+                // status==="active" (проверено по коду) — finished-комнату
+                // она никогда сама не удалит. Подчищаем здесь, ТОЛЬКО
+                // после успешного создания новой сессии, не раньше.
+                database.ref("rooms/" + oldFinishedSpectateCode).remove().catch(function () {
+                    // Не критично — тот же принцип, что и в replace-ветке.
+                });
+            }
+            if (result.committed) {
+                // Публичную комнату создаём СРАЗУ, до первого хода. Пишем
+                // только если ЭТО устройство реально выиграло гонку
+                // создания — если committed=false, комнату уже создал
+                // победитель гонки своим собственным вызовом, повторять не нужно.
+                mirrorCommittedStateToSpectateRoom(result.session.spectateRoomCode, result.session);
+            }
+            attachOwnerBotGame();
+        }).catch(function () {
+            isBotGame = false;
+            showInfoModal(t("err_join_failed"), false);
+        });
+    }
+}
+
+// --- Начальное состояние партии — та же форма, что и раньше в
+// startOfflineGame(), вынесена отдельно, чтобы переиспользовать и здесь, и
+// в реванше. Ничего в самих правилах/структуре не меняет. ---
+function buildFreshBotGameState() {
+    return {
+        pieces: createInitialPieces(),
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        kingOnlyStreak: 0,
+        noProgressStreak: 0,
+        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+        lastMove: null,
+        lastMovePath: null,
+        lastCapturedSquares: null,
+        moveType: null,
+        winner: null,
+        winReason: null,
+        players: { light: { name: myTelegramName || "Игрок" }, dark: { name: "🤖 Компьютер" } }
+    };
+}
 
 function startOfflineGame() {
     isOnlineGame = false;
@@ -3381,6 +4184,16 @@ btnResignYes.addEventListener("click", function () {
         }).catch(function() {
             showInfoModal(t("err_resign_connection"), false);
         });
+    } else if (isBotGame && ownerSessionAttached) {
+        attemptOwnerSurrender().then(function (result) {
+            if (result.committed) {
+                mirrorCommittedStateToSpectateRoom(result.snapshot.val().spectateRoomCode, result.snapshot.val());
+            } else {
+                showInfoModal(t("err_resign_failed"), false);
+            }
+        }).catch(function () {
+            showInfoModal(t("err_resign_connection"), false);
+        });
     } else {
         currentState.winner = currentState.turn === "light" ? "dark" : "light";
         currentState.winReason = "resign";
@@ -3529,11 +4342,16 @@ btnCloseGame.addEventListener("click", function () {
         cleanupFinishedRoom(); // Это удалит комнату, и соперник/зритель автоматически увидят закрытие
     }
     if (isBotGame) {
-        stopBotSpectateRoom();
-        // Игра с ботом — просто возвращаемся в меню, Mini App НЕ закрываем.
-        // Явный сброс не обязателен для корректности (все точки входа сами
-        // выставляют isBotGame перед использованием), но соответствует уже
-        // существующему паттерну btnBackBotYes — оставляем для консистентности.
+        if (ownerSessionAttached) {
+            // Synced-сессия: НЕ трогаем Firebase вообще — ни саму сессию, ни
+            // публичную spectate-комнату. Другое устройство (если открыто)
+            // продолжает как ни в чём не бывало. Останавливаем только то,
+            // что принадлежит именно этому устройству (listener, heartbeat,
+            // локальный таймер хода бота).
+            detachFromOwnerBotSessionLocally();
+        } else {
+            stopBotSpectateRoom();
+        }
         isBotGame = false;
         showScreen(menuScreen);
         return;
@@ -3558,6 +4376,28 @@ function cleanupFinishedRoom() {
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
+    } else if (isBotGame && ownerSessionAttached) {
+        endGameModal.classList.add("hidden");
+        const oldMatchId = currentBotMatchId;
+        applyRematchViaSession(oldMatchId, buildFreshBotGameState()).then(function (result) {
+            if (result.committed) {
+                // Обновляем публичную room СРАЗУ — players пересчитается с
+                // НОВЫМ botColor (цвет меняется на реванше), не дожидаясь
+                // первого хода новой партии. Тот же spectateRoomCode.
+                mirrorCommittedStateToSpectateRoom(result.snapshot.val().spectateRoomCode, result.snapshot.val());
+            }
+            // committed=false — кто-то другой уже сделал реванш раньше;
+            // его собственный вызов уже обновил комнату, повторять не нужно.
+        }).catch(function () {
+            // Настоящая ошибка Firebase — сообщаем, не оставляем молча на
+            // статичной доске без обратной связи. abort (кто-то другой уже
+            // сделал реванш раньше) сюда не попадает — это committed:false,
+            // не reject; тогда listener просто доставит уже созданную им партию.
+            showInfoModal(t("err_join_failed"), false);
+        });
+        // Ничего больше делать не нужно: и это же устройство, и второе (если
+        // открыто) получат новое состояние через уже подключённый listener —
+        // отдельного локального обновления currentState здесь не требуется.
     } else if (isBotGame) {
         endGameModal.classList.add("hidden");
         startOfflineGame();
@@ -4647,6 +5487,11 @@ function getOpeningBookMove(state, color) {
 function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== botColor || currentState.winner) return;
 
+    if (ownerSessionAttached) {
+        triggerOwnerSyncedBotMove();
+        return;
+    }
+
     // Сначала проверяем дебютную книгу — если применима, используем её ход
     // вместо запуска поиска. Ход из книги проходит через тот же самый
     // performMove(), что и обычный результат findBestMove() — второго,
@@ -4663,6 +5508,59 @@ function triggerBotMove() {
     if (bestMove) {
         performMove(bestMove.from.row, bestMove.from.col, bestMove.to.row, bestMove.to.col);
     }
+}
+
+// --- Synced-путь хода бота: сначала lock на ВСЮ сессию (устаревшее
+// локальное представление отсеивается сразу, не тратя впустую Hard-поиск),
+// затем ТЕ ЖЕ САМЫЕ getOpeningBookMove()/findBestMove() — AI не менялся —
+// по snapshot'у именно той session/revision, на которой lock получен,
+// и повторная проверка перед commit. ---
+let botMoveWaitingForServerTime = false;
+function triggerOwnerSyncedBotMove() {
+    const expectedMatchId = currentBotMatchId;
+    const expectedRevision = ownerSessionRevision;
+    const expectedBotColor = botColor;
+
+    // Если уже есть одна ожидающая доставки offset попытка на этом
+    // устройстве — не плодим вторую параллельно. Актуально только в узком
+    // startup-окне; как только offset доставлен, флаг больше не участвует.
+    if (botMoveWaitingForServerTime) return;
+    botMoveWaitingForServerTime = true;
+
+    waitForServerTimeOffsetReady().then(function () {
+        botMoveWaitingForServerTime = false;
+        return tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotColor);
+    }).then(function (lockResult) {
+        if (!lockResult.acquired) return; // другое устройство уже считает — просто ждём его commit через listener
+
+        const lockedGameState = deserializeOwnerBotState(lockResult.sessionSnapshot.state);
+        const lockedDifficulty = lockResult.sessionSnapshot.botDifficulty;
+
+        const bookMove = getOpeningBookMove(lockedGameState, expectedBotColor);
+        const maxDepthForThisMove = getMaxDepthForDifficulty(lockedDifficulty);
+        const bestMove = bookMove || findBestMove(lockedGameState, expectedBotColor, maxDepthForThisMove);
+        if (!bestMove) return;
+
+        commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, bestMove).then(function (commitResult) {
+            if (commitResult.committed) {
+                // Та же причина, что и в attemptOwnerHumanMove: берём
+                // spectateRoomCode ИЗ committed snapshot, не из глобальной
+                // переменной, которая могла успеть смениться за время поиска.
+                mirrorCommittedStateToSpectateRoom(commitResult.snapshot.val().spectateRoomCode, commitResult.snapshot.val());
+            }
+            // Если commit не прошёл (state изменился за время поиска) —
+            // посчитанный ход просто выбрасывается; listener доставит
+            // актуальное состояние, и при необходимости всё повторится.
+        });
+    }).catch(function (error) {
+        // Настоящая ошибка Firebase где-то в цепочке (не "не получилось
+        // захватить lock" — это committed:false, штатный путь). Не
+        // оставляем unhandled rejection; UI не зависает — если ход бота
+        // всё ещё актуален, следующее обновление session (через listener
+        // с другого устройства или после reconnect) естественно вызовет
+        // renderBoard() -> triggerBotMove() заново.
+        console.error("Bot move (synced) failed:", error);
+    });
 }
 
 // ===== УПРАВЛЕНИЕ ВРЕМЕНЕМ БОТА =====
@@ -5558,7 +6456,49 @@ function joinGroupRoom(code) {
 }
 
 // Функция просмотра чужой игры (Наблюдатель)
+// Точка входа при клике по комнате в "Кто играет". Сначала проверяет, не
+// является ли эта комната МОЕЙ СОБСТВЕННОЙ активной bot-игрой (с другого
+// устройства того же Telegram ID) — если да, подключается как владелец, а
+// не зритель. Для чужой bot-игры и для online-комнат поведение полностью
+// прежнее (watchGroupRoomAsSpectator).
+// Точка входа при клике по комнате в "Кто играет". Сначала проверяет, не
+// является ли эта комната МОЕЙ СОБСТВЕННОЙ активной bot-игрой (с другого
+// устройства того же Telegram ID) — если да, подключается как владелец, а
+// не зритель. Для чужой bot-игры и для online-комнат поведение полностью
+// прежнее (watchGroupRoomAsSpectator).
 function watchGroupRoom(code) {
+    database.ref("rooms/" + code).once("value").then(function (snapshot) {
+        const room = snapshot.val();
+        if (isMyOwnBotGameRoom(room)) {
+            // Структурно комната "моя" (бот против меня), но это ещё не
+            // значит, что она соответствует ТЕКУЩЕЙ активной сессии — она
+            // могла устареть (реванш/замена серии уже создали новую
+            // комнату с другим кодом, а старая на секунду ещё видна в
+            // лобби). Сверяем именно код, а не только факт принадлежности.
+            database.ref("botSessions/" + myTelegramId).once("value").then(function (sessionSnap) {
+                const session = sessionSnap.val();
+                const isCurrentActiveSession = !!(session && session.status === "active" && session.spectateRoomCode === code);
+                if (isCurrentActiveSession) {
+                    if (groupLobbyListener) { groupLobbyListener.off(); groupLobbyListener = null; }
+                    attachOwnerBotGame(); // сама выставит isBotGame/isOnlineGame=false/showScreen(gameScreen)
+                    return;
+                }
+                // Устаревшая собственная комната — не подключаем ни как
+                // owner (это не текущая сессия), ни как зритель самого
+                // себя (не имеет смысла). Сообщаем и остаёмся в лобби.
+                showInfoModal(t("err_game_closed"), false);
+            }).catch(function () {
+                showInfoModal(t("err_game_closed"), false);
+            });
+            return;
+        }
+        watchGroupRoomAsSpectator(code);
+    }).catch(function () {
+        watchGroupRoomAsSpectator(code); // на всякий случай не блокируем обычный spectator-путь при ошибке чтения
+    });
+}
+
+function watchGroupRoomAsSpectator(code) {
     // Если я сам ждал соперника через "Играть онлайн" и решил пойти
     // посмотреть чужую партию вместо этого — убираем свою старую заявку,
     // чтобы она не висела в списке как будто я всё ещё жду.
