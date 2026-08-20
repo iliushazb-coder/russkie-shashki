@@ -1915,15 +1915,18 @@ function renderPlayerPanels() {
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
 
-    // Скрываем кнопки управления для зрителей
-    const gameButtons = document.querySelectorAll('#game-screen .menu-button');
-    gameButtons.forEach(btn => {
-        if (isSpectator) {
-            btn.classList.add("hidden");
-        } else {
-            btn.classList.remove("hidden");
-        }
-    });
+    // Скрываем игровые действия (Сдаться/Ничья) для зрителей. Раньше здесь
+    // был слепой querySelectorAll('#game-screen .menu-button'), который
+    // заодно перезаписывал btnBackBot/btnBackSpectator — их видимость уже
+    // ПОЛНОСТЬЮ и корректно управляется в renderBoard() через
+    // backButtonMode (структурно взаимоисключающий выбор), несколькими
+    // строками раньше. Слепой sweep СРАЗУ ЖЕ переопределял этот результат
+    // одинаково для обеих кнопок разом, никак их не различая: у зрителя
+    // обе тут же скрывались (0 кнопок «Назад»), у игрока с ботом обе тут
+    // же показывались (2 кнопки «Назад»). Точечное управление — только
+    // теми двумя кнопками, для которых эта логика реально предназначалась.
+    if (btnOfferDraw) btnOfferDraw.classList.toggle("hidden", isSpectator);
+    if (btnResign) btnResign.classList.toggle("hidden", isSpectator);
 
     checkOpponentAbsence();
 }
