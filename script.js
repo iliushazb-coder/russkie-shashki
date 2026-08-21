@@ -2854,9 +2854,21 @@ function renderEndGameModal() {
         // (если moveCount тоже совпадёт), пропустив recordGameResult() второй
         // раз. currentBotMatchId уникален на каждый вызов startOfflineGame().
         // Для online-игр ничего не меняем — roomCode там honestly уникален per match.
+        // ONLINE: roomCode НЕ уникален для партии — реванш переиспользует ту же
+        // комнату (performRematchReset пишет в rooms/<тот же roomCode>), а
+        // moveCount сбрасывается в 0. Две партии в одной комнате, закончившиеся
+        // на одинаковом ходу, давали ОДИНАКОВЫЙ маркер, и вторая не засчитывалась.
+        // Бьёт асимметрично: принявший реванш проходит через startOnlineGame()
+        // (маркер сбрасывается), а предложивший получает реванш через listener
+        // "без startOnlineGame()" — у него оставался старый маркер.
+        // matchNumber инкрементируется в performRematchReset на каждый реванш и
+        // УЖЕ используется как идентификатор партии для монет
+        // (getCurrentRewardMatchId: "online_" + roomCode + "_" + matchNumber),
+        // то есть это проверенный в проде идентификатор, а не новая выдумка.
+        const onlineMatchNumber = (typeof currentState.matchNumber === "number") ? currentState.matchNumber : 0;
         const marker = isBotGame
             ? (currentBotMatchId || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "")
-            : (roomCode || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "");
+            : (roomCode || "offline") + "_" + onlineMatchNumber + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "");
         if (endGameShownForRoom !== marker) {
             playWinSound();
             endGameShownForRoom = marker;
@@ -2872,10 +2884,16 @@ function renderEndGameModal() {
                 statsInFlightForRoom = currentBotMatchId;
                 recordGameResult();
             }
-        } else if (statsRecordedForRoom !== marker) {
-            // Online-ветка — поведение НЕ меняется.
-            statsRecordedForRoom = marker;
-            recordGameResult();
+        } else if (statsRecordedForRoom !== marker && statsInFlightOnlineMarker !== marker) {
+            // Online-ветка: маркер "записано" ставится ТОЛЬКО после подтверждения
+            // Firebase (см. recordGameResult). Раньше он ставился здесь, до
+            // вызова, и любой сбой записи означал НАВСЕГДА потерянный результат
+            // в этой сессии — повторный render уже не пытался. Теперь на время
+            // запроса действует statsInFlightOnlineMarker, не дающий запустить
+            // второй параллельный запрос, а при ошибке он снимается и повтор
+            // становится возможен. Та же схема, что уже работала у bot-ветки.
+            statsInFlightOnlineMarker = marker;
+            recordGameResult(marker);
         }
 
         recordCoinResultOnce();
@@ -2886,9 +2904,24 @@ function renderEndGameModal() {
 
 let statsRecordedForRoom = null;
 let statsInFlightForRoom = null; // только для bot-ветки — см. recordGameResult()
+// Отдельный in-flight маркер ИМЕННО для online. Сознательно не переиспользуем
+// statsInFlightForRoom: он хранит currentBotMatchId, а здесь — roomCode-маркер,
+// смешивать разные пространства идентификаторов нельзя.
+let statsInFlightOnlineMarker = null;
 
-function recordGameResult() {
+function recordGameResult(onlineMarker) {
     if (isSpectator) return; // Зритель никогда не участвует в статистике
+    // В онлайн-игре НЕ пишем статистику по локальному оптимистичному
+    // состоянию: currentState.winner мог быть выставлен из ещё не
+    // подтверждённого хода, а Firebase-транзакция способна его отклонить —
+    // тогда в stats попал бы результат несуществующей партии. Такая же
+    // защита уже стоит у начисления монет (см. recordCoinResultOnce).
+    // In-flight маркер снимаем сами: запрос не отправлен, и следующий
+    // render — уже по подтверждённому состоянию — должен попробовать снова.
+    if (isOnlineGame && isLocalStateOptimistic) {
+        statsInFlightOnlineMarker = null;
+        return;
+    }
     if (!isOnlineGame && !isBotGame) return; // Если это не онлайн и не бот — выходим
     if (!currentState || !currentState.winner) return;
     if (currentState.winner === "draw") return;
@@ -2940,8 +2973,15 @@ function recordGameResult() {
             result.losses = (result.losses || 0) + 1;
         }
         return result;
+    }).then(function () {
+        // Подтверждено Firebase — только теперь помечаем как записанное.
+        statsRecordedForRoom = onlineMarker;
+        statsInFlightOnlineMarker = null;
     }).catch(function(error) {
         console.error("Stats write failed:", error);
+        // НЕ помечаем записанным — освобождаем in-flight, чтобы следующий
+        // renderEndGameModal() смог повторить попытку в этой же сессии.
+        statsInFlightOnlineMarker = null;
     });
 }
 
@@ -3239,6 +3279,7 @@ function startOnlineGame() {
     lastAnimatedMoveCount = null; // Новая партия — не анимируем "ход из ниоткуда"
     endGameShownForRoom = null;
     statsRecordedForRoom = null;
+    statsInFlightOnlineMarker = null; // симметрично сбрасываем и in-flight
     coinRewardAttemptForMatch = null;
     statsCache = {}; // Новая партия/реванш — статистика и монеты обоих игроков могли устареть
     opponentAbsenceHandled = false;
