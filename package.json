@@ -1,13 +1,17 @@
 {
-  "name": "checkers-game",
+  "name": "russkie-shashki",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Русские шашки 8x8 — Telegram Mini App",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node tests/run.js",
+    "check": "node --check script.js"
   },
-  "keywords": [],
+  "keywords": [
+    "draughts",
+    "checkers",
+    "russian-draughts"
+  ],
   "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "license": "ISC"
 }
