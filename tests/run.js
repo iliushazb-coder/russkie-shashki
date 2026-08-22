@@ -10,7 +10,8 @@ const FILES = [
   ['C. DRAW RULES',          'draw-rules.test.js'],
   ['C. DRAW RULES (взаимодействие)', 'draw-interaction.test.js'],
   ['C/D. DRAW STATE LIFECYCLE + SERIALIZE', 'draw-state-lifecycle.test.js'],
-  ['E. CORE RULES',          'core-rules.test.js']
+  ['E. CORE RULES',          'core-rules.test.js'],
+  ['F. INVITE-LINK JOIN',    'invite-join.test.js']
 ];
 
 let totalPass = 0, totalFail = 0, hardFail = false;
