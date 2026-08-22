@@ -1270,6 +1270,37 @@ let isSpectator = false;
 // Используем chat_instance для определения группы при открытии по прямой ссылке
 const GROUP_ID = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.chat_instance != null) ? Telegram.WebApp.initDataUnsafe.chat_instance.toString() : "private_chat";
 
+// --- Решение о захвате места чёрных по invite-ссылке (чистая функция).
+// Вынесено отдельно, чтобы логику можно было проверить тестами без Firebase.
+// Возврат undefined = прервать транзакцию, возврат объекта = записать его.
+function buildInviteDarkClaim(currentRoom, uid, name) {
+    if (!currentRoom || !currentRoom.pieces || !currentRoom.players) return undefined;
+    const darkNow = currentRoom.players.dark;
+    if (darkNow && darkNow.id === uid) return currentRoom;   // повторный вход того же игрока
+    if (darkNow && darkNow.id) return undefined;             // место занято другим
+    if (currentRoom.status !== "waiting") return undefined;  // комната больше не ждёт
+    const lightNow = currentRoom.players.light;
+    if (lightNow && lightNow.id === uid) return undefined;   // игра с самим собой
+    currentRoom.players.dark = { id: uid, name: name };
+    currentRoom.status = "active";
+    currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+    return currentRoom;
+}
+
+// --- Что делать после committed:false, по контрольному чтению с сервера.
+// "retry" означает, что отказ был ложным (холодный кеш), и допустим
+// РОВНО ОДИН повтор транзакции.
+function decideInviteRetry(room, uid) {
+    if (!room || !room.pieces || !room.players) return "missing";
+    const dark = room.players.dark;
+    if (dark && dark.id === uid) return "reconnect";
+    if (dark && dark.id) return "occupied";
+    if (room.status !== "waiting") return "not_waiting";
+    const light = room.players.light;
+    if (light && light.id === uid) return "self";
+    return "retry";
+}
+
 function generateRoomCode() {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     let code = "";
@@ -5425,25 +5456,36 @@ function checkForInviteLink() {
             return;
         }
 
-        myColor = "dark";
-        isOnlineGame = true;
-        isSpectator = false;
+        // Показываем прогресс до записи — это только текст, состояние игрока
+        // ниже выставляется ТОЛЬКО после подтверждённого захвата места.
         waitingText.textContent = t("connecting_to_friend");
 
-        // Возвращаем проверенную рабочую схему из старой версии:
-        // без Firebase transaction().
-        database.ref("rooms/" + roomCode).update({
-            status: "active",
-            "players/dark": {
-                id: myTelegramId,
-                name: myTelegramName
-            },
-            turnStartedAt: firebase.database.ServerValue.TIMESTAMP
-        }).then(function () {
-            if (settled) return;
+        const inviteRoomRef = database.ref("rooms/" + roomCode);
+        let inviteAttempts = 0;
 
+        function finishInviteFailure(msgKey) {
+            if (settled) return;
             settled = true;
             clearTimeout(timeoutId);
+            roomCode = null;
+            myColor = "light";
+            isOnlineGame = false;
+            isSpectator = false;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal(t(msgKey), false);
+        }
+
+        function finishInviteSuccess() {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+
+            // Место закреплено за нами сервером — только теперь берём цвет
+            // и пишем метаданные. Проигравший гонку сюда не попадает.
+            myColor = "dark";
+            isOnlineGame = true;
+            isSpectator = false;
 
             database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
                 opponentName: creatorName,
@@ -5460,8 +5502,44 @@ function checkForInviteLink() {
                 showScreen(gameScreen);
                 startOnlineGame();
             }, 800);
-        }).catch(function (error) {
-            console.error("Invite update failed:", error);
+        }
+
+        // АТОМАРНЫЙ захват места чёрных транзакцией на всей комнате.
+        // players.dark, status и turnStartedAt меняются ОДНОЙ операцией —
+        // промежуточное состояние "dark занят, но status ещё waiting" не
+        // возникает никогда. Это важно: joinGroupRoom() проверяет только
+        // status и перезаписал бы такой полузахват.
+        //
+        // Cold start: по документации Firebase callback может получить null,
+        // даже когда комната на сервере существует (данных ещё нет в кеше).
+        // Возврат undefined = немедленный abort БЕЗ обращения к серверу,
+        // поэтому один committed:false сам по себе НЕ означает "занято".
+        // Отличаем реальный отказ от ложного одним контрольным чтением.
+        function runInviteClaim() {
+            inviteAttempts++;
+            return inviteRoomRef.transaction(function (currentRoom) {
+                return buildInviteDarkClaim(currentRoom, myTelegramId, myTelegramName);
+            }).then(function (result) {
+                if (settled) return;
+                if (result.committed) { finishInviteSuccess(); return; }
+
+                // Вторая попытка исчерпана — окончательный отказ, третьей не будет.
+                if (inviteAttempts >= 2) { finishInviteFailure("err_room_taken"); return; }
+
+                return inviteRoomRef.once("value").then(function (snap) {
+                    if (settled) return;
+                    const decision = decideInviteRetry(snap.val(), myTelegramId);
+                    if (decision === "retry") return runInviteClaim();   // ровно один повтор
+                    if (decision === "reconnect") { finishInviteSuccess(); return; }
+                    if (decision === "missing") { finishInviteFailure("err_game_closed"); return; }
+                    if (decision === "self") { finishInviteFailure("err_play_self"); return; }
+                    finishInviteFailure("err_room_taken");
+                });
+            });
+        }
+
+        runInviteClaim().catch(function (error) {
+            console.error("Invite join transaction failed:", error);
 
             if (settled) return;
 
