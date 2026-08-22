@@ -1,17 +1,21 @@
-// INVITE-LINK: атомарный захват места второго игрока (вариант C).
+// INVITE-LINK: подключение приглашённого друга по ссылке (восстановленная
+// рабочая схема: once() -> проверки -> update(), БЕЗ Firebase transaction).
 //
 // ЧТО ПРОВЕРЯЕТСЯ ПО-НАСТОЯЩЕМУ:
-//   1) чистые функции решения buildInviteDarkClaim / decideInviteRetry —
-//      извлекаются из реального script.js;
-//   2) конечный автомат повтора — запускается НАСТОЯЩАЯ checkForInviteLink()
-//      с моками Firebase/DOM, считаются реальные вызовы transaction.
+//   запускается НАСТОЯЩАЯ checkForInviteLink(), извлечённая из script.js,
+//   с моками Firebase/DOM. Главный regression-тест (сценарий 1) воспроизводит
+//   ХОЛОДНЫЙ вход: у клиента нет локального кеша комнаты. Мок transaction
+//   воспроизводит документированное поведение SDK на холодном кеше
+//   (callback получает null; возврат undefined = немедленный abort без
+//   обращения к серверу). Реализация через transaction на этом моке даёт
+//   ложный err_room_taken — что и наблюдалось на реальных телефонах.
+//   Реализация через once()+update() проходит.
 //
 // ЧЕГО ЭТИ ТЕСТЫ НЕ ДОКАЗЫВАЮТ:
-//   атомарности Firebase transaction и поведения при реальной конкуренции
-//   двух клиентов. Мок этого честно воспроизвести не может (оптимистичная
-//   блокировка на сервере с повтором). Firebase Emulator в этой среде
-//   недоступен: загрузка его jar блокируется сетевой политикой песочницы.
-//   Поэтому concurrency здесь НЕ проверяется — только клиентский автомат.
+//   это НЕ настоящий Firebase. Атомарность, конкуренция двух одновременных
+//   клиентов и реальное сетевое поведение здесь не проверяются. Firebase
+//   Emulator в этой среде недоступен (загрузка jar блокируется сетевой
+//   политикой песочницы).
 const { extractFunc } = require('./helpers/loader');
 
 let passed = 0, failed = 0;
@@ -21,8 +25,10 @@ global.firebase = { database: { ServerValue: { TIMESTAMP: '__TS__' } } };
 
 let loadError = null;
 try {
-  eval(extractFunc('buildInviteDarkClaim'));
-  eval(extractFunc('decideInviteRetry'));
+  // Вспомогательные функции транзакционной схемы извлекаются ТОЛЬКО если
+  // существуют (нужно для прогона теста против старых версий через TARGET_SCRIPT).
+  try { eval(extractFunc('buildInviteDarkClaim')); } catch (e) {}
+  try { eval(extractFunc('decideInviteRetry')); } catch (e) {}
   eval(extractFunc('checkForInviteLink'));
 } catch (e) { loadError = e.message; }
 
@@ -34,37 +40,60 @@ function mkRoom(status, lightId, darkId) {
 }
 
 let env;
-function setup(scenario) {
-  env = { txCalls: 0, txResults: scenario.txResults.slice(),
-          reads: scenario.reads.slice(), writes: [], modals: [], timers: [] };
+function setup(serverRoom, opts) {
+  opts = opts || {};
+  env = { serverRoom: serverRoom, txCalls: 0, writes: [], modals: [], timers: [],
+          startCalls: 0, screens: [] };
   global.myTelegramId = 'B'; global.myTelegramName = 'Bob';
   global.roomCode = null; global.myColor = 'light';
   global.isOnlineGame = false; global.isSpectator = false;
+  global.myPendingFriendRoomCode = null;
+  global.BOT_USERNAME = 'testbot';
   global.window = { Telegram: { WebApp: { initDataUnsafe: { start_param: 'ROOM1' } } } };
   global.Telegram = global.window.Telegram;
   global.database = { ref: function (p) { return {
     once: function () {
-      const v = env.reads.length > 1 ? env.reads.shift() : env.reads[0];
-      return Promise.resolve({ val: function () { return p === 'rooms/ROOM1' ? v : null; } });
+      if (p !== 'rooms/ROOM1') return Promise.resolve({ val: function () { return null; } });
+      // once() всегда читает С СЕРВЕРА — отдаёт реальное состояние комнаты.
+      const copy = env.serverRoom ? JSON.parse(JSON.stringify(env.serverRoom)) : null;
+      return Promise.resolve({ val: function () { return copy; } });
     },
+    // Мок transaction воспроизводит поведение SDK на ХОЛОДНОМ кеше:
+    // callback вызывается с null (данных комнаты в локальном кеше нет),
+    // возврат undefined приводит к committed:false БЕЗ похода на сервер.
+    // Предшествующий once() кеш транзакции НЕ прогревает (без активного
+    // .on()-слушателя SDK сразу выбрасывает данные из кеша).
     transaction: function (cb) {
       env.txCalls++;
-      const committed = env.txResults.shift();
-      if (committed) cb(mkRoom('waiting', 'A', null));
-      return Promise.resolve({ committed: !!committed });
+      const res = cb(null);
+      if (res === undefined) return Promise.resolve({ committed: false });
+      env.serverRoom = res;
+      return Promise.resolve({ committed: true });
     },
     set: function (v) { env.writes.push({ path: p, v: v }); return Promise.resolve(); },
-    update: function (v) { env.writes.push({ path: p, v: v }); return Promise.resolve(); },
+    update: function (v) {
+      env.writes.push({ path: p, v: v });
+      if (opts.failRoomUpdate && p === 'rooms/ROOM1') return Promise.reject(new Error('PERMISSION_DENIED (mock)'));
+      if (p === 'rooms/ROOM1' && env.serverRoom) {
+        Object.keys(v).forEach(function (k) {
+          if (k === 'players/dark') { env.serverRoom.players.dark = v[k]; }
+          else { env.serverRoom[k] = v[k]; }
+        });
+      }
+      return Promise.resolve();
+    },
     on: function () {}, off: function () {}
   }; }};
-  global.showScreen = function () {};
+  global.showScreen = function (s) { env.screens.push(s); };
   global.showInfoModal = function (txt) { env.modals.push(txt); };
   global.loadActiveRooms = function () {};
-  global.startOnlineGame = function () {};
+  global.startOnlineGame = function () { env.startCalls++; };
+  global.resumeOwnActiveRoom = function () { return Promise.resolve(true); };
+  global.setupPresence = function () {};
   global.t = function (k) { return k; };
   global.waitingScreen = 'waiting'; global.menuScreen = 'menu'; global.gameScreen = 'game';
   global.waitingText = { textContent: '' };
-  global.inviteLinkBox = { classList: { add: function () {}, remove: function () {} } };
+  global.inviteLinkBox = { textContent: '', classList: { add: function () {}, remove: function () {} } };
   global.btnShareLink = { classList: { add: function () {}, remove: function () {} } };
   global.setTimeout = function (fn, ms) { env.timers.push({ fn: fn, ms: ms }); return env.timers.length; };
   global.clearTimeout = function (id) { if (env.timers[id - 1]) env.timers[id - 1].cleared = true; };
@@ -74,86 +103,80 @@ const flush = () => new Promise(function (r) {
   realSetImmediate(function () { realSetImmediate(function () { realSetImmediate(function () { realSetImmediate(r); }); }); });
 });
 const gotMeta = () => env.writes.some(function (w) { return w.path.indexOf('users/B/rooms') === 0; });
+const roomWrites = () => env.writes.filter(function (w) { return w.path === 'rooms/ROOM1'; });
+const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && !t.cleared && !t.ran) { t.ran = true; t.fn(); } }); };
 
 (async function () {
   if (loadError) {
-    check('0. вариант C присутствует в script.js', false, loadError);
+    check('0. checkForInviteLink присутствует в script.js', false, loadError);
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(1);
   }
 
-  console.log('ЧАСТЬ 1. Решение о захвате (buildInviteDarkClaim)');
-  {
-    const r = buildInviteDarkClaim(mkRoom('waiting', 'A', null), 'B', 'Bob');
-    check('свободная waiting -> место захвачено', !!r && r.players.dark.id === 'B');
-    check('status и turnStartedAt меняются ТОЙ ЖЕ операцией (полузахвата не бывает)',
-      !!r && r.status === 'active' && r.turnStartedAt === '__TS__');
-    check('занято другим -> abort', buildInviteDarkClaim(mkRoom('waiting', 'A', 'C'), 'B', 'Bob') === undefined);
-    const rc = buildInviteDarkClaim(mkRoom('active', 'A', 'B'), 'B', 'Bob');
-    check('свой dark -> reconnect без перезаписи', !!rc && rc.players.dark.id === 'B' && rc.turnStartedAt === undefined);
-    check('self-join -> abort', buildInviteDarkClaim(mkRoom('waiting', 'B', null), 'B', 'Bob') === undefined);
-    check('finished -> abort', buildInviteDarkClaim(mkRoom('finished', 'A', null), 'B', 'Bob') === undefined);
-    check('null (холодный кеш / удалена) -> abort', buildInviteDarkClaim(null, 'B', 'Bob') === undefined);
-  }
+  console.log('СЦЕНАРИЙ 1 (ГЛАВНЫЙ REGRESSION). Холодный вход, waiting, dark свободен');
+  setup(mkRoom('waiting', 'A', null));
+  checkForInviteLink(); await flush();
+  check('1. err_room_taken НЕ показан', env.modals.indexOf('err_room_taken') === -1, JSON.stringify(env.modals));
+  check('1. вообще никакой ошибки не показано', env.modals.length === 0, JSON.stringify(env.modals));
+  check('1. пользователь стал dark', global.myColor === 'dark' && global.isOnlineGame === true);
+  check('1. status стал active НА СЕРВЕРЕ', !!env.serverRoom && env.serverRoom.status === 'active');
+  check('1. players.dark записан на сервере', !!env.serverRoom && !!env.serverRoom.players.dark && env.serverRoom.players.dark.id === 'B');
+  check('1. status+dark+turnStartedAt — ОДНОЙ операцией update', roomWrites().length === 1 &&
+    roomWrites()[0].v['players/dark'] !== undefined &&
+    roomWrites()[0].v.status === 'active' && roomWrites()[0].v.turnStartedAt === '__TS__');
+  check('1. metadata (users/B/rooms) записана', gotMeta());
+  check('1. 10s-таймаут снят', env.timers.some(function (t) { return t.ms === 10000 && t.cleared; }));
+  runTimer(800);
+  check('1. startOnlineGame запущен', env.startCalls === 1 && env.screens.indexOf('game') !== -1);
 
   console.log('');
-  console.log('ЧАСТЬ 2. Решение о повторе (decideInviteRetry)');
-  {
-    check('комната отсутствует -> missing', decideInviteRetry(null, 'B') === 'missing');
-    check('битая комната -> missing', decideInviteRetry({ status: 'waiting' }, 'B') === 'missing');
-    check('занято другим -> occupied', decideInviteRetry(mkRoom('waiting', 'A', 'C'), 'B') === 'occupied');
-    check('свой dark -> reconnect', decideInviteRetry(mkRoom('active', 'A', 'B'), 'B') === 'reconnect');
-    check('finished -> not_waiting', decideInviteRetry(mkRoom('finished', 'A', null), 'B') === 'not_waiting');
-    check('self-join -> self', decideInviteRetry(mkRoom('waiting', 'B', null), 'B') === 'self');
-    check('waiting и место свободно -> retry (ложный abort)', decideInviteRetry(mkRoom('waiting', 'A', null), 'B') === 'retry');
-  }
-
-  console.log('');
-  console.log('ЧАСТЬ 3. Конечный автомат — настоящая checkForInviteLink()');
-
-  setup({ txResults: [true], reads: [mkRoom('waiting', 'A', null)] });
+  console.log('СЦЕНАРИЙ 2. Место реально занято другим (dark = C)');
+  setup(mkRoom('waiting', 'A', 'C'));
   checkForInviteLink(); await flush();
-  check('1. первая transaction success -> ровно 1 transaction', env.txCalls === 1, 'tx=' + env.txCalls);
-  check('1. игрок стал dark', global.myColor === 'dark' && global.isOnlineGame === true);
-  check('1. metadata записана', gotMeta(), JSON.stringify(env.writes.map(function (w) { return w.path; })));
-  check('1. таймаут снят', env.timers.some(function (t) { return t.ms === 10000 && t.cleared; }));
-
-  // предпроверка видит свободную комнату, а к моменту контрольного чтения место занял другой
-  setup({ txResults: [false], reads: [mkRoom('waiting', 'A', null), mkRoom('waiting', 'A', 'C')] });
-  checkForInviteLink(); await flush();
-  check('2. занято другим -> повтора НЕТ', env.txCalls === 1, 'tx=' + env.txCalls);
   check('2. показан err_room_taken', env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
-  check('2. проигравший НЕ стал dark', global.myColor !== 'dark' && global.isOnlineGame === false);
-  check('2. проигравшему metadata НЕ записана', !gotMeta(), JSON.stringify(env.writes.map(function (w) { return w.path; })));
+  check('2. комната НЕ перезаписана', roomWrites().length === 0);
+  check('2. пользователь НЕ стал dark', global.myColor !== 'dark' && global.isOnlineGame === false);
+  check('2. metadata НЕ записана', !gotMeta());
   check('2. таймаут снят и при отказе', env.timers.some(function (t) { return t.ms === 10000 && t.cleared; }));
 
-  setup({ txResults: [false], reads: [mkRoom('waiting', 'A', null), mkRoom('finished', 'A', null)] });
+  console.log('');
+  console.log('СЦЕНАРИЙ 3. Комната finished');
+  setup(mkRoom('finished', 'A', null));
   checkForInviteLink(); await flush();
-  check('3. finished -> повтора НЕТ', env.txCalls === 1, 'tx=' + env.txCalls);
-  check('3. игрок НЕ стал dark', global.myColor !== 'dark');
+  check('3. показан err_no_active_game', env.modals.indexOf('err_no_active_game') !== -1, JSON.stringify(env.modals));
+  check('3. комната НЕ перезаписана, игрок НЕ dark', roomWrites().length === 0 && global.myColor !== 'dark');
 
-  setup({ txResults: [false], reads: [mkRoom('waiting', 'A', null), null] });
+  console.log('');
+  console.log('СЦЕНАРИЙ 4. Комната отсутствует (null)');
+  setup(null);
   checkForInviteLink(); await flush();
-  check('4. комната отсутствует -> повтора НЕТ', env.txCalls === 1, 'tx=' + env.txCalls);
+  check('4. показан err_no_active_game', env.modals.indexOf('err_no_active_game') !== -1, JSON.stringify(env.modals));
   check('4. metadata НЕ записана', !gotMeta());
 
-  setup({ txResults: [false], reads: [mkRoom('waiting', 'A', null), mkRoom('active', 'A', 'B')] });
+  console.log('');
+  console.log('СЦЕНАРИЙ 5. Повторное открытие ссылки тем же приглашённым (reconnect)');
+  setup(mkRoom('active', 'A', 'B'));
   checkForInviteLink(); await flush();
-  check('5. свой dark -> reconnect, повтора НЕТ', env.txCalls === 1, 'tx=' + env.txCalls);
-  check('5. reconnect засчитан как успех', global.myColor === 'dark' && global.isOnlineGame === true);
+  check('5. reconnect: игрок снова dark', global.myColor === 'dark' && global.isOnlineGame === true);
+  check('5. startOnlineGame запущен напрямую', env.startCalls === 1 && env.screens.indexOf('game') !== -1);
+  check('5. комната НЕ перезаписана при reconnect', roomWrites().length === 0);
+  check('5. никакой ошибки', env.modals.length === 0, JSON.stringify(env.modals));
 
-  setup({ txResults: [false, true], reads: [mkRoom('waiting', 'A', null)] });
+  console.log('');
+  console.log('СЦЕНАРИЙ 6. Комната active, dark занят другим');
+  setup(mkRoom('active', 'A', 'C'));
   checkForInviteLink(); await flush();
-  check('6. ложный abort -> РОВНО одна повторная transaction', env.txCalls === 2, 'tx=' + env.txCalls);
-  check('7. retry success -> игрок стал dark', global.myColor === 'dark' && global.isOnlineGame === true);
-  check('7. metadata записана после retry', gotMeta());
+  check('6. показан err_room_taken', env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
+  check('6. игрок НЕ dark', global.myColor !== 'dark');
 
-  setup({ txResults: [false, false, true], reads: [mkRoom('waiting', 'A', null)] });
+  console.log('');
+  console.log('СЦЕНАРИЙ 7. update() отклонён сервером (например, Rules)');
+  setup(mkRoom('waiting', 'A', null), { failRoomUpdate: true });
   checkForInviteLink(); await flush();
-  check('8. retry false -> окончательный отказ', env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
-  check('9. НИКОГДА больше двух transaction (третья доступна, но не вызвана)', env.txCalls === 2, 'tx=' + env.txCalls);
-  check('10. после окончательного отказа НЕ dark и без metadata',
-    global.myColor !== 'dark' && global.isOnlineGame === false && !gotMeta());
+  check('7. показан err_join_failed (не молчаливое зависание)', env.modals.indexOf('err_join_failed') !== -1, JSON.stringify(env.modals));
+  check('7. возврат в меню, состояние сброшено', env.screens.indexOf('menu') !== -1 &&
+    global.myColor !== 'dark' && global.isOnlineGame === false && global.roomCode === null);
+  check('7. таймаут снят', env.timers.some(function (t) { return t.ms === 10000 && t.cleared; }));
 
   console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
   process.exit(failed > 0 ? 1 : 0);
