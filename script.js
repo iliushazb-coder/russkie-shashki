@@ -33,7 +33,14 @@ connectedRef.on("value", function(snap) {
         // Дополнительная защита: оживляем presence, только если человек
         // ДЕЙСТВИТЕЛЬНО сейчас участвует в какой-то партии как игрок —
         // а не когда myPresenceRef случайно остался от уже неактуальной комнаты.
-        if (myPresenceRef && isOnlineGame && !isSpectator && roomCode) {
+        // !document.hidden (v171) — та же защита, что у обычного heartbeat:
+        // скрытый, но ещё живой WebView (Telegram сворачивает Mini App, не
+        // убивая его сразу) не должен "оживлять" presence ушедшего игрока и
+        // сбрасывать отсчёт absence у соперника. Настоящее возвращение в игру
+        // покрыто тремя путями: visibilitychange (ветка visible пишет
+        // online:true мгновенно), heartbeat (≤4с) и setupPresence при
+        // полном перезапуске приложения.
+        if (myPresenceRef && isOnlineGame && !isSpectator && roomCode && !document.hidden) {
             myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
         }
     }
@@ -1123,6 +1130,17 @@ let pendingTimeControlSeconds = 0;
 let roomListenerRef = null;
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
+// (v171) Я — создатель waiting-комнаты, и второй игрок ещё НЕ подключился.
+// Единственное назначение флага: разрешить heartbeat'у обновлять lastSeen
+// даже при document.hidden — для нормального сценария "нажал Поделиться →
+// ушёл в чат Telegram отправить ссылку другу". Без этого lastSeen замерзает
+// и lobby-sweep удалил бы комнату через ~60с, пока создатель просто
+// отправляет приглашение. Взводится ТОЛЬКО в живых точках входа создателя
+// (createRoomAndShowWaiting и повторное открытие своей waiting-комнаты по
+// invite-ссылке), снимается в startOnlineGame() и detachMyPresence() —
+// т.е. как только партия реально началась либо участие в комнате кончилось.
+// Во время active-партии document.hidden по-прежнему останавливает heartbeat.
+let myWaitingRoomNoOpponent = false;
 let opponentAbsenceHandled = false;
 const STALE_MS = 20000; 
 const RECONNECT_GRACE_MS = 60000; // Перенесли наверх для порядка
@@ -2175,10 +2193,28 @@ function setupPresence() {
     myPresenceRef = presenceRef;
 
     presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
-    presenceRef.onDisconnect().update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    // ВАЖНО (v171): onDisconnect сознательно НЕ трогает lastSeen. Сервер
+    // выполняет эту запись в момент, когда САМ замечает обрыв — при жёстком
+    // закрытии приложения это происходит через ~45-90 секунд. Свежий lastSeen
+    // в этот момент "омолаживал" бы уже ушедшего игрока: отсчёт absence у
+    // соперника и staleness-проверки лобби начинались бы заново (лишняя
+    // вторая минута). lastSeen честно остаётся временем последнего реального
+    // heartbeat, а факт ухода передаёт online:false.
+    presenceRef.onDisconnect().update({ online: false });
 
     presenceHeartbeatInterval = setInterval(function () {
-        if (document.hidden) return;
+        if (document.hidden) {
+            // Фоновое исключение (v171) — ТОЛЬКО для создателя waiting-комнаты
+            // без соперника (см. myWaitingRoomNoOpponent). Пишем ТОЛЬКО
+            // lastSeen: online:false, выставленный visibilitychange, остаётся
+            // честным — комната живая для лобби и sweep'а, но игрок не
+            // выглядит "в игре". Для active-партии поведение прежнее:
+            // при document.hidden heartbeat молчит.
+            if (myWaitingRoomNoOpponent && myColor === "light") {
+                presenceRef.update({ lastSeen: firebase.database.ServerValue.TIMESTAMP });
+            }
+            return;
+        }
         presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
     }, 4000);
 
@@ -2204,6 +2240,7 @@ function detachMyPresence() {
     }
     stopPresenceHeartbeat();
     myPresenceRef = null;
+    myWaitingRoomNoOpponent = false; // (v171) участие в комнате закончилось
 }
 
 function markMyselfLeftExplicitly() {
@@ -3282,6 +3319,7 @@ function startOnlineGame() {
     statsInFlightOnlineMarker = null; // симметрично сбрасываем и in-flight
     coinRewardAttemptForMatch = null;
     statsCache = {}; // Новая партия/реванш — статистика и монеты обоих игроков могли устареть
+    myWaitingRoomNoOpponent = false; // (v171) партия началась — фоновое waiting-исключение heartbeat больше не действует
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
     boardBuilt = false;
@@ -4729,6 +4767,7 @@ function createRoomAndShowWaiting() {
             opponentName: "Ожидание подключения...",
             myColor: "light"
         });
+        myWaitingRoomNoOpponent = true; // (v171) создатель ждёт друга, dark ещё нет
         setupPresence();
 
         const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + myPendingFriendRoomCode;
@@ -5352,6 +5391,7 @@ function checkForInviteLink() {
                 settled = true;
                 clearTimeout(timeoutId);
 
+                myWaitingRoomNoOpponent = true; // (v171) моя waiting-комната, dark ещё нет
                 setupPresence();
 
                 const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
@@ -7139,6 +7179,25 @@ function runLobbyStaleSweep() {
 
         const lightIsStale = isRoomPlayerStale(room, "light");
         const darkIsStale = isRoomPlayerStale(room, "dark");
+
+        // НОВОЕ (v171): физическое удаление мёртвых waiting-комнат. Создатель
+        // давно оффлайн (lastSeen старше RECONNECT_GRACE_MS) и второй игрок
+        // так и не подключился — комната гарантированно никому не нужна.
+        // Та же ленивая семантика, что у active-очистки ниже: выполняется у
+        // любого, кто держит лобби открытым. ВАЖНО: критерий — только возраст
+        // lastSeen, НЕ online:false (свернувший Telegram создатель тоже
+        // online:false, но его lastSeen поддерживает фоновый heartbeat —
+        // см. myWaitingRoomNoOpponent в setupPresence). joinGroupRoom входит
+        // через транзакцию и при гонке с удалением чисто отменится.
+        if (room.status === "waiting" &&
+            !(room.players && room.players.dark) &&
+            lightIsStale) {
+            if (room.players && room.players.light && room.players.light.id) {
+                database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
+            }
+            database.ref("rooms/" + code).remove();
+            continue;
+        }
 
         // ЛЕНИВАЯ ОЧИСТКА: если партия активна, но оба игрока по-настоящему
         // давно оффлайн — партия гарантированно заброшена. child_removed
