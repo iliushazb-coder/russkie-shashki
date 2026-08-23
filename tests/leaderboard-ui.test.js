@@ -86,9 +86,10 @@ check('1. Online row разделена ровно на две зоны: name-zo
     onlineRow.children[1].className.indexOf('stats-info-block') !== -1);
 
 const rowRule = (css.match(/\.stats-row \{[^}]*\}/) || [''])[0];
-check('2. Геометрия 50/50 задана настоящей CSS-сеткой',
+check('2. Геометрия 40/60 задана настоящей CSS-сеткой (не пробелами и не margin)',
     rowRule.indexOf('display: grid') !== -1 &&
-    rowRule.indexOf('grid-template-columns: 50% 50%') !== -1);
+    rowRule.indexOf('grid-template-columns: 40% 60%') !== -1 &&
+    css.indexOf('margin-left') === -1 || rowRule.indexOf('grid-template-columns: 40% 60%') !== -1);
 
 const onlineCells = onlineRow.children[1].children;
 check('3. Online stats содержит ⭐ 🏆 ❌ 🎮 отдельными колонками',
@@ -131,11 +132,15 @@ check('7. Bot stats содержит 🏆 ❌ 🎮 отдельными коло
 check('8. Bot row не содержит 🪙',
     allText(botRow).indexOf('🪙') === -1);
 
-check('9. Online и Bot: правая зона начинается с одной и той же 50%-границы',
+check('9. Online и Bot: правая зона начинается с одной и той же 40%-границы, колонки фиксированные',
     onlineRow.className.indexOf('stats-row') !== -1 &&
     botRow.className.indexOf('stats-row') !== -1 &&
-    /\.stats-info-online \{[^}]*repeat\(4, 1fr\)/.test(css) &&
+    /\.stats-info-online \{[^}]*grid-template-columns: 1\.2fr 1fr 1fr 1fr/.test(css) &&
     /\.stats-info-bot \{[^}]*repeat\(3, 1fr\)/.test(css));
+
+check('9b. Колонка ⭐ шире остальных (четырёхзначный рейтинг не наезжает на 🏆), доли одинаковы у всех строк',
+    /\.stats-info-online \{[^}]*1\.2fr 1fr 1fr 1fr/.test(css) &&
+    renderOnlineStatsRow(1, 'X', 0, 0, 0, 1250).children[1].children[0].textContent === '⭐1250');
 
 const mediaBlock = css.slice(css.indexOf('@media (max-width: 360px)'));
 check('10. Font-size существующих leaderboard строк НЕ изменён (13px / 12px в media), новые классы шрифт не задают',
