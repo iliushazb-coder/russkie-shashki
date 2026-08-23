@@ -1112,6 +1112,22 @@ const COIN_REWARDS = {
 
 let currentCoinBalance = 0;
 
+// ===== ONLINE ELO (Этап 1) =====
+// Рейтинг существует ТОЛЬКО для online-партий человек-против-человека.
+// Бот в Elo не участвует вообще (см. getEloMatchContext).
+// Старый игрок без поля rating считается имеющим ELO_START_RATING —
+// массовой миграции базы сознательно нет, отсутствующее поле
+// доинициализируется лениво, при первой же рейтинговой партии.
+const ELO_START_RATING = 1000;
+const ELO_K = 32;
+// Сколько раз пытаться записать receipt одной партии. Отказ — ШТАТНАЯ
+// ситуация: из двух клиентов receipt успевает записать ровно один, второй
+// получает permission denied от Rules (!data.exists()). Отличить "соперник
+// уже записал" от настоящей ошибки нельзя: eloMatches сознательно закрыт на
+// чтение (.read: false), чтобы не публиковать связку id↔id↔время. Поэтому
+// ограничиваем число попыток вместо бесконечного повтора.
+const ELO_MAX_WRITE_ATTEMPTS = 3;
+
 // Уникальный ID текущей партии с ботом.
 // Для онлайн-игры ID будет строиться из roomCode + matchNumber.
 let currentBotMatchId = null;
@@ -2946,6 +2962,221 @@ let statsInFlightForRoom = null; // только для bot-ветки — см.
 // смешивать разные пространства идентификаторов нельзя.
 let statsInFlightOnlineMarker = null;
 
+// ===== ELO: чистая математика =====
+
+// Отсутствующий/битый рейтинг = ELO_START_RATING. Единая точка правды:
+// используется и при расчёте, и при отображении, и при сортировке топа,
+// чтобы старый игрок везде выглядел одинаково.
+function normalizeEloRating(value) {
+    if (typeof value !== "number" || !isFinite(value) || value < 0) return ELO_START_RATING;
+    return value;
+}
+
+// Стандартная формула Elo. result: "light" | "dark" | "draw".
+// Обе дельты считаются из рейтингов ДО партии, поэтому оба клиента,
+// имея один и тот же ratingsAtStart, получают идентичный результат.
+// clamp: рейтинг не может уйти ниже нуля, поэтому отрицательная дельта
+// ограничивается величиной самого рейтинга. clamp делается ЗДЕСЬ, до
+// отправки: Rules проверяют итог (>= 0) и отклонили бы весь update целиком.
+function computeEloDeltas(lightRating, darkRating, result) {
+    const rl = normalizeEloRating(lightRating);
+    const rd = normalizeEloRating(darkRating);
+    const expectedLight = 1 / (1 + Math.pow(10, (rd - rl) / 400));
+    const scoreLight = (result === "light") ? 1 : ((result === "dark") ? 0 : 0.5);
+    let lightDelta = Math.round(ELO_K * (scoreLight - expectedLight));
+    let darkDelta = Math.round(ELO_K * ((1 - scoreLight) - (1 - expectedLight)));
+    if (lightDelta < -rl) lightDelta = -rl;
+    if (darkDelta < -rd) darkDelta = -rd;
+    return { light: lightDelta, dark: darkDelta };
+}
+
+// Стабильный ID партии. roomCode сам по себе НЕ уникален во времени
+// (генератор может повторить код через месяцы) и не уникален внутри комнаты
+// (реванш переиспользует ту же комнату), поэтому в ключ входят оба
+// дополнения: createdAt комнаты (пишется один раз при создании и не меняется
+// ни при reconnect, ни при реванше) и matchNumber (растёт на каждый реванш).
+// Комнаты, созданные до появления createdAt, дают 0 — такие партии всё равно
+// различаются по roomCode+matchNumber, как это уже работает у монет.
+function buildEloMatchId(code, createdAt, matchNumber) {
+    const stamp = (typeof createdAt === "number" && isFinite(createdAt)) ? createdAt : 0;
+    const num = (typeof matchNumber === "number" && isFinite(matchNumber)) ? matchNumber : 0;
+    return "elo_" + code + "_" + stamp + "_" + num;
+}
+
+// Возвращает готовый контекст рейтинговой партии либо null, если партия
+// рейтинговой НЕ является. null здесь — это и есть переключатель на старый
+// (v171) путь записи wins/losses, поэтому условия строгие:
+//   - только online между двумя РАЗНЫМИ людьми (бот и зритель исключены);
+//   - я сам обязан быть одним из игроков;
+//   - в комнате обязан лежать ПОЛНЫЙ снимок ratingsAtStart обеих сторон.
+// Полный снимок появляется только если ОБА клиента работают на новом коде
+// (каждый пишет свою половину, см. ensureMyRatingSnapshot). Это же и есть
+// защита переходного периода: если соперник ещё на v171, снимок неполный,
+// оба клиента идут старым путём и никакого двойного учёта не возникает.
+function getEloMatchContext() {
+    if (!isOnlineGame || isBotGame || isSpectator) return null;
+    if (!roomCode || !myTelegramId) return null;
+    if (!currentState || !currentState.winner) return null;
+
+    const players = currentState.players;
+    if (!players || !players.light || !players.dark) return null;
+    const lightId = players.light.id;
+    const darkId = players.dark.id;
+    if (!lightId || !darkId || lightId === darkId) return null;
+    if (myTelegramId !== lightId && myTelegramId !== darkId) return null;
+
+    const snap = currentState.ratingsAtStart;
+    if (!snap || typeof snap.light !== "number" || typeof snap.dark !== "number") return null;
+
+    const result = (currentState.winner === "draw") ? "draw" : currentState.winner;
+    if (result !== "light" && result !== "dark" && result !== "draw") return null;
+
+    const lightRatingBefore = normalizeEloRating(snap.light);
+    const darkRatingBefore = normalizeEloRating(snap.dark);
+    const deltas = computeEloDeltas(lightRatingBefore, darkRatingBefore, result);
+
+    return {
+        matchId: buildEloMatchId(roomCode, currentState.createdAt, currentState.matchNumber),
+        lightId: lightId,
+        darkId: darkId,
+        lightName: players.light.name || "Игрок",
+        darkName: players.dark.name || "Игрок",
+        result: result,
+        lightRatingBefore: lightRatingBefore,
+        darkRatingBefore: darkRatingBefore,
+        lightDelta: deltas.light,
+        darkDelta: deltas.dark
+    };
+}
+
+// Ленивая миграция старой записи stats. Идемпотентна: НИКОГДА не сбрасывает
+// существующие wins/losses/name/rating/draws, только дописывает отсутствующие.
+// Обязательна ДО receipt-update по двум причинам:
+//   1. increment по отсутствующему rating начал бы от 0, а legacy-default 1000;
+//   2. Rules требуют, чтобы у stats/<id> были wins+losses+name — иначе весь
+//      multi-location update (вместе с receipt) был бы отклонён.
+// Инициализируются ОБА игрока, а не только я: соперник мог ни разу не
+// открыть новую версию, и без его записи отклонился бы весь update.
+function ensureStatsInitialized(id, name) {
+    return database.ref("stats/" + id).transaction(function (current) {
+        const result = current || {};
+        if (typeof result.wins !== "number") result.wins = 0;
+        if (typeof result.losses !== "number") result.losses = 0;
+        if (!result.name) result.name = name || "Игрок";
+        if (typeof result.rating !== "number") result.rating = ELO_START_RATING;
+        if (typeof result.draws !== "number") result.draws = 0;
+        return result;
+    });
+}
+
+// Сколько попыток записи receipt уже сделано, по matchId.
+let eloWriteAttempts = {};
+let eloWriteInFlightMatchId = null;
+
+// ЕДИНСТВЕННАЯ точка записи результата рейтинговой партии.
+// Один атомарный multi-location update: receipt + рейтинги обоих +
+// wins/losses (или draws обоим). Rules пропускают receipt только один раз
+// (!data.exists()), а отказ ЛЮБОГО пути отменяет весь update целиком —
+// поэтому ситуация "receipt отклонён, а wins всё равно прибавились"
+// невозможна: это гарантия самого RTDB, а не наша проверка на клиенте.
+// increment (а не абсолютная запись rating) нужен для параллельных партий:
+// два матча одного игрока, стартовавшие с одного снимка, сложат свои дельты
+// вместо того чтобы затереть результат друг друга.
+function recordEloMatchResult(ctx, marker) {
+    if (eloWriteInFlightMatchId === ctx.matchId) return;
+    const attempts = eloWriteAttempts[ctx.matchId] || 0;
+    if (attempts >= ELO_MAX_WRITE_ATTEMPTS) {
+        statsRecordedForRoom = marker;
+        statsInFlightOnlineMarker = null;
+        return;
+    }
+    eloWriteAttempts[ctx.matchId] = attempts + 1;
+    eloWriteInFlightMatchId = ctx.matchId;
+
+    Promise.all([
+        ensureStatsInitialized(ctx.lightId, ctx.lightName),
+        ensureStatsInitialized(ctx.darkId, ctx.darkName)
+    ]).then(function () {
+        // Вызываем increment ЧЕРЕЗ объект SDK, а не сохранённой ссылкой:
+        // отвязанная функция зависела бы от деталей реализации firebase-compat.
+        const inc = function (delta) { return firebase.database.ServerValue.increment(delta); };
+        const updates = {};
+        updates["eloMatches/" + ctx.matchId] = {
+            lightId: ctx.lightId,
+            darkId: ctx.darkId,
+            result: ctx.result,
+            lightRatingBefore: ctx.lightRatingBefore,
+            darkRatingBefore: ctx.darkRatingBefore,
+            lightDelta: ctx.lightDelta,
+            darkDelta: ctx.darkDelta,
+            createdAt: firebase.database.ServerValue.TIMESTAMP
+        };
+        updates["stats/" + ctx.lightId + "/rating"] = inc(ctx.lightDelta);
+        updates["stats/" + ctx.darkId + "/rating"] = inc(ctx.darkDelta);
+        if (ctx.result === "draw") {
+            updates["stats/" + ctx.lightId + "/draws"] = inc(1);
+            updates["stats/" + ctx.darkId + "/draws"] = inc(1);
+        } else if (ctx.result === "light") {
+            updates["stats/" + ctx.lightId + "/wins"] = inc(1);
+            updates["stats/" + ctx.darkId + "/losses"] = inc(1);
+        } else {
+            updates["stats/" + ctx.darkId + "/wins"] = inc(1);
+            updates["stats/" + ctx.lightId + "/losses"] = inc(1);
+        }
+        return database.ref().update(updates);
+    }).then(function () {
+        statsRecordedForRoom = marker;
+        statsInFlightOnlineMarker = null;
+        eloWriteInFlightMatchId = null;
+    }).catch(function (error) {
+        // Штатный случай: соперник успел записать receipt первым — Rules
+        // отклонили нашу попытку целиком, результат партии УЖЕ учтён им.
+        // Настоящую сетевую ошибку отличить нельзя (см. ELO_MAX_WRITE_ATTEMPTS),
+        // поэтому просто отпускаем маркеры: следующий render повторит попытку,
+        // но не более ELO_MAX_WRITE_ATTEMPTS раз за партию.
+        console.log("Elo receipt write not applied:", error && error.message);
+        statsInFlightOnlineMarker = null;
+        eloWriteInFlightMatchId = null;
+    });
+}
+
+// Записывает МОЮ половину снимка рейтингов в комнату. Свою половину пишет
+// каждый клиент сам — соперника угадывать нельзя, а дожидаться его рейтинга
+// на входе в комнату означало бы трогать invite-link/joinGroupRoom, которые
+// только что стабилизированы. Побочный (и намеренный) эффект: полный снимок
+// существует ТОЛЬКО когда обе стороны на новом коде — это и есть гейт
+// рейтинговой партии.
+// Пишем строго при активной партии без winner: после конца партии снимок
+// заморожен, поэтому оба клиента у финального состояния видят его одинаково.
+let ratingSnapshotWrittenFor = null;
+
+function ensureMyRatingSnapshot(room) {
+    if (!isOnlineGame || isBotGame || isSpectator) return;
+    if (!roomCode || !myTelegramId || !myColor) return;
+    if (!room || room.status !== "active" || room.winner) return;
+    if (!room.players || !room.players.light || !room.players.dark) return;
+    const mine = room.players[myColor];
+    if (!mine || mine.id !== myTelegramId) return;
+    if (room.ratingsAtStart && typeof room.ratingsAtStart[myColor] === "number") return;
+
+    const targetRoom = roomCode;
+    const targetColor = myColor;
+    const stamp = targetRoom + "_" + (room.matchNumber || 0) + "_" + targetColor;
+    if (ratingSnapshotWrittenFor === stamp) return; // запрос уже в полёте/выполнен
+    ratingSnapshotWrittenFor = stamp;
+
+    ensureStatsInitialized(myTelegramId, myTelegramName).then(function (result) {
+        const val = (result && result.snapshot) ? result.snapshot.val() : null;
+        const myRating = normalizeEloRating(val && val.rating);
+        return database.ref("rooms/" + targetRoom + "/ratingsAtStart/" + targetColor).set(myRating);
+    }).catch(function () {
+        // Не смогли — снимаем метку, чтобы следующий апдейт комнаты повторил.
+        // Если так и не запишем, снимок останется неполным и партия просто
+        // не будет рейтинговой (старый путь) — данные не пострадают.
+        if (ratingSnapshotWrittenFor === stamp) ratingSnapshotWrittenFor = null;
+    });
+}
+
 function recordGameResult(onlineMarker) {
     if (isSpectator) return; // Зритель никогда не участвует в статистике
     // В онлайн-игре НЕ пишем статистику по локальному оптимистичному
@@ -2961,6 +3192,20 @@ function recordGameResult(onlineMarker) {
     }
     if (!isOnlineGame && !isBotGame) return; // Если это не онлайн и не бот — выходим
     if (!currentState || !currentState.winner) return;
+
+    // ELO-ПАРТИЯ: если в комнате есть ПОЛНЫЙ снимок ratingsAtStart, значит оба
+    // клиента на новом коде и результат пишется ТОЛЬКО через атомарный receipt
+    // (рейтинг + wins/losses/draws одним update). Старый путь ниже при этом не
+    // выполняется — иначе те же wins прибавились бы дважды. Ничья тоже идёт
+    // сюда, поэтому проверка на "draw" стоит НИЖЕ этой ветки.
+    if (!isBotGame) {
+        const eloCtx = getEloMatchContext();
+        if (eloCtx) {
+            recordEloMatchResult(eloCtx, onlineMarker);
+            return;
+        }
+    }
+
     if (currentState.winner === "draw") return;
     if (!myTelegramId) return;
     // Лёгкий — тренировочный режим, полностью исключён из публичной статистики.
@@ -3087,6 +3332,12 @@ function forceResyncFromServer() {
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
             matchNumber: room.matchNumber || 0,
+            // ELO: снимок рейтингов на начало партии и стабильная метка
+            // создания комнаты. Оба поля только ЧИТАЮТСЯ здесь — снимок
+            // пишет ensureMyRatingSnapshot, createdAt ставится один раз при
+            // создании комнаты и не меняется ни при reconnect, ни при реванше.
+            ratingsAtStart: room.ratingsAtStart || null,
+            createdAt: (typeof room.createdAt === "number") ? room.createdAt : null,
             kingOnlyStreak: room.kingOnlyStreak || 0,
             noProgressStreak: room.noProgressStreak || 0,
             positionHistory: room.positionHistory || [],
@@ -3377,6 +3628,12 @@ function startOnlineGame() {
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
             matchNumber: room.matchNumber || 0,
+            // ELO: снимок рейтингов на начало партии и стабильная метка
+            // создания комнаты. Оба поля только ЧИТАЮТСЯ здесь — снимок
+            // пишет ensureMyRatingSnapshot, createdAt ставится один раз при
+            // создании комнаты и не меняется ни при reconnect, ни при реванше.
+            ratingsAtStart: room.ratingsAtStart || null,
+            createdAt: (typeof room.createdAt === "number") ? room.createdAt : null,
             kingOnlyStreak: room.kingOnlyStreak || 0,
             noProgressStreak: room.noProgressStreak || 0,
             positionHistory: room.positionHistory || [],
@@ -3456,6 +3713,15 @@ function startOnlineGame() {
             currentState.presence = newState.presence;
             updatePresenceOnly();
         }
+
+        // ELO: доложить свою половину снимка рейтингов, если её ещё нет.
+        // Вызывается ИМЕННО здесь, в конце слушателя, а не в startOnlineGame:
+        // предложивший реванш получает новую партию через listener и
+        // startOnlineGame() у него НЕ вызывается (см. комментарий в
+        // renderEndGameModal), иначе его половина снимка никогда бы не
+        // появилась. Здесь же myColor уже пересчитан после смены сторон.
+        // Функция сама идемпотентна и молча выходит, если писать не нужно.
+        ensureMyRatingSnapshot(room);
     });
 }
 
@@ -4660,6 +4926,11 @@ function createOnlineRoom() {
         turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
         winner: null,
         winReason: null,
+        // ELO: стабильная метка создания комнаты. Пишется РОВНО один раз,
+        // не трогается ни reconnect'ом, ни реваншем — входит в matchId,
+        // чтобы повторно выданный через месяцы тот же roomCode не столкнулся
+        // со старым receipt.
+        createdAt: firebase.database.ServerValue.TIMESTAMP,
         groupId: GROUP_ID
     };
 
@@ -4759,6 +5030,11 @@ function createRoomAndShowWaiting() {
         turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
         winner: null,
         winReason: null,
+        // ELO: стабильная метка создания комнаты. Пишется РОВНО один раз,
+        // не трогается ни reconnect'ом, ни реваншем — входит в matchId,
+        // чтобы повторно выданный через месяцы тот же roomCode не столкнулся
+        // со старым receipt.
+        createdAt: firebase.database.ServerValue.TIMESTAMP,
         groupId: GROUP_ID
     };
 
@@ -5163,6 +5439,12 @@ function performRematchReset() {
     updates["rematchProposal"] = null;
     updates["drawProposal"] = null;
     updates["reaction"] = null;
+
+    // ELO: реванш — это НОВАЯ партия (matchNumber выше, стороны меняются),
+    // поэтому снимок рейтингов обнуляется. Обе стороны запишут свои
+    // актуальные рейтинги заново через ensureMyRatingSnapshot, и матч
+    // получит новый matchId. Никогда не переиспользуем старый снимок.
+    updates["ratingsAtStart"] = null;
     
     const oldLight = (currentState.players && currentState.players.light) ? currentState.players.light : null;
     const oldDark = (currentState.players && currentState.players.dark) ? currentState.players.dark : null;
@@ -5648,19 +5930,21 @@ function renderRankAndName(rank, name) {
     return rankSpan;
 }
 
-// Компактная строка для рейтинга Online: место, имя, победы, поражения, игры.
-// Игры = wins + losses — ничьи в "stats" никогда не учитываются (см.
-// recordGameResult: winner === "draw" выходит раньше записи), поэтому это
-// действительно все ЗАСЧИТАННЫЕ партии, а не предположение.
-function renderOnlineStatsRow(rank, name, wins, losses) {
+// Компактная строка для рейтинга Online: место, имя, ⭐ рейтинг, победы,
+// поражения, игры. 🎮 = wins + losses + draws: с появлением Elo ничьи
+// записываются (stats/<id>/draws) и обязаны попадать в число сыгранных
+// партий. Отдельного поля games в Firebase нет — оно производное.
+// Старые записи без rating/draws отображаются как рейтинг 1000 и 0 ничьих.
+function renderOnlineStatsRow(rank, name, wins, losses, draws, rating) {
     const row = document.createElement("div");
     row.className = "stats-row";
     row.appendChild(renderRankAndName(rank, name));
 
     const infoSpan = document.createElement("span");
     infoSpan.className = "stats-info-block";
-    const total = wins + losses;
-    infoSpan.textContent = "🏆" + wins + " ❌" + losses + " 🎮" + total;
+    const drawsValue = (typeof draws === "number") ? draws : 0;
+    const total = wins + losses + drawsValue;
+    infoSpan.textContent = "⭐" + normalizeEloRating(rating) + " 🏆" + wins + " ❌" + losses + " 🎮" + total;
     row.appendChild(infoSpan);
     return row;
 }
@@ -5792,7 +6076,16 @@ function renderCoinRankRow(rank, name, coins) {
 //    математически идентичен — как отдельный шаг он ничего не решает;
 // 4) финальный детерминированный tie-break — по id, чтобы позиции
 //    никогда не "прыгали" случайно между обновлениями страницы.
+// Порядок online-топа: rating ↓ → wins ↓ → losses ↑ → id (стабильный tie-break).
+// Записи без rating (игрок ещё не сыграл ни одной рейтинговой партии после
+// перехода) считаются имеющими ELO_START_RATING — ровно как при расчёте Elo,
+// иначе старые игроки провалились бы в самый низ топа.
+// Bot-рейтинг использует тот же компаратор: там поля rating нет ни у кого,
+// все получают одинаковый дефолт, и сортировка остаётся прежней (wins/losses/id).
 function compareLeaderboardEntries(a, b) {
+    const aRating = normalizeEloRating(a.rating);
+    const bRating = normalizeEloRating(b.rating);
+    if (bRating !== aRating) return bRating - aRating;
     if (b.wins !== a.wins) return b.wins - a.wins;
     if (a.losses !== b.losses) return a.losses - b.losses;
     return String(a.id).localeCompare(String(b.id));
@@ -5819,21 +6112,44 @@ function openStatsModal() {
     // разумный компромисс для проекта такого масштаба: покрывает типичные
     // случаи массовых ничьих по wins, не читая всю базу целиком), сортируем
     // честным compareLeaderboardEntries и уже потом обрезаем до 10.
-    database.ref("stats").orderByChild("wins").limitToLast(50).once("value").then(function (snapshot) {
-        const data = snapshot.val();
+    // Кандидатов берём ДВУМЯ запросами и объединяем по id:
+    //   - orderByChild("rating") — актуальный топ по Elo (индекс есть в Rules);
+    //   - orderByChild("wins")   — страховка для старых игроков, у которых
+    //     поля rating ещё нет вовсе: в rating-запросе они отсортировались бы
+    //     как null и выпали из выборки, хотя по правилам считаются за 1000.
+    // Итог всё равно обрезается до 10 после честной сортировки, поэтому
+    // объединение не меняет порядок — только не даёт потерять кандидата.
+    Promise.all([
+        database.ref("stats").orderByChild("rating").limitToLast(50).once("value"),
+        database.ref("stats").orderByChild("wins").limitToLast(50).once("value")
+    ]).then(function (snapshots) {
+        const merged = {};
+        snapshots.forEach(function (snapshot) {
+            const data = snapshot.val();
+            if (!data) return;
+            Object.keys(data).forEach(function (key) { merged[key] = data[key]; });
+        });
         statsLeaderboard.innerHTML = "";
-        if (!data) {
+        const keys = Object.keys(merged);
+        if (keys.length === 0) {
             statsLeaderboard.textContent = t("stats_no_online_games");
             return;
         }
-        const entries = Object.keys(data).map(function (key) {
-            return { id: key, name: data[key].name || "Игрок", wins: data[key].wins || 0, losses: data[key].losses || 0 };
+        const entries = keys.map(function (key) {
+            return {
+                id: key,
+                name: merged[key].name || "Игрок",
+                wins: merged[key].wins || 0,
+                losses: merged[key].losses || 0,
+                draws: merged[key].draws || 0,
+                rating: merged[key].rating
+            };
         });
         entries.sort(compareLeaderboardEntries);
         const top = entries.slice(0, 10);
 
         top.forEach(function (entry, index) {
-            statsLeaderboard.appendChild(renderOnlineStatsRow(index + 1, entry.name, entry.wins, entry.losses));
+            statsLeaderboard.appendChild(renderOnlineStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.draws, entry.rating));
         });
     }).catch(function () {
         statsLeaderboard.textContent = t("stats_load_error");
@@ -6010,6 +6326,8 @@ function addToMatchmakingQueue() {
             turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
             winner: null,
             winReason: null,
+            // ELO: стабильная метка создания комнаты (см. buildEloMatchId).
+            createdAt: firebase.database.ServerValue.TIMESTAMP,
             groupId: GROUP_ID
         };
 
