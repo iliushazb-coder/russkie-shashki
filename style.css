@@ -803,7 +803,11 @@ h1 {
 }
 
 .stats-row {
-    display: flex;
+    /* Жёсткая геометрия 50/50: левая половина — место+имя, правая — статистика.
+       Граница невидима, но правая половина у ВСЕХ строк начинается строго в
+       одной точке, длина имени на неё не влияет. */
+    display: grid;
+    grid-template-columns: 50% 50%;
     align-items: center;
     padding: 7px 10px;
     border-radius: 10px;
@@ -829,53 +833,70 @@ h1 {
 .stats-name-block {
     display: flex;
     align-items: center;
-    flex: 1 1 auto;
-    min-width: 0; /* обязательно для ellipsis внутри flex-элемента */
+    min-width: 0; /* обязательно, чтобы grid-ячейка могла ужиматься под ellipsis */
     overflow: hidden;
     white-space: nowrap;
+}
+
+/* Само имя (ссылка или обычный текст) — гибкий элемент с ellipsis: длинный
+   ник аккуратно обрезается «…» внутри левой половины и не двигает статистику. */
+.stats-name-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
 }
 
 .stats-info-block {
-    flex: 0 0 auto;
-    white-space: nowrap;
-    margin-left: 10px;
-}
-
-/* Обёртка одной строки bot-рейтинга + её (изначально скрытая) панель
-   разбивки по уровням — раскрывается по клику на саму строку. */
-.stats-bot-entry {
-    display: flex;
-    flex-direction: column;
-}
-
-.stats-bylevel-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 6px 12px 6px 34px;
-    margin-top: 2px;
-    border-radius: 8px;
-    background: rgba(0,0,0,0.15);
-}
-
-.stats-bylevel-row {
-    display: flex;
+    display: grid;
     align-items: center;
-    justify-content: space-between;
-    font-size: 12px;
-    color: #f0d9ae;
-    padding: 2px 0;
-    gap: 8px;
+    min-width: 0;
+    white-space: nowrap;
 }
 
-.stats-bylevel-name {
-    flex: 1 1 auto;
+/* Внутри правых 50% — фиксированные равные колонки: каждый показатель в своей
+   колонке, поэтому ⭐/🏆/❌/🎮 всех строк стоят на одних вертикалях. */
+.stats-info-online {
+    grid-template-columns: repeat(4, 1fr);
+}
+
+.stats-info-bot {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.stats-stat {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-align: left;
+}
+
+/* Тело модалки подробностей против ботов: единая сетка на все строки
+   (Всего / Средний / Тяжёлый), чтобы 🏆/❌/🎮 были выровнены по колонкам. */
+.bot-details-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) 1fr 1fr 1fr;
+    align-items: center;
+    row-gap: 8px;
+    column-gap: 6px;
+    margin: 6px 0 14px;
+    font-size: 13px;
+    color: #f0d9ae;
+}
+
+.bot-details-level {
     text-align: left;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+}
+
+.bot-details-stat {
+    text-align: left;
+    white-space: nowrap;
 }
 
 /* Стиль для кликабельного имени игрока в статистике */
@@ -908,9 +929,6 @@ h1 {
     }
     .stats-leaderboard {
         gap: 4px;
-    }
-    .stats-bylevel-panel {
-        padding-left: 28px;
     }
 }
 
