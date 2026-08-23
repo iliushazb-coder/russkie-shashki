@@ -3310,7 +3310,17 @@ function startOnlineGame() {
         if (!room || !room.pieces) {
             // Если комната была удалена (соперник закрыл игру или отменил реванш)
             if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-            stopPresenceHeartbeat();
+            // Комнаты больше нет — отвязываемся от её presence ПОЛНОСТЬЮ.
+            // detachMyPresence() и останавливает heartbeat, и отменяет ранее
+            // взведённый onDisconnect (cancel() ничего не записывает, поэтому
+            // сам создать удалённый путь не может). Иначе старый onDisconnect
+            // при закрытии приложения воскрешал rooms/<code> в виде огрызка
+            // {presence:{...}}. Дополнительно сбрасываем isOnlineGame/roomCode,
+            // чтобы глобальный слушатель .info/connected при следующем
+            // реконнекте не записал presence в уже удалённую комнату.
+            detachMyPresence();
+            isOnlineGame = false;
+            roomCode = null;
             showScreen(menuScreen);
             loadActiveRooms();
             // Показываем сообщение, только если игра ещё не была завершена нормально, 
@@ -4508,8 +4518,8 @@ function loadActiveRooms() {
                 const STALE_ROOM_MS = 48 * 60 * 60 * 1000;
                 const isStaleRoom = room && room.turnStartedAt && (Date.now() - room.turnStartedAt > STALE_ROOM_MS);
                 
-                const lightPresence = room.presence && room.presence.light;
-                const darkPresence = room.presence && room.presence.dark;
+                const lightPresence = room && room.presence && room.presence.light;
+                const darkPresence = room && room.presence && room.presence.dark;
                 const isLightStale = !lightPresence || lightPresence.online === false || (Date.now() - (lightPresence.lastSeen || 0)) > STALE_MS;
                 const isDarkStale = !darkPresence || darkPresence.online === false || (Date.now() - (darkPresence.lastSeen || 0)) > STALE_MS;
                 const isSomeoneOffline = isLightStale || isDarkStale;
