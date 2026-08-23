@@ -336,6 +336,19 @@ function getCurrentRewardMatchId() {
         roomCode &&
         currentState
     ) {
+        // ЭТАП 2. Для РЕЙТИНГОВОЙ партии используем тот же стабильный
+        // идентификатор, что и Elo: elo_<roomCode>_<createdAt>_<matchNumber>.
+        // Он надёжнее старого, потому что содержит createdAt комнаты — повторно
+        // выданный через месяцы тот же roomCode не столкнётся со старой
+        // выплатой. getEloMatchContext() здесь только ЧИТАЕТСЯ, Elo-код не
+        // меняется, и ошибка экономики на него никак не влияет.
+        const eloCtx = getEloMatchContext();
+        if (eloCtx) return eloCtx.matchId;
+
+        // LEGACY-комната без Elo-контекста (партия началась до перехода либо
+        // соперник на старой версии) — прежний идентификатор. Пространства
+        // ключей не пересекаются ("online_..." против "elo_..."), поэтому
+        // партия в переходном окне не может быть оплачена дважды.
         const matchNumber =
             typeof currentState.matchNumber === "number"
                 ? currentState.matchNumber
@@ -416,25 +429,13 @@ function getCurrentCoinReward() {
     }
 
     if (isBotGame) {
-        // Для ничьей с ботом отдельной награды пока нет.
-        if (currentState.winner === "draw") {
-            return null;
-        }
-
-        const didIWin = currentState.winner === myColor;
-
-        // Лёгкий — тренировочный режим. Возвращаем null (не 0), чтобы
-        // recordCoinResultOnce() вообще не пытался создать запись награды —
-        // "reward === null" уже проверяется там как условие выхода.
-        if (botDifficulty === "easy") {
-            return null;
-        }
-        if (botDifficulty === "medium") {
-            return didIWin ? COIN_REWARDS.botMediumWin : COIN_REWARDS.botMediumLoss;
-        }
-        // Любое другое/неизвестное значение (включая "hard") безопасно
-        // трактуется как Сложный — тот же принцип, что и в getMaxDepthForDifficulty.
-        return didIWin ? COIN_REWARDS.botHardWin : COIN_REWARDS.botHardLoss;
+        // ЭТАП 2: игры против бота полностью вне экономики — ноль при любом
+        // результате и любой сложности. Возвращаем именно null (а не 0), чтобы
+        // recordCoinResultOnce() вообще не создавал запись награды: "reward ===
+        // null" уже проверяется там как условие выхода, поэтому в economy не
+        // появится ни лишнего rewardedMatches-ключа, ни лишнего запроса.
+        // Это же автоматически покрывает реванш с ботом.
+        return null;
     }
 
     if (isOnlineGame) {
@@ -1096,18 +1097,24 @@ let lastReactionTs = 0;
 const COIN_REWARDS = {
     welcome: 500,
     daily: 25,
-    onlineWin: 100,
-    onlineDraw: 25,
-    onlineLoss: -30,
-    // Лёгкий — тренировочный режим, монеты не начисляются вообще.
+    // ЭТАП 2. Монеты и рейтинг — ДВЕ РАЗНЫЕ системы: ⭐ Elo это сила игрока,
+    // 🪙 монеты это внутренняя валюта, в сортировке рейтинга не участвуют.
+    // За поражение монеты больше НЕ отнимаются: штраф провоцировал бросать
+    // проигранную партию, а это вредило и сопернику, и presence-логике.
+    onlineWin: 20,
+    onlineDraw: 10,
+    onlineLoss: 5,
+    // ЭТАП 2. Партии против бота полностью выведены из экономики: ноль при
+    // любом результате и любой сложности. Константы оставлены (а не удалены),
+    // чтобы не трогать ссылки на них; фактически bot-ветка getCurrentCoinReward
+    // возвращает null и запись в economy не создаётся вообще.
+    // Уже начисленные за старые игры с ботом монеты НЕ пересчитываются.
     botEasyWin: 0,
     botEasyLoss: 0,
-    botMediumWin: 10,
-    botMediumLoss: -10,
-    // Значения Сложного не изменились — это те же botWin/botLoss, что были
-    // единственными до появления уровней сложности.
-    botHardWin: 35,
-    botHardLoss: -10
+    botMediumWin: 0,
+    botMediumLoss: 0,
+    botHardWin: 0,
+    botHardLoss: 0
 };
 
 let currentCoinBalance = 0;
@@ -5960,7 +5967,7 @@ let statsExpandedBotEntry = null;
 // у старых партий его нет, и это нормально), строка кликабельна и по
 // нажатию раскрывает компактную панель разбивки. Easy никогда не пишет
 // byLevel и здесь не появляется.
-function renderBotStatsRow(rank, name, wins, losses, coins, byLevel) {
+function renderBotStatsRow(rank, name, wins, losses, byLevel) {
     const entry = document.createElement("div");
     entry.className = "stats-bot-entry";
 
@@ -5972,8 +5979,12 @@ function renderBotStatsRow(rank, name, wins, losses, coins, byLevel) {
     const infoSpan = document.createElement("span");
     infoSpan.className = "stats-info-block";
     const total = wins + losses;
-    const coinsValue = (typeof coins === "number") ? coins : 0;
-    infoSpan.textContent = "🏆" + wins + " ❌" + losses + " 🪙" + coinsValue + " 🎮" + total;
+    // ЭТАП 2: 🪙 здесь больше НЕ показываем. Раньше в этой строке стоял общий
+    // economy.balance, который выглядел как "монеты, заработанные против бота",
+    // хотя таковым не был — цифра вводила в заблуждение. Общий баланс остаётся
+    // там, где он и означает общий баланс: в капсуле интерфейса и в игровой
+    // панели рядом с именем игрока.
+    infoSpan.textContent = "🏆" + wins + " ❌" + losses + " 🎮" + total;
     row.appendChild(infoSpan);
     entry.appendChild(row);
 
@@ -6176,16 +6187,11 @@ function openStatsModal() {
             entries.sort(compareLeaderboardEntries);
             const top = entries.slice(0, 10);
 
-            Promise.all(top.map(function (entry) {
-                return database.ref("economy/" + entry.id + "/balance").once("value").then(function (coinSnap) {
-                    entry.coins = coinSnap.val();
-                }).catch(function () {
-                    entry.coins = null;
-                });
-            })).then(function () {
-                top.forEach(function (entry, index) {
-                    statsLeaderboardBot.appendChild(renderBotStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.coins, entry.byLevel));
-                });
+            // ЭТАП 2: чтения economy/<id>/balance здесь больше нет. Раньше на
+            // каждое открытие статистики уходило до 10 дополнительных запросов
+            // ради колонки 🪙, которую мы убрали как вводящую в заблуждение.
+            top.forEach(function (entry, index) {
+                statsLeaderboardBot.appendChild(renderBotStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.byLevel));
             });
         }).catch(function () {
             if (statsLeaderboardBot) statsLeaderboardBot.textContent = t("stats_load_error");
