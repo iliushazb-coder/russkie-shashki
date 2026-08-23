@@ -734,8 +734,10 @@ const S = (id) => DB.stats[id] || {};
     check('61. presence-фиксы v171 на месте (onDisconnect без lastSeen)',
         /onDisconnect\(\)\.update\(\{ online: false \}\);/.test(SRC) &&
         /roomCode && !document\.hidden/.test(SRC));
-    check('62. монеты Этапа 1 не тронуты (+100/+25/-30 на месте)',
-        /onlineWin: 100/.test(SRC) && /onlineDraw: 25/.test(SRC) && /onlineLoss: -30/.test(SRC));
+    check('62. Elo-код не зависит от номиналов монет (Этап 2: 20/10/5, бот 0)',
+        /onlineWin: 20/.test(SRC) && /onlineDraw: 10/.test(SRC) && /onlineLoss: 5/.test(SRC) &&
+        /botMediumWin: 0/.test(SRC) && /botHardWin: 0/.test(SRC) &&
+        !/COIN_REWARDS/.test(/function recordEloMatchResult[\s\S]*?\n}/.exec(SRC)[0]));
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);
