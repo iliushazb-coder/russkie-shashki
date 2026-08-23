@@ -706,12 +706,13 @@ const S = (id) => DB.stats[id] || {};
         botLike[0].id === 'q');
 
     const row = renderOnlineStatsRow(1, 'Player', 10, 4, 3, 1087);
-    const text = row.children[row.children.length - 1].textContent;
+    // UI 50/50: статистика теперь лежит в отдельных grid-ячейках — собираем их текст
+    const text = row.children[row.children.length - 1].children.map(function (c) { return c.textContent; }).join(' ');
     check('54. строка показывает ⭐ рейтинг', text.indexOf('⭐1087') !== -1, text);
     check('55. 🎮 = wins + losses + draws', text.indexOf('🎮17') !== -1, text);
 
     const legacyRow = renderOnlineStatsRow(2, 'Old', 6, 4, undefined, undefined);
-    const legacyText = legacyRow.children[legacyRow.children.length - 1].textContent;
+    const legacyText = legacyRow.children[legacyRow.children.length - 1].children.map(function (c) { return c.textContent; }).join(' ');
     check('56. старая запись без rating/draws отображается корректно',
         legacyText.indexOf('⭐1000') !== -1 && legacyText.indexOf('🎮10') !== -1, legacyText);
 
