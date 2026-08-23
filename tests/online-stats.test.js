@@ -44,6 +44,19 @@ global.document={createElement:function(){return {classList:{add:function(){}},s
 global.recordBotGameResultIdempotent=function(){ return Promise.resolve(); };
 global.recordGameResultBotCalls=0;
 
+// ---- ELO (Этап 1): recordGameResult теперь спрашивает getEloMatchContext(),
+// поэтому харнесс обязан загрузить и его. Константы берём ИЗ ИСХОДНИКА, а не
+// хардкодим: иначе тест разошёлся бы с продакшеном незаметно.
+// В этом файле у currentState никогда нет ratingsAtStart, поэтому контекст
+// всегда null и проверяется именно СТАРЫЙ путь (переходная совместимость).
+global.ELO_START_RATING = Number(/const ELO_START_RATING = (\d+);/.exec(src)[1]);
+global.ELO_K = Number(/const ELO_K = (\d+);/.exec(src)[1]);
+eval(ex('normalizeEloRating'));
+eval(ex('computeEloDeltas'));
+eval(ex('buildEloMatchId'));
+eval(ex('getEloMatchContext'));
+global.recordEloMatchResult = function () { throw new Error('Elo-путь не должен вызываться без ratingsAtStart'); };
+
 eval(ex('recordGameResult'));
 eval(ex('renderEndGameModal'));
 
