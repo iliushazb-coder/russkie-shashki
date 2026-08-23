@@ -365,7 +365,9 @@ const E = () => DB.economy.tg_1 || {};
     // =================================================================
     reset();
     const botRow = renderBotStatsRow(1, 'Player', 7, 3, { medium: { wins: 4, losses: 1 } });
-    const botText = botRow.children[0].children[1].textContent;
+    // UI 50/50: функция возвращает саму строку (без обёртки-аккордеона),
+    // статистика — в отдельных grid-ячейках правой половины
+    const botText = botRow.children[1].children.map(function (c) { return c.textContent; }).join(' ');
     check('34. строка bot-рейтинга НЕ содержит 🪙', botText.indexOf('🪙') === -1, botText);
     check('35. строка bot-рейтинга сохранила 🏆 ❌ 🎮',
         botText.indexOf('🏆7') !== -1 && botText.indexOf('❌3') !== -1 && botText.indexOf('🎮10') !== -1, botText);
