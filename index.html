@@ -7,7 +7,7 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
-    <link rel="stylesheet" href="style.css?v=10">
+    <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
     <h1 data-i18n="h1_title">Русские Шашки 🎮</h1>
@@ -194,6 +194,19 @@
         </div>
     </div>
 
+    <!-- Подробности игрока против ботов (открывается кликом по строке в
+         «С ботом»; стоит ПОСЛЕ stats-modal в DOM, поэтому при одинаковом
+         z-index overlay'ев рисуется поверх окна статистики). -->
+    <div id="bot-details-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p id="bot-details-title" class="end-game-text"></p>
+            <div id="bot-details-body" class="bot-details-body"></div>
+            <div class="modal-buttons">
+                <button id="btn-bot-details-close" class="menu-button" data-i18n="btn_close">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
     <div id="offline-opponent-modal" class="hidden modal-overlay">
         <div class="modal-box">
             <p class="end-game-text" data-i18n="modal_offline_opp">Соперник офлайн</p>
@@ -250,6 +263,6 @@
 
     <div id="credit-footer">Разработчик: <a href="https://t.me/yliusha" target="_blank" rel="noopener noreferrer">Telegram @yliusha</a></div>
 
-    <script src="script.js?v=173"></script>
+    <script src="script.js?v=174"></script>
 </body>
 </html>
