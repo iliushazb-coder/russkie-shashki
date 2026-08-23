@@ -15,7 +15,8 @@ const FILES = [
   ['G. ROOM LIFECYCLE CLEANUP', 'room-cleanup.test.js'],
   ['H. PRESENCE LIFECYCLE (A+B+C+C-1, v171)', 'presence-lifecycle.test.js'],
   ['I. ONLINE ELO RATING (Этап 1)', 'elo-rating.test.js'],
-  ['J. COINS / ECONOMY (Этап 2)', 'coins-economy.test.js']
+  ['J. COINS / ECONOMY (Этап 2)', 'coins-economy.test.js'],
+  ['K. LEADERBOARD UI 50/50 + BOT DETAILS', 'leaderboard-ui.test.js']
 ];
 
 let totalPass = 0, totalFail = 0, hardFail = false;
