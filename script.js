@@ -728,6 +728,7 @@ const translations = {
         stats_no_online_games: "Пока никто не сыграл ни одной партии",
         stats_load_error: "Не удалось загрузить рейтинг",
         stats_no_bot_games: "Пока никто не играл с ботом",
+        bot_details_total: "Всего",
         stats_games_word: "партий",
         lobby_waiting: "Ждут игру",
         lobby_active: "Идут игры",
@@ -847,6 +848,7 @@ const translations = {
         stats_no_online_games: "No online games have been played yet",
         stats_load_error: "Failed to load leaderboard",
         stats_no_bot_games: "No games against the bot have been played yet",
+        bot_details_total: "Total",
         stats_games_word: "games",
         lobby_waiting: "Waiting for a game",
         lobby_active: "Games in progress",
@@ -966,6 +968,7 @@ const translations = {
         stats_no_online_games: "Non è stata ancora giocata nessuna partita online",
         stats_load_error: "Impossibile caricare la classifica",
         stats_no_bot_games: "Non è stata ancora giocata nessuna partita contro il bot",
+        bot_details_total: "Totale",
         stats_games_word: "partite",
         lobby_waiting: "In attesa di una partita",
         lobby_active: "Partite in corso",
@@ -5929,10 +5932,16 @@ function renderRankAndName(rank, name) {
         link.textContent = displayName;
         link.target = "_blank";
         link.rel = "noopener noreferrer";
-        link.className = "stats-user-link";
+        link.className = "stats-user-link stats-name-text";
         rankSpan.appendChild(link);
     } else {
-        rankSpan.appendChild(document.createTextNode(displayName));
+        // Обычное имя тоже заворачиваем в span с ellipsis-классом: в сетке
+        // 50/50 имя обязано обрезаться внутри своей половины и НИКОГДА не
+        // выталкивать статистику правее её фиксированной границы.
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "stats-name-text";
+        nameSpan.textContent = displayName;
+        rankSpan.appendChild(nameSpan);
     }
     return rankSpan;
 }
@@ -5948,10 +5957,23 @@ function renderOnlineStatsRow(rank, name, wins, losses, draws, rating) {
     row.appendChild(renderRankAndName(rank, name));
 
     const infoSpan = document.createElement("span");
-    infoSpan.className = "stats-info-block";
+    infoSpan.className = "stats-info-block stats-info-online";
     const drawsValue = (typeof draws === "number") ? draws : 0;
     const total = wins + losses + drawsValue;
-    infoSpan.textContent = "⭐" + normalizeEloRating(rating) + " 🏆" + wins + " ❌" + losses + " 🎮" + total;
+    // Каждый показатель — отдельная grid-ячейка: так ⭐/🏆/❌/🎮 у всех
+    // строк начинаются строго на одних и тех же вертикалях, независимо от
+    // длины имени и количества цифр у соседей.
+    [
+        "⭐" + normalizeEloRating(rating),
+        "🏆" + wins,
+        "❌" + losses,
+        "🎮" + total
+    ].forEach(function (text) {
+        const cell = document.createElement("span");
+        cell.className = "stats-stat";
+        cell.textContent = text;
+        infoSpan.appendChild(cell);
+    });
     row.appendChild(infoSpan);
     return row;
 }
@@ -5959,7 +5981,6 @@ function renderOnlineStatsRow(rank, name, wins, losses, draws, rating) {
 // Отслеживаем единственную раскрытую строку bot-рейтинга за раз — это
 // сбрасывается заново при каждом openStatsModal() (см. ниже), так что
 // повторное открытие модалки всегда начинается со свёрнутого состояния.
-let statsExpandedBotEntry = null;
 
 // Компактная строка для рейтинга "С ботом": место, имя, победы, поражения,
 // монеты, игры — визуально на одном уровне с Online-строкой. Если у записи
@@ -5968,77 +5989,81 @@ let statsExpandedBotEntry = null;
 // нажатию раскрывает компактную панель разбивки. Easy никогда не пишет
 // byLevel и здесь не появляется.
 function renderBotStatsRow(rank, name, wins, losses, byLevel) {
-    const entry = document.createElement("div");
-    entry.className = "stats-bot-entry";
-
     const row = document.createElement("div");
-    row.className = "stats-row";
-    const nameNode = renderRankAndName(rank, name);
-    row.appendChild(nameNode);
+    row.className = "stats-row stats-row-expandable";
+    row.appendChild(renderRankAndName(rank, name));
 
     const infoSpan = document.createElement("span");
-    infoSpan.className = "stats-info-block";
+    infoSpan.className = "stats-info-block stats-info-bot";
     const total = wins + losses;
     // ЭТАП 2: 🪙 здесь больше НЕ показываем. Раньше в этой строке стоял общий
     // economy.balance, который выглядел как "монеты, заработанные против бота",
     // хотя таковым не был — цифра вводила в заблуждение. Общий баланс остаётся
     // там, где он и означает общий баланс: в капсуле интерфейса и в игровой
     // панели рядом с именем игрока.
-    infoSpan.textContent = "🏆" + wins + " ❌" + losses + " 🎮" + total;
+    // Каждый показатель — отдельная grid-ячейка (см. renderOnlineStatsRow):
+    // 🏆/❌/🎮 у всех строк стоят на одних и тех же вертикалях.
+    ["🏆" + wins, "❌" + losses, "🎮" + total].forEach(function (text) {
+        const cell = document.createElement("span");
+        cell.className = "stats-stat";
+        cell.textContent = text;
+        infoSpan.appendChild(cell);
+    });
     row.appendChild(infoSpan);
-    entry.appendChild(row);
 
-    const hasLevels = byLevel && (byLevel.medium || byLevel.hard);
+    // Основная таблица остаётся чистой — никаких уровней сложности в строке.
+    // ВСЯ строка кликабельна: по нажатию открывается модалка с разбивкой
+    // Всего / Средний / Тяжёлый. Открывается всегда, даже если byLevel у
+    // старого игрока отсутствует — тогда по уровням безопасно показываем 0.
+    row.addEventListener("click", function (event) {
+        if (event.target && event.target.classList && event.target.classList.contains("stats-user-link")) {
+            return; // клик именно по ссылке-нику — она сама ведёт в Telegram
+        }
+        openBotDetailsModal(name, wins, losses, byLevel);
+    });
 
-    if (hasLevels) {
-        row.classList.add("stats-row-expandable");
+    return row;
+}
 
-        const panel = document.createElement("div");
-        panel.className = "stats-bylevel-panel hidden";
+// Модалка подробностей игрока против ботов. Использует ТОЛЬКО данные, уже
+// загруженные вместе с leaderboard (entry.byLevel из statsBot) — ни одного
+// дополнительного Firebase-чтения здесь нет. Easy отдельно в statsBot не
+// хранится, поэтому и не показывается — только Всего / Средний / Тяжёлый.
+function openBotDetailsModal(name, wins, losses, byLevel) {
+    const modal = document.getElementById("bot-details-modal");
+    const title = document.getElementById("bot-details-title");
+    const body = document.getElementById("bot-details-body");
+    if (!modal || !title || !body) return;
 
-        const m = byLevel.medium || { wins: 0, losses: 0 };
-        const h = byLevel.hard || { wins: 0, losses: 0 };
-        [
-            { icon: t("btn_difficulty_medium"), w: m.wins || 0, l: m.losses || 0 },
-            { icon: t("btn_difficulty_hard"), w: h.wins || 0, l: h.losses || 0 }
-        ].forEach(function (lvl) {
-            const lvlRow = document.createElement("div");
-            lvlRow.className = "stats-bylevel-row";
-            const nameSpan = document.createElement("span");
-            nameSpan.className = "stats-bylevel-name";
-            nameSpan.textContent = lvl.icon;
-            const winsSpan = document.createElement("span");
-            winsSpan.textContent = "🏆 " + lvl.w;
-            const lossesSpan = document.createElement("span");
-            lossesSpan.textContent = "❌ " + lvl.l;
-            lvlRow.appendChild(nameSpan);
-            lvlRow.appendChild(winsSpan);
-            lvlRow.appendChild(lossesSpan);
-            panel.appendChild(lvlRow);
+    title.textContent = "🤖 " + name;
+    body.innerHTML = "";
+
+    const levels = byLevel || {};
+    const medium = levels.medium || {};
+    const hard = levels.hard || {};
+    // games = wins + losses для каждой строки, включая "Всего" (общие
+    // wins/losses берём из тех же данных leaderboard, что и сама таблица).
+    const rows = [
+        { label: t("bot_details_total"), w: wins || 0, l: losses || 0 },
+        { label: t("btn_difficulty_medium"), w: medium.wins || 0, l: medium.losses || 0 },
+        { label: t("btn_difficulty_hard"), w: hard.wins || 0, l: hard.losses || 0 }
+    ];
+
+    rows.forEach(function (lvl) {
+        const labelCell = document.createElement("span");
+        labelCell.className = "bot-details-level";
+        labelCell.textContent = lvl.label;
+        body.appendChild(labelCell);
+
+        ["🏆 " + lvl.w, "❌ " + lvl.l, "🎮 " + (lvl.w + lvl.l)].forEach(function (text) {
+            const cell = document.createElement("span");
+            cell.className = "bot-details-stat";
+            cell.textContent = text;
+            body.appendChild(cell);
         });
-        entry.appendChild(panel);
+    });
 
-        // Клик по ссылке-нику не должен раскрывать/сворачивать строку —
-        // ссылка обрабатывает переход в Telegram сама по себе.
-        row.addEventListener("click", function (event) {
-            if (event.target && event.target.classList && event.target.classList.contains("stats-user-link")) {
-                return; // клик именно по ссылке — не раскрываем/не сворачиваем
-            }
-            const isOpen = !panel.classList.contains("hidden");
-            if (statsExpandedBotEntry && statsExpandedBotEntry !== panel) {
-                statsExpandedBotEntry.classList.add("hidden");
-            }
-            if (isOpen) {
-                panel.classList.add("hidden");
-                statsExpandedBotEntry = null;
-            } else {
-                panel.classList.remove("hidden");
-                statsExpandedBotEntry = panel;
-            }
-        });
-    }
-
-    return entry;
+    modal.classList.remove("hidden");
 }
 
 // Отдельная строка для рейтинга "Заработано" — переиспользует те же
@@ -6107,10 +6132,6 @@ function openStatsModal() {
 
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
-
-    // Новое открытие модалки всегда начинается со свёрнутых bot-строк —
-    // старая ссылка на DOM-узел из прошлого открытия больше не актуальна.
-    statsExpandedBotEntry = null;
 
     statsModal.classList.remove("hidden");
 
@@ -6234,6 +6255,14 @@ if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
 if (btnStatsClose) {
     btnStatsClose.addEventListener("click", function () {
         statsModal.classList.add("hidden");
+    });
+}
+
+const btnBotDetailsClose = document.getElementById("btn-bot-details-close");
+if (btnBotDetailsClose) {
+    btnBotDetailsClose.addEventListener("click", function () {
+        const modal = document.getElementById("bot-details-modal");
+        if (modal) modal.classList.add("hidden");
     });
 }
 
