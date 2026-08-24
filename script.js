@@ -119,31 +119,14 @@ connectedRef.on("value", function(snap) {
         // покрыто тремя путями: visibilitychange (ветка visible пишет
         // online:true мгновенно), heartbeat (≤4с) и setupPresence при
         // полном перезапуске приложения.
-        // ФАЗА A: условие !document.hidden УБРАНО сознательно. Раньше свёрнутое
-        // приложение после реконнекта не перевзводило серверный обработчик
-        // отключения — и ВТОРОЙ разрыв уже не фиксировался бы вовсе. Теперь
-        // обработчик перевзводится всегда, а факт свёрнутости честно
-        // передаётся полем away, а не подменой online.
-        // Порядок сохранён (v178): сначала подтверждённая регистрация
-        // обработчика, только потом объявление себя на связи.
-        if (myPresenceRef && isOnlineGame && !isSpectator && roomCode) {
+        if (myPresenceRef && isOnlineGame && !isSpectator && roomCode && !document.hidden) {
+            // Promise этой записи разрешается ТОЛЬКО после подтверждения
+            // сервером — это и есть доказанный круговой обмен.
             const gen = connectionGeneration;
             const lgen = listenerGeneration;
-            const ref = myPresenceRef;
-            ref.onDisconnect().update({
-                online: false,
-                offlineSince: firebase.database.ServerValue.TIMESTAMP
-            }).then(function () {
-                // Promise этой записи разрешается ТОЛЬКО после подтверждения
-                // сервером — это и есть доказанный круговой обмен.
-                return ref.update({
-                    online: true,
-                    away: !!document.hidden,
-                    offlineSince: null,
-                    lastSeen: firebase.database.ServerValue.TIMESTAMP
-                });
-            }).then(function () { noteServerAck(gen, lgen); })
-              .catch(function () {});
+            myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+                .then(function () { noteServerAck(gen, lgen); })
+                .catch(function () {});
         }
     }
 });
@@ -753,7 +736,6 @@ const translations = {
         status_left: "осталось",
         sec: "с",
         status_connecting: "подключение...",
-        status_away: "отошёл",
         status_game_interrupted: "Игра прервана",
         sync_sending_move: "Отправляю ход…",
         sync_no_connection: "Нет связи. Подождите восстановления соединения",
@@ -879,7 +861,6 @@ const translations = {
         status_left: "left",
         sec: "s",
         status_connecting: "connecting...",
-        status_away: "away",
         status_game_interrupted: "Game interrupted",
         sync_sending_move: "Sending your move…",
         sync_no_connection: "No connection. Please wait until it is restored",
@@ -1005,7 +986,6 @@ const translations = {
         status_left: "rimasti",
         sec: "s",
         status_connecting: "connessione...",
-        status_away: "assente",
         status_game_interrupted: "Partita interrotta",
         sync_sending_move: "Invio la mossa…",
         sync_no_connection: "Nessuna connessione. Attendi il ripristino",
@@ -2208,20 +2188,6 @@ function statusForColor(color) {
     // сознательно не установлен: presence.online там навсегда останется
     // true, даже когда владелец давно закрыл Mini App — двигается только
     // lastSeen (последний heartbeat), пока он писался.
-    // ФАЗА A: ПРИОРИТЕТ СТАТУСОВ.
-    // Настоящий разрыв (online === false) важнее всего — его пишет только
-    // сервер. Если же соединение живо, а игрок лишь свернул приложение
-    // (away === true), это НЕ офлайн: показываем нейтральное "Отошёл" и
-    // никакого отсчёта отсутствия не ведём. Возраст lastSeen при away
-    // сознательно игнорируется: в фоне heartbeat останавливается системой, и
-    // его молчание доказательством ухода не является.
-    if (presence.online !== false && presence.away === true) {
-        return { text: ratingPrefix + t("status_away"), cls: "status-neutral" };
-    }
-
-    // Возраст lastSeen остаётся источником истины только там, где away не
-    // выставлен: bot-зеркало (там нет onDisconnect вовсе) и клиенты старых
-    // версий, которые ещё пишут online:false при сворачивании.
     const isStale = presence.online === false || elapsed > PRESENCE_STALE_WARNING_MS;
 
     if (elapsed > RECONNECT_GRACE_MS) {
@@ -2363,9 +2329,6 @@ function getOpponentAbsenceMs(oppColor) {
     if (!currentState || !currentState.presence) return null;
     const presence = currentState.presence[oppColor];
     if (!presence || typeof presence.lastSeen !== "number") return null;
-    // ФАЗА A: свернувший приложение соперник НЕ отсутствует — соединение с
-    // сервером живо. Отсчёт для него не ведётся вовсе.
-    if (presence.online !== false && presence.away === true) return null;
     return getEstimatedServerNow() - presence.lastSeen;
 }
 
@@ -2420,22 +2383,16 @@ function handleVisibilityChange() {
     if (!myPresenceRef) return;
 
     if (document.hidden) {
-        // ФАЗА A: сворачивание Mini App — это НЕ разрыв связи.
-        // Раньше здесь писалось online:false, из-за чего свёрнутое на минуту
-        // приложение было неотличимо от настоящего ухода. Теперь клиент
-        // сообщает лишь "отошёл": соединение с сервером живо, соперник видит
-        // нейтральный статус и никакого отсчёта отсутствия не идёт.
-        // ЕДИНСТВЕННЫЙ источник настоящего offline — серверный onDisconnect.
+        // Mini App ушёл в фон: соперник сразу видит Offline
+        // и начинает отсчёт 60 секунд на возвращение.
         myPresenceRef.update({
-            away: true,
+            online: false,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     } else {
-        // Игрок вернулся в игру — снова "в игре".
+        // Игрок вернулся в игру — сразу снова Online.
         myPresenceRef.update({
             online: true,
-            away: false,
-            offlineSince: null,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     }
@@ -2465,34 +2422,15 @@ function setupPresence() {
     // «в игре». onDisconnect — одноразовая серверная операция, поэтому её
     // нужно взводить заново при КАЖДОЙ настройке присутствия (в том числе
     // после каждого реконнекта, когда setupPresence вызывается снова).
-    // ФАЗА A: серверный обработчик — ЕДИНСТВЕННОЕ доказательство настоящего
-    // разрыва. offlineSince ставится СЕРВЕРНЫМ временем в момент, когда сервер
-    // фактически заметил обрыв: именно от него будущая логика технического
-    // поражения будет отсчитывать 60 секунд. lastSeen сознательно не трогаем
-    // (см. v171). away намеренно НЕ сбрасываем: при online:false он всё равно
-    // не влияет — настоящий разрыв важнее последнего состояния интерфейса.
-    presenceRef.onDisconnect().update({
-            online: false,
-            offlineSince: firebase.database.ServerValue.TIMESTAMP
-        })
+    presenceRef.onDisconnect().update({ online: false })
         .then(function () {
-            return presenceRef.set({
-                online: true,
-                away: !!document.hidden,
-                offlineSince: null,
-                lastSeen: firebase.database.ServerValue.TIMESTAMP
-            });
+            return presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
         })
         .then(function () { noteServerAck(setupGen, setupListenerGen); })
         .catch(function () {
             // Регистрация не удалась (нет связи) — всё равно пробуем объявить
             // себя online: запись уйдёт из очереди при восстановлении сети.
-            presenceRef.set({
-                online: true,
-                away: !!document.hidden,
-                offlineSince: null,
-                lastSeen: firebase.database.ServerValue.TIMESTAMP
-            })
+            presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
                 .then(function () { noteServerAck(setupGen, setupListenerGen); })
                 .catch(function () {});
         });
@@ -7864,12 +7802,7 @@ document.addEventListener('DOMContentLoaded', function() {
 function isRoomPlayerStale(room, color) {
     const p = room && room.presence && room.presence[color];
     if (!p) return true;
-    // ФАЗА A: игрок, который просто свернул Telegram, НЕ считается покинувшим
-    // комнату — его соединение с сервером живо. Иначе любой посторонний
-    // клиент с открытым лобби мог бы удалить живую партию только потому, что
-    // один из игроков на минуту вышел в другое приложение.
-    if (p.online !== false && p.away === true) return false;
-    return (getEstimatedServerNow() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
+    return (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
 }
 
 // --- Сигнатура ТОЛЬКО тех полей, что реально влияют на отображение строки

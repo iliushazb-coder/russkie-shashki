@@ -397,8 +397,8 @@ const E = () => DB.economy.tg_1 || {};
     check('41. Elo-ветка recordGameResult не тронута',
         /const eloCtx = getEloMatchContext\(\);\s*\n\s*if \(eloCtx\) \{\s*\n\s*recordEloMatchResult\(eloCtx, onlineMarker\);/.test(SRC));
     check('42. presence-фиксы v171 по-прежнему на месте',
-        /onDisconnect\(\)\.update\(\{[\s\S]{0,80}online: false/.test(SRC) &&
-        /away: !!document\.hidden/.test(SRC));
+        /onDisconnect\(\)\.update\(\{ online: false \}\)/.test(SRC) &&
+        /roomCode && !document\.hidden/.test(SRC));
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);

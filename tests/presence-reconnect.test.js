@@ -22,7 +22,6 @@ try {
     global.RECONNECT_GRACE_MS = Number(/const RECONNECT_GRACE_MS = (\d+);/.exec(SRC)[1]);
     global.CONNECTION_SETTLE_MS = Number(/const CONNECTION_SETTLE_MS = (\d+);/.exec(SRC)[1]);
     eval(extractFunc('statusForColor'));
-    eval(extractFunc('isRoomPlayerStale'));
     eval(extractFunc('getOpponentAbsenceMs'));
     eval(extractFunc('canTrustAbsenceForCleanup'));
     eval(extractFunc('checkOpponentAbsence'));
@@ -214,7 +213,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('5.4 повторный вызов не удаляет комнату дважды', cleanupCalls === 0);
 
     check('5.5 presence-фиксы v171 на месте',
-        /onDisconnect\(\)\.update\(\{[\s\S]{0,80}online: false/.test(SRC));
+        /onDisconnect\(\)\.update\(\{ online: false \}\)/.test(SRC));
     check('5.6 UID-фикс результата не тронут',
         /function resolveMyOnlineResult\(state\) \{/.test(SRC));
     check('5.7 sync-индикатор хода не тронут',
@@ -463,14 +462,14 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('13.4 onDisconnect взводится ДО объявления online', (function () {
         const m = /function setupPresence[\s\S]*?\n}/.exec(SRC);
         if (!m) return false;
-        const od = m[0].indexOf('presenceRef.onDisconnect().update({');
-        const setOnline = m[0].indexOf('return presenceRef.set({');
+        const od = m[0].indexOf('presenceRef.onDisconnect().update({ online: false })');
+        const setOnline = m[0].indexOf('return presenceRef.set({ online: true');
         return od !== -1 && setOnline !== -1 && od < setOnline;
     })());
     check('13.5 online объявляется только после успешной регистрации onDisconnect',
-        /presenceRef\.onDisconnect\(\)\.update\(\{[\s\S]{0,200}\}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
+        /presenceRef\.onDisconnect\(\)\.update\(\{ online: false \}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
     check('13.6 при неудачной регистрации online всё равно объявляется (очередь)',
-        /\.catch\(function \(\) \{[\s\S]{0,400}presenceRef\.set\(\{/.test(SRC));
+        /\.catch\(function \(\) \{[\s\S]{0,400}presenceRef\.set\(\{ online: true/.test(SRC));
     check('13.7 setupPresence вызывается заново после реконнекта -> onDisconnect перевзводится',
         /myPresenceRef\.onDisconnect\(\)\.cancel\(\);/.test(SRC));
 
@@ -580,72 +579,6 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         /Локальный выход из партии этим guard'ом НЕ затрагивается/.test(SRC));
     check('15.7 отмечено как временная инварианта Фазы 1 (снимется в Фазе 2)',
         (SRC.match(/ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1/g) || []).length === 3);
-
-
-    // ===============================================================
-    console.log('16. ФАЗА A: BACKGROUND ≠ DISCONNECT');
-    // ===============================================================
-    check('16.1 сворачивание пишет away, а НЕ online:false', (function () {
-        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
-        if (!m) return false;
-        const hidden = m[0].slice(0, m[0].indexOf('} else'));
-        return /away: true/.test(hidden) && !/online: false/.test(hidden);
-    })());
-    check('16.2 возвращение сбрасывает away и offlineSince', (function () {
-        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
-        const back = m[0].slice(m[0].indexOf('} else'));
-        return /away: false/.test(back) && /offlineSince: null/.test(back) && /online: true/.test(back);
-    })());
-    check('16.3 offlineSince ставит ТОЛЬКО серверный onDisconnect',
-        /onDisconnect\(\)\.update\(\{[\s\S]{0,200}offlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(SRC) &&
-        !/offlineSince: Date\.now\(\)/.test(SRC));
-    check('16.4 реконнект перевзводит onDisconnect ДАЖЕ если приложение свёрнуто',
-        !/isSpectator && roomCode && !document\.hidden/.test(SRC) &&
-        /ref\.onDisconnect\(\)\.update\(\{[\s\S]{0,200}\}\)\.then/.test(SRC));
-
-    // статус: away не равен offline
-    reset();
-    global.currentState = stateWithOpponentSilentFor(300);
-    global.currentState.presence.dark = { online: true, away: true, lastSeen: Date.now() - 300000 };
-    check('16.5 свернувший соперник -> «отошёл», НЕ офлайн',
-        statusForColor('dark').cls === 'status-neutral', statusForColor('dark').cls);
-    check('16.6 старый lastSeen при away игнорируется полностью',
-        getOpponentAbsenceMs('dark') === null);
-    checkOpponentAbsence();
-    check('16.7 никакого отсчёта и никакой очистки', cleanupCalls === 0);
-
-    // настоящий разрыв по-прежнему офлайн
-    global.currentState.presence.dark = { online: false, away: true, lastSeen: Date.now() - 75000 };
-    check('16.8 настоящий разрыв важнее away -> офлайн',
-        statusForColor('dark').cls === 'status-left', statusForColor('dark').cls);
-    checkOpponentAbsence();
-    check('16.9 и очистка при настоящем уходе >60с работает', cleanupCalls === 1);
-
-    // «в игре» без away
-    reset();
-    global.currentState = stateWithOpponentSilentFor(2);
-    global.currentState.presence.dark = { online: true, lastSeen: Date.now() - 2000 };
-    check('16.10 обычный активный соперник -> «в игре»',
-        statusForColor('dark').cls === 'status-online');
-
-    // лобби не считает свернувшего ушедшим
-    check('16.11 лобби: away-игрок не считается покинувшим комнату', (function () {
-        const room = { presence: { light: { online: true, away: true, lastSeen: Date.now() - 300000 } } };
-        return isRoomPlayerStale(room, 'light') === false;
-    })());
-    check('16.12 лобби: настоящий разрыв >60с по-прежнему stale', (function () {
-        const room = { presence: { light: { online: false, lastSeen: Date.now() - 75000 } } };
-        return isRoomPlayerStale(room, 'light') === true;
-    })());
-    check('16.13 лобби перешло на серверное время', (function () {
-        const m = /function isRoomPlayerStale[\s\S]*?\n}/.exec(SRC);
-        return m && /getEstimatedServerNow\(\)/.test(m[0]) && !/Date\.now\(\)/.test(m[0]);
-    })());
-    check('16.14 переводы «отошёл» есть во всех трёх языках',
-        /status_away: "отошёл"/.test(SRC) && /status_away: "away"/.test(SRC) &&
-        /status_away: "assente"/.test(SRC));
-    check('16.15 запрет офлайн-хода из v178 не тронут',
-        /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC));
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);

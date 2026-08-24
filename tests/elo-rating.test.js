@@ -734,8 +734,8 @@ const S = (id) => DB.stats[id] || {};
     check('60. sweep-интервал лобби не тронут Этапом 1 (8000 мс)',
         /LOBBY_STALE_CHECK_INTERVAL_MS = 8000/.test(SRC));
     check('61. presence-фиксы v171 на месте (onDisconnect без lastSeen)',
-        /onDisconnect\(\)\.update\(\{[\s\S]{0,80}online: false/.test(SRC) &&
-        /away: !!document\.hidden/.test(SRC));
+        /onDisconnect\(\)\.update\(\{ online: false \}\)/.test(SRC) &&
+        /roomCode && !document\.hidden/.test(SRC));
     check('62. Elo-код не зависит от номиналов монет (Этап 2: 20/10/5, бот 0)',
         /onlineWin: 20/.test(SRC) && /onlineDraw: 10/.test(SRC) && /onlineLoss: 5/.test(SRC) &&
         /botMediumWin: 0/.test(SRC) && /botHardWin: 0/.test(SRC) &&
