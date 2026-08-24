@@ -93,6 +93,7 @@ try {
     eval(extractFunc('buildEloMatchId'));
     eval(extractFunc('getEloMatchContext'));
     eval(extractFunc('awardCoinsForMatch'));
+    eval(extractFunc('resolveMyOnlineResult'));
     eval(extractFunc('getCurrentCoinReward'));
     eval(extractFunc('getCurrentRewardMatchId'));
     eval(extractFunc('recordCoinResultOnce'));
