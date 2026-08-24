@@ -27,8 +27,16 @@ const database = firebase.database();
 // Когда сеть возвращается, мы мгновенно бьём пульс присутствия (online: true),
 // не дожидаясь ближайшего интервала (4 секунды). Это сбрасывает таймер 
 // "checkOpponentAbsence" у соперника и не даёт комнате удалиться.
+// Текущее состояние Firebase-соединения. Обновляется существующей подпиской
+// .info/connected — НОВОГО трафика не добавляет.
+// ВАЖНО: false означает "точно есть проблема связи", но true НЕ означает, что
+// отправленный ход уже подтверждён сервером. Подтверждение определяется только
+// реальным серверным состоянием (promise транзакции / listener комнаты).
+let isFirebaseConnected = true;
+
 const connectedRef = database.ref(".info/connected");
 connectedRef.on("value", function(snap) {
+    isFirebaseConnected = (snap.val() === true);
     if (snap.val() === true) {
         // Дополнительная защита: оживляем presence, только если человек
         // ДЕЙСТВИТЕЛЬНО сейчас участвует в какой-то партии как игрок —
@@ -652,6 +660,11 @@ const translations = {
         sec: "с",
         status_connecting: "подключение...",
         status_game_interrupted: "Игра прервана",
+        sync_sending_move: "Отправляю ход…",
+        sync_no_connection: "Нет связи. Ход отправится, когда она вернётся",
+        sync_checking: "Проверяю соединение…",
+        sync_failed: "Не удалось обновить игру",
+        btn_sync_retry: "Повторить",
         draw_agreed: "🤝 Ничья!\nОба игрока согласились закончить партию.",
         draw_manual_header: "🤝 НИЧЬЯ",
         draw_manual_text: "Оба игрока согласились на ничью.",
@@ -772,6 +785,11 @@ const translations = {
         sec: "s",
         status_connecting: "connecting...",
         status_game_interrupted: "Game interrupted",
+        sync_sending_move: "Sending your move…",
+        sync_no_connection: "No connection. Your move will be sent once it is back",
+        sync_checking: "Checking the connection…",
+        sync_failed: "Could not refresh the game",
+        btn_sync_retry: "Retry",
         draw_agreed: "🤝 Draw!\nBoth players agreed to end the game.",
         draw_manual_header: "🤝 DRAW",
         draw_manual_text: "Both players agreed to a draw.",
@@ -892,6 +910,11 @@ const translations = {
         sec: "s",
         status_connecting: "connessione...",
         status_game_interrupted: "Partita interrotta",
+        sync_sending_move: "Invio la mossa…",
+        sync_no_connection: "Nessuna connessione. La mossa partirà al ritorno",
+        sync_checking: "Controllo la connessione…",
+        sync_failed: "Impossibile aggiornare la partita",
+        btn_sync_retry: "Riprova",
         draw_agreed: "🤝 Pareggio!\nEntrambi i giocatori hanno concordato di terminare.",
         draw_manual_header: "🤝 PATTA",
         draw_manual_text: "Entrambi i giocatori hanno accettato la patta.",
@@ -1944,6 +1967,29 @@ let selectedFrom = null;
 let flipped = false;
 let lastSeenMoveCount = -1;
 let isLocalStateOptimistic = false; // Флаг: сделали ли мы локальный ход, который ещё не подтверждён сервером
+
+// ===== ONLINE MOVE SYNC =====
+// Момент отправки online-хода, ожидающего ответа сервера (null — ожидания нет).
+// Живёт РОВНО столько же, сколько promise транзакции хода: ставится рядом с
+// отправкой, снимается в её .then и .catch. Сознательно не заводим набор
+// setTimeout с clearTimeout в performMove/reconnect/rematch/exit — весь UI
+// выводится из этого одного значения существующим секундным тиком.
+let pendingMoveStartedAt = null;
+// Идёт ли сейчас восстановление (защита от параллельных запусков).
+let syncRecoveryInFlight = false;
+// Последнее восстановление не удалось — спокойное сообщение и кнопка «Повторить».
+let syncRecoveryFailed = false;
+// Через сколько молчания сервера считать ход застрявшим. Обоснование:
+// heartbeat presence ходит раз в 4 секунды, а Firebase считает соединение
+// потерянным примерно через 30 секунд. Порог должен быть заметно больше трёх
+// heartbeat-циклов (иначе ложные срабатывания на медленной мобильной сети)
+// и заметно меньше 30 секунд (иначе бесполезен).
+const MOVE_CONFIRM_STALL_MS = 12000;
+
+// Ход отправлен и ещё не получил ответа сервера.
+function isMoveAwaitingConfirmation() {
+    return isOnlineGame && !isSpectator && pendingMoveStartedAt !== null;
+}
 let endGameShownForRoom = null;
 let pieceElements = {};
 let lastRenderedSignature = null;
@@ -2828,6 +2874,17 @@ function updateTimerDisplay() {
         turnTimerDiv.textContent = "";
         return;
     }
+    // Статус синхронизации имеет приоритет над таймером хода и живёт в том же
+    // элементе: у #turn-timer уже есть min-height, поэтому доска НЕ прыгает,
+    // новых элементов и правок CSS не требуется.
+    const sync = computeSyncStatus();
+    if (sync) {
+        turnTimerDiv.textContent = t(sync.key);
+        renderSyncRetryButton(sync.showRetry);
+        return;
+    }
+    renderSyncRetryButton(false);
+
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) {
         turnTimerDiv.textContent = "";
         return;
@@ -3357,6 +3414,14 @@ function handleClick(row, col) {
     if (isSpectator) return; 
 
     if (isOnlineGame && state.turn !== myColor) return;
+    // Пока отправленный ход не получил ответа сервера, второй ход запрещён.
+    // Без этого возникало бы окно: восстановление откатило доску к серверному
+    // состоянию, игрок сходил заново, а следом «оживала» первая транзакция.
+    // Порчи данных и так не будет (attemptMove внутри транзакции заново сверяет
+    // ход с СЕРВЕРНЫМИ turn и mustContinueFrom и отменяется), но игрок увидел бы
+    // необъяснимый прыжок доски. Проще и честнее не пускать второй ход вовсе:
+    // ожидание всё равно снимается ответом сервера или восстановлением.
+    if (isOnlineGame && isMoveAwaitingConfirmation()) return;
     if (isBotGame && state.turn === botColor) return; 
 
     const selectableColor = isOnlineGame ? myColor : (isBotGame ? myColor : state.turn);
@@ -3389,9 +3454,13 @@ function handleClick(row, col) {
 
 let pendingSyncChain = Promise.resolve();
 
-function forceResyncFromServer() {
-    if (!roomCode) return;
-    database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
+// silent === true: вызов из автоматического восстановления. Тогда ошибка НЕ
+// показывает модалку (спокойный статус под доской вместо испуга), а
+// пробрасывается наверх, чтобы вызывающий показал «Повторить».
+// Поведение существующих вызовов без аргумента не меняется.
+function forceResyncFromServer(silent) {
+    if (!roomCode) return Promise.resolve();
+    return database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
         const room = snapshot.val();
         if (!room || !room.pieces) return;
         const newState = {
@@ -3459,6 +3528,7 @@ function forceResyncFromServer() {
         renderBoard();
     }).catch(function(err) {
         console.error("Resync error", err);
+        if (silent) throw err;
         showInfoModal(t("err_resync_failed"), false);
     });
 }
@@ -3507,6 +3577,10 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         lastSeenMoveCount = currentState.moveCount;
         lastRenderedSignature = computeGameSignature(currentState);
         isLocalStateOptimistic = true; // Ставим флаг, что мы ушли в оптимистичное состояние
+        // Ход ушёл на сервер и ждёт ответа: с этой секунды показываем
+        // «Отправляю ход…» вместо молчащей доски.
+        pendingMoveStartedAt = Date.now();
+        syncRecoveryFailed = false;
 
         playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
         renderBoard();
@@ -3571,12 +3645,16 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 }
                 return newRoom;
             }).then(function(result) {
+                // Ответ сервера получен (принят или отклонён) — ожидание
+                // закончилось в любом случае, доска снова доступна.
+                pendingMoveStartedAt = null;
                 if (!result.committed) {
                     console.log("Move rejected by server, resyncing...");
                     forceResyncFromServer();
                 }
             });
         }).catch(function () {
+            pendingMoveStartedAt = null;
             forceResyncFromServer();
         });
     } else {
@@ -3645,6 +3723,11 @@ function startOnlineGame() {
     lastRenderedSignature = null;
     boardBuilt = false;
     pendingSyncChain = Promise.resolve();
+    // Ожидание хода и состояние восстановления не должны протекать
+    // в новую партию/реванш.
+    pendingMoveStartedAt = null;
+    syncRecoveryInFlight = false;
+    syncRecoveryFailed = false;
     if (opponentGraceTimer) {
         clearTimeout(opponentGraceTimer);
         opponentGraceTimer = null;
@@ -4787,6 +4870,11 @@ function startOfflineGame() {
     lastRenderedSignature = null;
     boardBuilt = false; // Обязательно перестраиваем доску при перевороте
     pendingSyncChain = Promise.resolve();
+    // Ожидание хода и состояние восстановления не должны протекать
+    // в новую партию/реванш.
+    pendingMoveStartedAt = null;
+    syncRecoveryInFlight = false;
+    syncRecoveryFailed = false;
     if (opponentGraceTimer) {
         clearTimeout(opponentGraceTimer);
         opponentGraceTimer = null;
@@ -5576,6 +5664,80 @@ btnRematchDecline.addEventListener("click", function () {
     database.ref("rooms/" + roomCode + "/rematchProposal").remove();
 });
 
+// Кнопка «Повторить» создаётся лениво и существует только в состоянии
+// неудавшегося восстановления — в обычной игре её в DOM нет вовсе.
+let syncRetryButton = null;
+
+function renderSyncRetryButton(show) {
+    if (!show) {
+        if (syncRetryButton && syncRetryButton.parentNode) {
+            syncRetryButton.parentNode.removeChild(syncRetryButton);
+        }
+        syncRetryButton = null;
+        return;
+    }
+    if (syncRetryButton) return;
+    syncRetryButton = document.createElement("button");
+    syncRetryButton.className = "reaction-btn";
+    syncRetryButton.id = "btn-sync-retry";
+    syncRetryButton.textContent = t("btn_sync_retry");
+    syncRetryButton.addEventListener("click", function () {
+        // Только повторная синхронизация. Шашечный ход НЕ переотправляется.
+        syncRecoveryFailed = false;
+        runSyncRecovery(true);
+    });
+    turnTimerDiv.appendChild(syncRetryButton);
+}
+
+// ===== СТАТУС СИНХРОНИЗАЦИИ ХОДА =====
+
+// Возвращает { key, showRetry } либо null, если показывать нечего.
+// Никаких сетевых запросов: всё выводится из уже имеющегося состояния.
+// Только реальная online-партия игрока — бот, локальная игра, зритель, лобби,
+// законченная партия и выход из комнаты сюда не попадают.
+function computeSyncStatus() {
+    if (!isOnlineGame || isBotGame || isSpectator) return null;
+    if (!roomCode || !currentState || currentState.winner) return null;
+
+    // Восстановление не удалось — единственное состояние с кнопкой.
+    if (syncRecoveryFailed) return { key: "sync_failed", showRetry: true };
+    if (!isMoveAwaitingConfirmation()) return null;
+
+    // Связь потеряна — говорим правду сразу, не дожидаясь таймера.
+    // Ход не потерян: Firebase отправит его сам при восстановлении связи.
+    if (!isFirebaseConnected) return { key: "sync_no_connection", showRetry: false };
+
+    // Связь есть, но сервер молчит слишком долго — редкий случай.
+    if (Date.now() - pendingMoveStartedAt >= MOVE_CONFIRM_STALL_MS) {
+        return { key: "sync_checking", showRetry: false };
+    }
+    return { key: "sync_sending_move", showRetry: false };
+}
+
+// Единственное безопасное восстановление: ЧИТАЕТ состояние комнаты.
+// Сам ход не переотправляется никогда. Читать безопасно даже при живой
+// медленной транзакции: она атомарна и при применении заново сверяется
+// с серверным состоянием (attemptMove проверяет turn и mustContinueFrom).
+function runSyncRecovery(isManual) {
+    if (syncRecoveryInFlight) return; // ровно одно восстановление за раз
+    if (!roomCode || !isOnlineGame || isSpectator) return;
+    syncRecoveryInFlight = true;
+    forceResyncFromServer(true).then(function () {
+        syncRecoveryFailed = false;
+        // Ожидание снимается: серверное состояние получено и currentState
+        // приведён к нему. Если сервер наш ход уже содержит — он подтверждён;
+        // если нет — доска вернулась к реальной позиции.
+        pendingMoveStartedAt = null;
+        syncRecoveryInFlight = false;
+        updateTimerDisplay();
+    }).catch(function () {
+        syncRecoveryFailed = true;
+        syncRecoveryInFlight = false;
+        updateTimerDisplay();
+    });
+    if (isManual) updateTimerDisplay();
+}
+
 // ===== ТАЙМЕР ХОДА =====
 
 setInterval(function () {
@@ -5583,6 +5745,13 @@ setInterval(function () {
         updateTimerDisplay();
         checkTimeout();
         updatePresenceOnly();
+        // Автоматическое восстановление — только при живой связи: без неё
+        // чтение всё равно не пройдёт, а ход и так уедет сам при реконнекте.
+        if (isMoveAwaitingConfirmation() && isFirebaseConnected &&
+            !syncRecoveryInFlight && !syncRecoveryFailed &&
+            Date.now() - pendingMoveStartedAt >= MOVE_CONFIRM_STALL_MS) {
+            runSyncRecovery(false);
+        }
     }
 }, 1000);
 
