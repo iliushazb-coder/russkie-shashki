@@ -439,11 +439,12 @@ function getCurrentCoinReward() {
     }
 
     if (isOnlineGame) {
-        if (currentState.winner === "draw") {
-            return COIN_REWARDS.onlineDraw;
-        }
-
-        return currentState.winner === myColor
+        // Тот же UID-принцип, что и у статистики: иначе при рассинхронизации
+        // цвета проигравший получал бы награду победителя.
+        const myResult = resolveMyOnlineResult(currentState);
+        if (myResult === null) return null; // я не участник — награды нет
+        if (myResult === "draw") return COIN_REWARDS.onlineDraw;
+        return (myResult === "win")
             ? COIN_REWARDS.onlineWin
             : COIN_REWARDS.onlineLoss;
     }
@@ -2972,6 +2973,50 @@ let statsInFlightForRoom = null; // только для bot-ветки — см.
 // смешивать разные пространства идентификаторов нельзя.
 let statsInFlightOnlineMarker = null;
 
+// ===== АТРИБУЦИЯ РЕЗУЛЬТАТА ONLINE-ПАРТИИ =====
+// Возвращает "win" | "loss" | "draw" — мой результат в законченной
+// online-партии, определённый по UID участника, а НЕ по цвету клиента.
+// Возвращает null, если результат определять нельзя (я не участник).
+//
+// ПОЧЕМУ ИМЕННО UID. Раньше и статистика, и монеты считались как
+// currentState.winner === myColor. Цвет клиента меняется при каждом реванше
+// (performRematchReset меняет стороны местами), и если локальный myColor хоть
+// по какой-то причине разошёлся с реальным составом комнаты — например у
+// клиента со старым закэшированным script.js, — результат записывался
+// ЗЕРКАЛЬНО: проигравшему победа, победителю поражение. Ровно это и произошло
+// в реальной партии с реваншем. UID при смене сторон не меняется никогда,
+// поэтому такая рассинхронизация больше не способна перевернуть результат.
+//
+// Elo этой уязвимости никогда не имел: квитанция eloMatches всегда писалась
+// по lightId/darkId из players. Здесь мы приводим к тому же принципу
+// оставшиеся два потребителя — stats и монеты.
+function resolveMyOnlineResult(state) {
+    if (!state || !state.winner) return null;
+    if (state.winner === "draw") return "draw";
+
+    const players = state.players;
+    // players нет вовсе — теоретическая старая комната. Молча терять результат
+    // хуже, чем посчитать его по-старому: откатываемся на прежнее поведение.
+    if (!players || !players.light || !players.dark) {
+        return (state.winner === myColor) ? "win" : "loss";
+    }
+
+    const lightId = players.light.id;
+    const darkId = players.dark.id;
+    // ID отсутствуют (некорректная/очень старая комната) — сверять не с чем,
+    // работаем по-старому, чтобы не потерять результат молча.
+    if (!lightId || !darkId) {
+        return (state.winner === myColor) ? "win" : "loss";
+    }
+    // ID есть и НИ ОДИН из них не мой: я не участник этой комнаты (устаревшее
+    // локальное состояние, чужая комната). Записывать чужой результат себе
+    // нельзя ни при каких условиях.
+    if (myTelegramId !== lightId && myTelegramId !== darkId) return null;
+
+    const winnerId = (state.winner === "light") ? lightId : darkId;
+    return (winnerId === myTelegramId) ? "win" : "loss";
+}
+
 // ===== ELO: чистая математика =====
 
 // Отсутствующий/битый рейтинг = ELO_START_RATING. Единая точка правды:
@@ -3221,8 +3266,23 @@ function recordGameResult(onlineMarker) {
     // Лёгкий — тренировочный режим, полностью исключён из публичной статистики.
     if (isBotGame && botDifficulty === "easy") return;
 
-    const didIWin = currentState.winner === myColor;
-    
+    // Бот: прежнее поведение без изменений — в bot-партии players в комнате
+    // нет вовсе, и любая UID-логика тут неприменима.
+    // Online: результат берётся по UID участника (см. resolveMyOnlineResult).
+    let didIWin;
+    if (isBotGame) {
+        didIWin = currentState.winner === myColor;
+    } else {
+        const myResult = resolveMyOnlineResult(currentState);
+        // null = я не участник этой комнаты. Ничего не записываем и снимаем
+        // in-flight маркер, чтобы не блокировать возможную повторную попытку.
+        if (myResult === null) {
+            statsInFlightOnlineMarker = null;
+            return;
+        }
+        didIWin = (myResult === "win");
+    }
+
     // Если игра с ботом — пишем в отдельную ветку statsBot
     const statsPath = isBotGame ? "statsBot" : "stats";
 
