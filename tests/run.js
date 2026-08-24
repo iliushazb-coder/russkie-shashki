@@ -18,7 +18,8 @@ const FILES = [
   ['J. COINS / ECONOMY (Этап 2)', 'coins-economy.test.js'],
   ['K. LEADERBOARD UI 50/50 + BOT DETAILS', 'leaderboard-ui.test.js'],
   ['M. REMATCH RESULT ATTRIBUTION', 'rematch-attribution.test.js'],
-  ['N. ONLINE MOVE SYNC', 'move-sync.test.js']
+  ['N. ONLINE MOVE SYNC', 'move-sync.test.js'],
+  ['O. ONLINE PRESENCE / RECONNECT', 'presence-reconnect.test.js']
 ];
 
 let totalPass = 0, totalFail = 0, hardFail = false;
