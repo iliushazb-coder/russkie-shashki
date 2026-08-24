@@ -231,9 +231,13 @@ function chainRoom() {
     global.lastSeenMoveCount = 9;
     runSyncRecovery(false);
     await tick();
+    // v178: восстановление приводит состояние к серверному, но НЕ объявляет
+    // транзакцию хода завершённой — это делает только её собственный исход.
     check('15. восстановление: сервер содержит ход -> состояние подтверждено',
         global.currentState.turn === 'dark' && global.currentState.moveCount === 9 &&
-        global.pendingMoveStartedAt === null && global.isLocalStateOptimistic === false);
+        global.isLocalStateOptimistic === false);
+    check('15b. восстановление НЕ снимает ожидание подтверждения хода',
+        global.pendingMoveStartedAt !== null);
     check('16. ровно одно чтение комнаты', READS.length === 1 && READS[0] === 'rooms/R1');
     check('17. восстановление НЕ пишет в Firebase (ход не переотправляется)', WRITES.length === 0);
 
