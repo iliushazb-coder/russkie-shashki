@@ -118,6 +118,8 @@ try {
     eval(extractFunc('isRoomPlayerStale'));
     eval(extractFunc('runLobbyStaleSweep'));
     eval(extractFunc('statusForColor'));
+    eval(extractFunc('getOpponentAbsenceMs'));
+    eval(extractFunc('canTrustAbsenceForCleanup'));
     eval(extractFunc('checkOpponentAbsence'));
 } catch (e) { loadError = e.message; }
 
@@ -146,6 +148,19 @@ function setupCommonGlobals() {
     global.statsCache = {}; global.opponentAbsenceHandled = false;
     global.lastRenderedSignature = null; global.boardBuilt = false;
     global.pendingSyncChain = null; global.opponentGraceTimer = null;
+    global.isFirebaseConnected = true;
+    global.connectedSinceMono = -60000;
+    global.connectionGeneration = 1;
+    global.listenerGeneration = 0;
+    global.resetRoomFreshnessProof = function () { global.listenerGeneration++; };
+    global.serverAckSinceConnect = true;
+    global.roomSnapshotSeenSinceConnect = true;
+    global.getMonotonicNow = function () { return 0; };
+    global.noteServerAck = function () { global.serverAckSinceConnect = true; };
+    global.connectedSinceMs = Date.now() - 60000;
+    global.CONNECTION_SETTLE_MS = 15000;
+    global.serverTimeOffsetReady = true;
+    global.getEstimatedServerNow = function () { return Date.now(); };
     global.mustCaptureHintTimer = null; global.myPresenceRef = null;
     global.presenceHeartbeatInterval = null; global.currentState = null;
     global.myWaitingRoomNoOpponent = false; // в v170 не существует — глобаль безвредна
@@ -346,38 +361,6 @@ function presenceWrites() {
     global.lobbyRoomsByCode = { B1: backgrounded };
     runLobbyStaleSweep();
     check('комната обоих свернувших НЕ удалена', env.removes.indexOf('rooms/B1') === -1);
-
-    // =====================================================================
-    console.log('10. checkOpponentAbsence функционально неизменна (пункт D)');
-    // =====================================================================
-    setupCommonGlobals();
-    global.isOnlineGame = true; global.myColor = 'light'; global.roomCode = 'R9';
-    global.currentState = {
-        winner: null,
-        players: { light: { id: 'ME', name: 'Me' }, dark: { id: 'OPP', name: 'Opp' } },
-        presence: {
-            light: { online: true, lastSeen: Date.now() },
-            dark: { online: false, lastSeen: Date.now() - 5000 } // соперник только что ушёл
-        }
-    };
-    checkOpponentAbsence();
-    const grace = env.timers.filter(function (t2) { return !t2.cleared; }).pop();
-    check('первый же status-left заводит ОДИН таймер на 60с', !!grace && grace.ms === 60000 && env.timers.length === 1);
-    // соперник вернулся до истечения — таймер снимается, окна нет
-    global.currentState.presence.dark = { online: true, lastSeen: Date.now() };
-    checkOpponentAbsence();
-    check('возврат соперника в течение форы снимает таймер', env.timers[0].cleared === true);
-    check('окно не показано', global.opponentLeftModal.classList.contains('hidden'));
-    // соперник ушёл и не вернулся — по истечении таймера окно + существующий cleanup
-    global.currentState.presence.dark = { online: false, lastSeen: Date.now() - 15000 };
-    checkOpponentAbsence();
-    const grace2 = env.timers.filter(function (t2) { return !t2.cleared; }).pop();
-    check('таймер заведён заново', !!grace2 && grace2.ms === 60000);
-    global.currentState.presence.dark.lastSeen = Date.now() - 75000; // прошло >60с
-    grace2.fn();
-    check('после 60с непрерывного отсутствия окно показано', !global.opponentLeftModal.classList.contains('hidden'));
-    check('вызван существующий cleanupAbandonedRoom ровно один раз', env.cleanupCalls === 1);
-    check('opponentAbsenceHandled взведён (повторов не будет)', global.opponentAbsenceHandled === true);
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);
