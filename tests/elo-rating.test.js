@@ -148,6 +148,7 @@ try {
     eval(extractFunc('ensureStatsInitialized'));
     eval(extractFunc('recordEloMatchResult'));
     eval(extractFunc('ensureMyRatingSnapshot'));
+    eval(extractFunc('resolveMyOnlineResult'));
     eval(extractFunc('recordGameResult'));
     eval(extractFunc('compareLeaderboardEntries'));
     eval(extractFunc('renderRankAndName'));
