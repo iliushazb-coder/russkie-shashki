@@ -33,10 +33,81 @@ const database = firebase.database();
 // отправленный ход уже подтверждён сервером. Подтверждение определяется только
 // реальным серверным состоянием (promise транзакции / listener комнаты).
 let isFirebaseConnected = true;
+// Момент, с которого связь держится НЕПРЕРЫВНО (null — связи нет).
+// Это и есть наш способ убедиться, что данные о сопернике свежие: если мы
+// уверенно на связи дольше CONNECTION_SETTLE_MS, а heartbeat соперника за это
+// время так и не пришёл, значит он молчит по-настоящему, а не мы его не слышим.
+// ВАЖНО: время держится по МОНОТОННЫМ часам (performance.now), а не по
+// Date.now(). Весь этот патч защищается от скачков системного времени при
+// выключении авиарежима — было бы нелепо мерить им же собственный интервал
+// «связь стабильна 15 секунд»: прыжок часов вперёд мгновенно «состарил» бы
+// соединение и разрешил удаление раньше срока.
+let connectedSinceMono = null;
+function getMonotonicNow() {
+    return (typeof performance !== "undefined" && performance && typeof performance.now === "function")
+        ? performance.now()
+        : Date.now();
+}
+// Номер текущего подключения. Растёт при каждом восстановлении связи, чтобы
+// поздний ответ сервера от ПРЕДЫДУЩЕГО подключения не засчитался как
+// подтверждение для нового.
+let connectionGeneration = 0;
+// НАСТОЯЩЕЕ подтверждение сервера после этого подключения: promise нашей
+// собственной записи presence разрешается только когда сервер её принял,
+// то есть это доказанный круговой обмен с сервером, а не локальное событие.
+let serverAckSinceConnect = false;
+// Номер текущей ПОДПИСКИ на комнату. Растёт при каждой новой подписке на
+// rooms/<код> — то есть при входе в другую комнату, при переоткрытии той же
+// комнаты и при переходе в режим зрителя. Firebase-соединение при этом может
+// не разрываться вовсе, поэтому доказательства, привязанные только к
+// подключению, могли бы «протечь» из предыдущей комнаты в новую.
+// Доказательство свежести обязано относиться к ТЕКУЩЕЙ комнате.
+let listenerGeneration = 0;
+// Обнуляет доказательства и открывает новое поколение подписки.
+function resetRoomFreshnessProof() {
+    listenerGeneration++;
+    serverAckSinceConnect = false;
+    roomSnapshotSeenSinceConnect = false;
+}
+function noteServerAck(connGen, listenerGen) {
+    if (connGen !== connectionGeneration) return;      // ответ от прошлого подключения
+    if (listenerGen !== listenerGeneration) return;    // ответ, относящийся к прошлой комнате
+    if (!isFirebaseConnected) return;
+    serverAckSinceConnect = true;
+}
+// Получил ли room-listener хотя бы один настоящий снапшот комнаты ПОСЛЕ
+// последнего восстановления связи. Само по себе "соединение живо 15 секунд"
+// доказывает только состояние транспорта Firebase, но НЕ то, что подписка на
+// комнату пересинхронизировалась и наши presence-данные свежие. Флаг закрывает
+// именно этот разрыв: он ставится только в колбэке listener'а с валидной
+// комнатой и сбрасывается при каждом обрыве.
+// Нормально взводится за ~4 секунды: мой собственный heartbeat пишет в
+// rooms/<код>/presence/<мой цвет>, и listener сразу приносит обновление.
+let roomSnapshotSeenSinceConnect = false;
+// Три цикла heartbeat соперника (4с) с запасом: живой соперник за это время
+// обязан был бы дать о себе знать хотя бы трижды.
+const CONNECTION_SETTLE_MS = 15000;
 
 const connectedRef = database.ref(".info/connected");
 connectedRef.on("value", function(snap) {
+    const wasConnected = isFirebaseConnected;
     isFirebaseConnected = (snap.val() === true);
+    if (isFirebaseConnected && !wasConnected) {
+        // Связь только что вернулась — всё доказательное состояние обнуляется:
+        // ни прежний серверный ответ, ни прежние снапшоты комнаты больше не
+        // считаются доказательством свежести, нужны новые.
+        connectionGeneration++;
+        connectedSinceMono = getMonotonicNow();
+        serverAckSinceConnect = false;
+        roomSnapshotSeenSinceConnect = false;
+    } else if (!isFirebaseConnected) {
+        connectedSinceMono = null;
+        serverAckSinceConnect = false;
+        roomSnapshotSeenSinceConnect = false;
+    } else if (connectedSinceMono === null) {
+        connectionGeneration++;
+        connectedSinceMono = getMonotonicNow();
+    }
     if (snap.val() === true) {
         // Дополнительная защита: оживляем presence, только если человек
         // ДЕЙСТВИТЕЛЬНО сейчас участвует в какой-то партии как игрок —
@@ -49,7 +120,13 @@ connectedRef.on("value", function(snap) {
         // online:true мгновенно), heartbeat (≤4с) и setupPresence при
         // полном перезапуске приложения.
         if (myPresenceRef && isOnlineGame && !isSpectator && roomCode && !document.hidden) {
-            myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+            // Promise этой записи разрешается ТОЛЬКО после подтверждения
+            // сервером — это и есть доказанный круговой обмен.
+            const gen = connectionGeneration;
+            const lgen = listenerGeneration;
+            myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+                .then(function () { noteServerAck(gen, lgen); })
+                .catch(function () {});
         }
     }
 });
@@ -2073,7 +2150,28 @@ function statusForColor(color) {
         return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
     }
 
-    const elapsed = Date.now() - (presence.lastSeen || Date.now());
+    // Пока связи нет У МЕНЯ САМОГО, судить о сопернике нельзя: его lastSeen в
+    // моей памяти замирает не потому, что он ушёл, а потому что я перестал
+    // получать данные. Показываем нейтральное «Соединение…» — этот статус
+    // сознательно НЕ равен "status-left", поэтому отсчёт отсутствия не идёт.
+    if (!isFirebaseConnected) {
+        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+    }
+
+    // Пока серверное время ещё не получено, offset честно равен нулю, и
+    // elapsed посчитался бы по голым часам телефона. Это не разрушительно
+    // (удаление комнаты и так требует serverTimeOffsetReady), но может дать
+    // ложный «Оффлайн» в первые мгновения. Показываем нейтральное состояние.
+    if (!serverTimeOffsetReady) {
+        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+    }
+
+    // ВАЖНО: lastSeen — СЕРВЕРНЫЙ timestamp, поэтому сравнивать его с голым
+    // Date.now() нельзя: часы телефона могут разойтись с сервером (классика —
+    // переключение авиарежима, после которого телефон переустанавливает время).
+    // getEstimatedServerNow() = Date.now() + .info/serverTimeOffset — тот самый
+    // единый временной базис, который в проекте уже описан именно для этого.
+    const elapsed = getEstimatedServerNow() - (presence.lastSeen || getEstimatedServerNow());
     // presence.online === false — настоящий disconnect для online-партий
     // (onDisconnect().update там есть и срабатывает почти сразу). elapsed —
     // единственный источник истины для bot-зеркала, где onDisconnect
@@ -2177,19 +2275,25 @@ function checkOpponentAbsence() {
     if (opponentAbsenceHandled) return;
 
     const oppColor = myColor === "light" ? "dark" : "light";
-    const info = statusForColor(oppColor);
 
-    if (info.cls === "status-left") {
-        if (!opponentGraceTimer) {
-            opponentGraceTimer = setTimeout(function () {
-                opponentGraceTimer = null;
-                if (!isOnlineGame || !currentState || opponentAbsenceHandled) return;
-                // Если игра закончилась, продолжаем только если ждём ответа на реванш
-                if (currentState.winner && !(currentState.rematchProposal && currentState.rematchProposal.by === myColor)) return;
+    // ЕДИНАЯ ШКАЛА ВРЕМЕНИ. Раньше здесь заводился отдельный setTimeout на 60
+    // секунд в момент, когда соперник ВПЕРВЫЕ выглядел офлайн (то есть на 12-й
+    // секунде), из-за чего экран показывал «Игра прервана» на 60-й секунде, а
+    // реальное решение приходило только на 72-й. Теперь и надпись, и решение
+    // читают одно и то же число — возраст серверного lastSeen соперника.
+    // Побочный и важный эффект: после возврата связи сопернику НЕ выдаётся
+    // новая минута. Если он отсутствует уже 50 секунд, ему остаётся 10.
+    const absenceMs = getOpponentAbsenceMs(oppColor);
+    if (absenceMs === null || absenceMs < RECONNECT_GRACE_MS) return;
 
-                const stillInfo = statusForColor(oppColor);
-                if (stillInfo.cls === "status-left") {
-                    opponentAbsenceHandled = true;
+    // Минута истекла. Прежде чем разрушать живую партию, требуем уверенности
+    // (см. canTrustAbsenceForCleanup). Не подтвердилось — просто выходим:
+    // функция вызывается каждую секунду и попробует снова.
+    if (!canTrustAbsenceForCleanup()) return;
+
+    (function () {
+                opponentAbsenceHandled = true;
+                {
                     if (currentState.winner && currentState.rematchProposal) {
                         // Если соперник пропал во время ожидания ответа на реванш
                         showInfoModal(t("rematch_no_response"), false);
@@ -2205,14 +2309,48 @@ function checkOpponentAbsence() {
                         cleanupAbandonedRoom();
                     }
                 }
-            }, RECONNECT_GRACE_MS);
-        }
-    } else {
-        if (opponentGraceTimer) {
-            clearTimeout(opponentGraceTimer);
-            opponentGraceTimer = null;
-        }
-    }
+    })();
+}
+
+// Возраст последнего heartbeat соперника по СЕРВЕРНОМУ времени.
+// null — судить нельзя (нет данных, нет связи, время сервера ещё не известно).
+function getOpponentAbsenceMs(oppColor) {
+    if (!isFirebaseConnected) return null; // я сам не на связи — состояние UNKNOWN
+    if (!currentState || !currentState.presence) return null;
+    const presence = currentState.presence[oppColor];
+    if (!presence || typeof presence.lastSeen !== "number") return null;
+    return getEstimatedServerNow() - presence.lastSeen;
+}
+
+// FAIL-SAFE перед разрушительным действием (удалением живой комнаты).
+// Возвращает true, только если мы ДЕЙСТВИТЕЛЬНО уверены в свежести данных.
+// Любое сомнение — false, и тогда решение просто откладывается до следующей
+// секунды: «не удалось подтвердить» НИКОГДА не означает «всё равно удалить».
+//
+// Почему проверка построена так, а не на once("value"): в RTDB обычный
+// once() на пути, за которым уже следит listener, может быть обслужен из
+// ЛОКАЛЬНОГО КЕША и вернуть ровно те же устаревшие данные — то есть дать
+// ложное подтверждение ухода. Строгого «только с сервера» чтения в SDK нет.
+// Поэтому доказательством служит другое, и оно сильнее: если наша связь
+// держится непрерывно дольше CONNECTION_SETTLE_MS, а heartbeat соперника за
+// это время так и не пришёл — значит он молчит по-настоящему. Живой соперник
+// за 15 секунд написал бы в комнату трижды, и listener принёс бы это нам.
+function canTrustAbsenceForCleanup() {
+    if (!isFirebaseConnected || connectedSinceMono === null) return false;
+    // Связь должна держаться устойчиво, а не «только что мигнула».
+    // Измеряем МОНОТОННЫМИ часами: коррекция системного времени телефона
+    // (обычное дело после авиарежима) не должна укорачивать этот интервал.
+    if (getMonotonicNow() - connectedSinceMono < CONNECTION_SETTLE_MS) return false;
+    // Доказанный круговой обмен с сервером после этого подключения.
+    // Локальные события собственной записи сюда не годятся.
+    if (!serverAckSinceConnect) return false;
+    // Для разрушительного решения голые часы телефона недопустимы: пока
+    // серверное время неизвестно, возраст lastSeen посчитан ненадёжно.
+    if (!serverTimeOffsetReady) return false;
+    // Транспорт может быть жив, а подписка на комнату — ещё не пересинхронизирована.
+    // Без свежего снапшота наши presence-данные могли остаться от момента до обрыва.
+    if (!roomSnapshotSeenSinceConnect) return false;
+    return true;
 }
 
 function cleanupAbandonedRoom() {
@@ -2265,7 +2403,11 @@ function setupPresence() {
     const presenceRef = database.ref("rooms/" + roomCode + "/presence/" + myColor);
     myPresenceRef = presenceRef;
 
-    presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+    const setupGen = connectionGeneration;
+    const setupListenerGen = listenerGeneration;
+    presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+        .then(function () { noteServerAck(setupGen, setupListenerGen); })
+        .catch(function () {});
     // ВАЖНО (v171): onDisconnect сознательно НЕ трогает lastSeen. Сервер
     // выполняет эту запись в момент, когда САМ замечает обрыв — при жёстком
     // закрытии приложения это происходит через ~45-90 секунд. Свежий lastSeen
@@ -2288,7 +2430,11 @@ function setupPresence() {
             }
             return;
         }
-        presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+        const beatGen = connectionGeneration;
+        const beatListenerGen = listenerGeneration;
+        presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+            .then(function () { noteServerAck(beatGen, beatListenerGen); })
+            .catch(function () {});
     }, 4000);
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -3746,8 +3892,15 @@ function startOnlineGame() {
     // больше не нужен и был убран как источник избыточной сложности.
 
     if (roomListenerRef) roomListenerRef.off();
+    // Новая подписка на комнату — прежние доказательства свежести больше не
+    // действуют: они относились к другой комнате/другому listener'у.
+    resetRoomFreshnessProof();
+    const myListenerGen = listenerGeneration;
     roomListenerRef = database.ref("rooms/" + roomCode);
     roomListenerRef.on("value", function (snapshot) {
+        // Запоздалый колбэк уже отписанного listener'а не должен ничего
+        // подтверждать для текущей комнаты.
+        if (myListenerGen !== listenerGeneration) return;
         const room = snapshot.val();
         if (!room || !room.pieces) {
             // Если комната была удалена (соперник закрыл игру или отменил реванш)
@@ -3807,6 +3960,17 @@ function startOnlineGame() {
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };
+
+        // Снапшот комнаты засчитывается как доказательство свежести ТОЛЬКО
+        // после подтверждённого сервером обмена (serverAckSinceConnect).
+        // Причина: RTDB вызывает value-listener и на СОБСТВЕННУЮ локальную
+        // запись (наш же presence-heartbeat после реконнекта), ещё до реальной
+        // пересинхронизации комнаты с сервером. Такое локальное эхо само по
+        // себе доказательством не является и разрешать удаление живой партии
+        // не должно.
+        if (serverAckSinceConnect && myListenerGen === listenerGeneration) {
+            roomSnapshotSeenSinceConnect = true;
+        }
 
         // Проверка реакции: если пришёл новый ts — запускаем анимацию
         if (room.reaction && room.reaction.ts && room.reaction.ts !== lastReactionTs) {
@@ -8041,8 +8205,15 @@ function watchGroupRoomAsSpectator(code) {
     
     // Запускаем слушатель игры без установки Presence
     if (roomListenerRef) roomListenerRef.off();
+    // Новая подписка на комнату — прежние доказательства свежести больше не
+    // действуют: они относились к другой комнате/другому listener'у.
+    resetRoomFreshnessProof();
+    const myListenerGen = listenerGeneration;
     roomListenerRef = database.ref("rooms/" + roomCode);
     roomListenerRef.on("value", function (snapshot) {
+        // Запоздалый колбэк уже отписанного listener'а не должен ничего
+        // подтверждать для текущей комнаты.
+        if (myListenerGen !== listenerGeneration) return;
         const room = snapshot.val();
         if (!room || !room.pieces) {
             if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
