@@ -84,7 +84,7 @@ function makeRef(path) {
         },
         onDisconnect: function () {
             return {
-                update: function (v) { env.armed.push({ path: path, value: v, op: 'update' }); },
+                update: function (v) { env.armed.push({ path: path, value: v, op: 'update' }); return Promise.resolve(); },
                 remove: function () { env.armed.push({ path: path, op: 'remove' }); },
                 cancel: function () { env.armed = env.armed.filter(function (a) { return a.path !== path; }); }
             };
