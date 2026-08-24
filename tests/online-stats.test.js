@@ -57,6 +57,7 @@ eval(ex('buildEloMatchId'));
 eval(ex('getEloMatchContext'));
 global.recordEloMatchResult = function () { throw new Error('Elo-путь не должен вызываться без ratingsAtStart'); };
 
+eval(ex('resolveMyOnlineResult'));
 eval(ex('recordGameResult'));
 eval(ex('renderEndGameModal'));
 
