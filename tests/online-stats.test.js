@@ -49,6 +49,7 @@ global.recordGameResultBotCalls=0;
 // хардкодим: иначе тест разошёлся бы с продакшеном незаметно.
 // В этом файле у currentState никогда нет ratingsAtStart, поэтому контекст
 // всегда null и проверяется именно СТАРЫЙ путь (переходная совместимость).
+global.TECHNICAL_WIN_REASON = /const TECHNICAL_WIN_REASON = "([a-z]+)";/.exec(src)[1];
 global.ELO_START_RATING = Number(/const ELO_START_RATING = (\d+);/.exec(src)[1]);
 global.ELO_K = Number(/const ELO_K = (\d+);/.exec(src)[1]);
 eval(ex('normalizeEloRating'));

@@ -124,7 +124,16 @@ connectedRef.on("value", function(snap) {
             // сервером — это и есть доказанный круговой обмен.
             const gen = connectionGeneration;
             const lgen = listenerGeneration;
-            myPresenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+            // v180: reconnect после настоящего обрыва — это НАЧАЛО НОВОЙ
+            // непрерывной online-сессии, поэтому onlineSince ставится заново.
+            // Пока я сам отсутствовал, я никого не ждал: соперник обязан
+            // получить полную свежую минуту, отсчитанную от этого момента.
+            myPresenceRef.update({
+                online: true,
+                absentSince: null,
+                onlineSince: firebase.database.ServerValue.TIMESTAMP,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP
+            })
                 .then(function () { noteServerAck(gen, lgen); })
                 .catch(function () {});
         }
@@ -747,6 +756,7 @@ const translations = {
         draw_manual_text: "Оба игрока согласились на ничью.",
         draw_by_rule_header: "🤝 НИЧЬЯ ПО ПРАВИЛАМ",
         draw_reason_unknown: "Партия завершена автоматически по правилу ничьей",
+        win_reason_disconnect: "Соперник не вернулся в игру",
         draw_reason_threefold: "Троекратное повторение позиции",
         draw_reason_kings15: "Лимит 15 ходов только дамками, без взятий",
         draw_reason_np5: "Лимит 5 ходов в окончании с 2\u20133 фигурами",
@@ -872,6 +882,7 @@ const translations = {
         draw_manual_text: "Both players agreed to a draw.",
         draw_by_rule_header: "🤝 DRAW BY RULE",
         draw_reason_unknown: "The game ended automatically by a draw rule",
+        win_reason_disconnect: "Opponent did not return",
         draw_reason_threefold: "Threefold repetition of the position",
         draw_reason_kings15: "15-move limit: kings only, no captures",
         draw_reason_np5: "5-move limit in a 2\u20133 piece ending",
@@ -997,6 +1008,7 @@ const translations = {
         draw_manual_text: "Entrambi i giocatori hanno accettato la patta.",
         draw_by_rule_header: "🤝 PATTA PER REGOLA",
         draw_reason_unknown: "Partita terminata automaticamente per una regola di patta",
+        win_reason_disconnect: "L'avversario non è tornato",
         draw_reason_threefold: "Triplice ripetizione della posizione",
         draw_reason_kings15: "Limite di 15 mosse: solo dame, senza catture",
         draw_reason_np5: "Limite di 5 mosse in un finale con 2\u20133 pezzi",
@@ -1271,6 +1283,10 @@ let myWaitingRoomNoOpponent = false;
 let opponentAbsenceHandled = false;
 const STALE_MS = 20000; 
 const RECONNECT_GRACE_MS = 60000; // Перенесли наверх для порядка
+// v180. Единственный код причины технического поражения. Отдельная константа,
+// чтобы клиент и Firebase Rules описывали ОДНО И ТО ЖЕ слово, а опечатка в
+// одном из мест не создавала второй, никем не проверяемый вид результата.
+const TECHNICAL_WIN_REASON = "disconnect";
 // Порог "возможно офлайн" по времени с последнего lastSeen — нужен ТОЛЬКО
 // потому, что у bot-зеркала сознательно нет onDisconnect() (небезопасно
 // при двух owner-устройствах — см. mirrorCommittedStateToSpectateRoom),
@@ -2181,14 +2197,20 @@ function statusForColor(color) {
     // переключение авиарежима, после которого телефон переустанавливает время).
     // getEstimatedServerNow() = Date.now() + .info/serverTimeOffset — тот самый
     // единый временной базис, который в проекте уже описан именно для этого.
-    const elapsed = getEstimatedServerNow() - (presence.lastSeen || getEstimatedServerNow());
+    const lastSeenElapsed = getEstimatedServerNow() - (presence.lastSeen || getEstimatedServerNow());
+    // v180: НАДПИСЬ И РЕШЕНИЕ ЧИТАЮТ ОДНО И ТО ЖЕ ЧИСЛО. Если есть серверный
+    // absentSince, обратный отсчёт на экране ведётся именно от него — ровно
+    // от той же величины, по которой присуждается техническое поражение.
+    // Иначе (старый клиент, bot-зеркало) остаётся прежний возраст lastSeen.
+    const authoritativeAbsence = getAuthoritativeAbsenceMs(presence);
+    const elapsed = (authoritativeAbsence !== null) ? authoritativeAbsence : lastSeenElapsed;
     // presence.online === false — настоящий disconnect для online-партий
     // (onDisconnect().update там есть и срабатывает почти сразу). elapsed —
     // единственный источник истины для bot-зеркала, где onDisconnect
     // сознательно не установлен: presence.online там навсегда останется
     // true, даже когда владелец давно закрыл Mini App — двигается только
     // lastSeen (последний heartbeat), пока он писался.
-    const isStale = presence.online === false || elapsed > PRESENCE_STALE_WARNING_MS;
+    const isStale = presence.online === false || lastSeenElapsed > PRESENCE_STALE_WARNING_MS;
 
     if (elapsed > RECONNECT_GRACE_MS) {
         return { text: t("status_game_interrupted"), cls: "status-left" };
@@ -2301,34 +2323,163 @@ function checkOpponentAbsence() {
     // функция вызывается каждую секунду и попробует снова.
     if (!canTrustAbsenceForCleanup()) return;
 
-    (function () {
-                opponentAbsenceHandled = true;
-                {
-                    if (currentState.winner && currentState.rematchProposal) {
-                        // Если соперник пропал во время ожидания ответа на реванш
-                        showInfoModal(t("rematch_no_response"), false);
-                        showScreen(menuScreen);
-                        loadActiveRooms();
-                        cleanupAbandonedRoom();
-                    } else {
-                        // Обычный уход во время игры
-                        const oppName = (currentState.players && currentState.players[oppColor] && currentState.players[oppColor].name) || t("opponent_default");
-                        const reasonText = oppName + t("left_game");
-                        opponentLeftText.textContent = reasonText + t("game_over");
-                        opponentLeftModal.classList.remove("hidden");
-                        cleanupAbandonedRoom();
-                    }
-                }
-    })();
+    if (currentState.winner && currentState.rematchProposal) {
+        // Соперник пропал во время ожидания ответа на реванш. Партия УЖЕ
+        // закончена, второго результата тут быть не может — прежнее поведение.
+        opponentAbsenceHandled = true;
+        showInfoModal(t("rematch_no_response"), false);
+        showScreen(menuScreen);
+        loadActiveRooms();
+        cleanupAbandonedRoom();
+        return;
+    }
+
+    // v180: ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ вместо простого удаления комнаты. Раньше
+    // партия просто исчезала — без winner, без Elo, без статистики и монет
+    // для обоих. Теперь подтверждённое отсутствие длиннее минуты завершает
+    // партию как обычная победа и проходит через существующий pipeline.
+    //
+    // ЕДИНСТВЕННЫЙ путь завершения по отсутствию. Второго пути нет: если
+    // технический результат назначить нельзя (нет доказанного серверного
+    // absentSince, моя собственная online-сессия ещё моложе минуты, связь
+    // не подтверждена), решение просто ОТКЛАДЫВАЕТСЯ — функция вызывается
+    // каждую секунду и попробует снова. Лучше не назначить результат, чем
+    // назначить ложное поражение по одному лишь молчащему heartbeat.
+    // Поэтому и флаг взводится ТОЛЬКО когда попытка реально отправлена.
+    if (writeTechnicalResult(oppColor)) {
+        opponentAbsenceHandled = true;
+    }
 }
 
 // Возраст последнего heartbeat соперника по СЕРВЕРНОМУ времени.
 // null — судить нельзя (нет данных, нет связи, время сервера ещё не известно).
+// ===== v180: ЕДИНАЯ МАШИНА ОТСУТСТВИЯ =====
+
+// Возраст ДОКАЗАННОГО отсутствия. Считается ТОЛЬКО от absentSince —
+// серверной отметки момента, когда игрок физически перестал быть перед
+// доской. Её ставит либо сам клиент при сворачивании, либо серверный
+// onDisconnect при настоящем обрыве, поэтому причина ухода роли не играет.
+// null означает «судить нельзя», и для технического результата это ЗАПРЕТ:
+// лучше подождать дольше, чем присудить ложное поражение. Отката на lastSeen
+// здесь НЕТ СОЗНАТЕЛЬНО — молчащий heartbeat не доказывает уход.
+function getAuthoritativeAbsenceMs(presence) {
+    if (!presence) return null;
+    if (presence.online !== false) return null;
+    if (typeof presence.absentSince !== "number") return null;
+    return getEstimatedServerNow() - presence.absentSince;
+}
+
+// Длительность ТЕКУЩЕЙ непрерывной online-сессии игрока.
+// Нужна победителю: присудить победу за отсутствие вправе только тот, кто
+// сам непрерывно присутствует уже целую минуту. Пока я сам отсутствовал, я
+// никого не ждал, поэтому после каждого моего возвращения соперник получает
+// новую полную минуту. Heartbeat onlineSince не обновляет.
+function getOnlineSessionMs(presence) {
+    if (!presence) return null;
+    if (presence.online !== true) return null;
+    if (typeof presence.onlineSince !== "number") return null;
+    return getEstimatedServerNow() - presence.onlineSince;
+}
+
+// Технический результат уже отправлен и ждёт ответа сервера.
+let technicalResultInFlight = false;
+
+// ЗАПИСЬ ТЕХНИЧЕСКОГО РЕЗУЛЬТАТА — ОДНОЙ АТОМАРНОЙ ОПЕРАЦИЕЙ.
+//
+// update() на конкретные дочерние пути rooms/<код>/{result,winner,winReason,
+// status}. Это НЕ запись всей комнаты и НЕ транзакция на весь узел: presence
+// обоих игроков эта операция не касается вообще — урок v178, где whole-room
+// транзакция подменяла присутствие соперника устаревшим слепком.
+//
+// Одной операцией комната получает привычные winner/winReason/status, поэтому
+// весь существующий pipeline (renderEndGameModal, recordGameResult,
+// recordEloMatchResult, recordCoinResultOnce, resolveMyOnlineResult, UID-
+// атрибуция, eloMatches, rewardedMatches, статистика, монеты, лобби, реванш,
+// зрители) срабатывает сам. Второго пути результата не создаётся.
+//
+// Комната СОЗНАТЕЛЬНО не удаляется: она нужна, чтобы записались Elo,
+// статистика и монеты, и чтобы вернувшийся проигравший увидел результат.
+//
+// Возвращает true, только если попытка действительно отправлена. Все проверки
+// ниже — fail-fast: окончательный арбитраж делает Firebase .validate по
+// СЕРВЕРНОМУ времени, а не часами телефона.
+function writeTechnicalResult(absentColor) {
+    // --- контекст: только живая online-партия между людьми ---
+    if (!isOnlineGame || isBotGame || isSpectator) return false;
+    if (!roomCode || !currentState || !currentState.players) return false;
+    // Собственная связь и доказанная свежесть ТЕКУЩЕЙ комнаты обязательны:
+    // без них мои presence-данные могли остаться с момента до обрыва.
+    if (!isFirebaseConnected) return false;
+    if (!canTrustAbsenceForCleanup()) return false;
+    // Партия уже закончена любым способом — второго исхода быть не может.
+    if (currentState.winner || currentState.result) return false;
+    if (technicalResultInFlight) return true;
+
+    // --- состав участников по UID, а не по цвету ---
+    const winnerColor = absentColor === "light" ? "dark" : "light";
+    const winnerPlayer = currentState.players[winnerColor];
+    const loserPlayer = currentState.players[absentColor];
+    if (!winnerPlayer || !winnerPlayer.id) return false;
+    if (!loserPlayer || !loserPlayer.id) return false;
+    if (winnerPlayer.id === loserPlayer.id) return false;
+    // Победитель — ТОТ, КТО ОСТАЛСЯ, а он это я. Чужой результат не пишем
+    // никогда, и отсутствующий не может присудить победу самому себе.
+    if (!myTelegramId || winnerPlayer.id !== myTelegramId) return false;
+    if (winnerColor !== myColor) return false;
+
+    // --- обе временные границы, обе по серверному времени ---
+    const presence = currentState.presence || {};
+    const loserAbsenceMs = getAuthoritativeAbsenceMs(presence[absentColor]);
+    if (loserAbsenceMs === null || loserAbsenceMs < RECONNECT_GRACE_MS) return false;
+    const myOnlineMs = getOnlineSessionMs(presence[winnerColor]);
+    if (myOnlineMs === null || myOnlineMs < RECONNECT_GRACE_MS) return false;
+
+    const targetRoom = roomCode;
+    technicalResultInFlight = true;
+    database.ref("rooms/" + targetRoom).update({
+        result: {
+            winnerColor: winnerColor,
+            loserColor: absentColor,
+            winnerId: winnerPlayer.id,
+            loserId: loserPlayer.id,
+            winReason: TECHNICAL_WIN_REASON,
+            status: "finished",
+            decidedAt: firebase.database.ServerValue.TIMESTAMP
+        },
+        winner: winnerColor,
+        winReason: TECHNICAL_WIN_REASON,
+        status: "finished"
+    }).then(function () {
+        technicalResultInFlight = false;
+    }).catch(function (error) {
+        // Отказ — штатная ситуация: сервер увидел возвращение соперника
+        // раньше нас, партия уже закончилась другим способом, либо серверные
+        // часы ещё не дошли до порога. Снимаем флаг обработки, чтобы решение
+        // было принято заново на актуальных данных, а не потеряно молча.
+        technicalResultInFlight = false;
+        opponentAbsenceHandled = false;
+        console.log("Technical result not applied:", error && error.message);
+    });
+    return true;
+}
+
 function getOpponentAbsenceMs(oppColor) {
     if (!isFirebaseConnected) return null; // я сам не на связи — состояние UNKNOWN
     if (!currentState || !currentState.presence) return null;
     const presence = currentState.presence[oppColor];
-    if (!presence || typeof presence.lastSeen !== "number") return null;
+    // v180: отсчёт ведётся от absentSince — момента, когда игрок ФАКТИЧЕСКИ
+    // покинул партию. Его ставит серверным временем либо сам клиент при
+    // сворачивании, либо серверный onDisconnect при обрыве. Это делает
+    // отсчёт одинаковым для всех причин отсутствия и не зависящим от того,
+    // как долго молчал heartbeat.
+    if (!presence) return null;
+    if (presence.online !== false) return null; // игрок в игре — отсутствия нет
+    if (typeof presence.absentSince === "number") {
+        return getEstimatedServerNow() - presence.absentSince;
+    }
+    // Запасной путь для клиентов старых версий и bot-зеркала, где absentSince
+    // не пишется: прежнее поведение по возрасту последнего heartbeat.
+    if (typeof presence.lastSeen !== "number") return null;
     return getEstimatedServerNow() - presence.lastSeen;
 }
 
@@ -2383,16 +2534,26 @@ function handleVisibilityChange() {
     if (!myPresenceRef) return;
 
     if (document.hidden) {
-        // Mini App ушёл в фон: соперник сразу видит Offline
-        // и начинает отсчёт 60 секунд на возвращение.
+        // ЕДИНАЯ МАШИНА ОТСУТСТВИЯ (v180). Свернул, переключился в другое
+        // приложение, ответил на звонок — для партии это одно и то же:
+        // игрока нет перед доской. Правило игры: минута на возвращение.
+        // absentSince ставится СЕРВЕРНЫМ временем, чтобы отсчёт не зависел
+        // от часов телефона; ровно то же значение пишет серверный
+        // onDisconnect при настоящем обрыве — состояние получается общее.
         myPresenceRef.update({
             online: false,
+            absentSince: firebase.database.ServerValue.TIMESTAMP,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     } else {
-        // Игрок вернулся в игру — сразу снова Online.
+        // Игрок вернулся к доске — отсутствие закончилось, отсчёт снимается.
+        // onlineSince открывает НОВУЮ непрерывную online-сессию: с этой
+        // секунды и только с неё я снова «жду» соперника. Heartbeat это поле
+        // не трогает никогда — иначе ожидание обнулялось бы каждые 4 секунды.
         myPresenceRef.update({
             online: true,
+            absentSince: null,
+            onlineSince: firebase.database.ServerValue.TIMESTAMP,
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     }
@@ -2422,15 +2583,30 @@ function setupPresence() {
     // «в игре». onDisconnect — одноразовая серверная операция, поэтому её
     // нужно взводить заново при КАЖДОЙ настройке присутствия (в том числе
     // после каждого реконнекта, когда setupPresence вызывается снова).
-    presenceRef.onDisconnect().update({ online: false })
+    // Настоящий обрыв связи ведёт в ТУ ЖЕ машину отсутствия, что и
+    // сворачивание: absentSince серверным временем, от него идёт отсчёт.
+    presenceRef.onDisconnect().update({
+            online: false,
+            absentSince: firebase.database.ServerValue.TIMESTAMP
+        })
         .then(function () {
-            return presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+            return presenceRef.set({
+                online: true,
+                absentSince: null,
+                onlineSince: firebase.database.ServerValue.TIMESTAMP,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP
+            });
         })
         .then(function () { noteServerAck(setupGen, setupListenerGen); })
         .catch(function () {
             // Регистрация не удалась (нет связи) — всё равно пробуем объявить
             // себя online: запись уйдёт из очереди при восстановлении сети.
-            presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+            presenceRef.set({
+                online: true,
+                absentSince: null,
+                onlineSince: firebase.database.ServerValue.TIMESTAMP,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP
+            })
                 .then(function () { noteServerAck(setupGen, setupListenerGen); })
                 .catch(function () {});
         });
@@ -2484,7 +2660,12 @@ function detachMyPresence() {
 
 function markMyselfLeftExplicitly() {
     if (myPresenceRef) {
-        myPresenceRef.update({ online: false, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+        // v180: явный выход — та же машина отсутствия, что и сворачивание.
+        myPresenceRef.update({
+            online: false,
+            absentSince: firebase.database.ServerValue.TIMESTAMP,
+            lastSeen: firebase.database.ServerValue.TIMESTAMP
+        });
     }
     detachMyPresence();
 }
@@ -3114,7 +3295,12 @@ function renderEndGameModal() {
             endGameText.textContent = text;
             // Обязательно очищаем: иначе причина ПРОШЛОЙ ничьей осталась бы
             // висеть под результатом победы (элемент переиспользуется).
-            if (endGameSubtext) endGameSubtext.textContent = "";
+            // v180: единственная победа, у которой есть пояснение — техническая.
+            // Без него исход выглядел бы необъяснимо для обеих сторон.
+            if (endGameSubtext) {
+                endGameSubtext.textContent =
+                    (currentState.winReason === TECHNICAL_WIN_REASON) ? t("win_reason_disconnect") : "";
+            }
         }
         
         endGameModal.classList.remove("hidden");
@@ -3671,6 +3857,9 @@ function forceResyncFromServer(silent) {
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
             winReason: room.winReason || null,
+            // v180: технический результат читается ТОЛЬКО как признак уже
+            // принятого решения — второй pipeline на нём не строится.
+            result: room.result || null,
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };
@@ -3764,7 +3953,12 @@ function performMove(fromRow, fromCol, toRow, toCol) {
 
         pendingSyncChain = pendingSyncChain.then(function () {
             return database.ref("rooms/" + roomCode).transaction(function (room) {
-                if (!room || !room.pieces || room.winner) return;
+                // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
+                // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
+                // ровно один исход. Проверка стоит первой строкой каждой whole-room
+                // транзакции, а транзакция перечитывает СЕРВЕРНЫЕ данные при гонке,
+                // поэтому подмена уже записанного результата невозможна.
+                if (!room || !room.pieces || room.winner || room.result) return;
 
                 const state = {
                     pieces: room.pieces,
@@ -3994,6 +4188,9 @@ function startOnlineGame() {
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
             winReason: room.winReason || null,
+            // v180: технический результат читается ТОЛЬКО как признак уже
+            // принятого решения — второй pipeline на нём не строится.
+            result: room.result || null,
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };
@@ -5535,7 +5732,12 @@ btnResignYes.addEventListener("click", function () {
         // защищается именно серверная транзакция сдачи.
         if (!isFirebaseConnected) return;
         database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room || room.winner) return;
+            // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
+            // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
+            // ровно один исход. Проверка стоит первой строкой каждой whole-room
+            // транзакции, а транзакция перечитывает СЕРВЕРНЫЕ данные при гонке,
+            // поэтому подмена уже записанного результата невозможна.
+            if (!room || room.winner || room.result) return;
             const newRoom = {};
             for (const key in room) newRoom[key] = room[key];
             newRoom.winner = myColor === "light" ? "dark" : "light";
@@ -5666,7 +5868,12 @@ if (btnDrawAccept) {
         // подтвердит его при актуальном серверном состоянии.
         if (!isFirebaseConnected) return;
         database.ref("rooms/" + roomCode).transaction(function (room) {
-            if (!room || room.winner) return;
+            // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
+            // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
+            // ровно один исход. Проверка стоит первой строкой каждой whole-room
+            // транзакции, а транзакция перечитывает СЕРВЕРНЫЕ данные при гонке,
+            // поэтому подмена уже записанного результата невозможна.
+            if (!room || room.winner || room.result) return;
             const newRoom = {};
             for (const key in room) newRoom[key] = room[key];
             newRoom.winner = "draw";
@@ -5813,6 +6020,11 @@ function performRematchReset() {
     updates["pendingRemovals"] = null;
     updates["winner"] = null;
     updates["winReason"] = null;
+    // v180: реванш — новая партия, поэтому технический результат прошлой
+    // партии снимается ВМЕСТЕ с winner/winReason, одной операцией. Итоговое
+    // состояние комнаты остаётся согласованным (нет result — нет и
+    // winReason "disconnect"), поэтому инвариант уровня комнаты выполняется.
+    updates["result"] = null;
     updates["status"] = "active";
     updates["turnStartedAt"] = firebase.database.ServerValue.TIMESTAMP;
     updates["rematchProposal"] = null;
@@ -6033,7 +6245,12 @@ function checkTimeout() {
     // партии могли устареть за время обрыва.
     if (!isFirebaseConnected) return;
     database.ref("rooms/" + roomCode).transaction(function (room) {
-        if (!room || room.winner) return;
+        // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
+        // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
+        // ровно один исход. Проверка стоит первой строкой каждой whole-room
+        // транзакции, а транзакция перечитывает СЕРВЕРНЫЕ данные при гонке,
+        // поэтому подмена уже записанного результата невозможна.
+        if (!room || room.winner || room.result) return;
         if (room.turn !== loser) return room;
         const newRoom = {};
         for (const key in room) newRoom[key] = room[key];
@@ -8316,6 +8533,9 @@ function watchGroupRoomAsSpectator(code) {
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
             winReason: room.winReason || null,
+            // v180: технический результат читается ТОЛЬКО как признак уже
+            // принятого решения — второй pipeline на нём не строится.
+            result: room.result || null,
             rematchProposal: room.rematchProposal || null,
             drawProposal: room.drawProposal || null
         };

@@ -15,15 +15,20 @@ let passed = 0, failed = 0;
 function check(n, c, d) { console.log((c ? '  ✅ ' : '  ❌ ') + n + (!c && d ? ' — ' + d : '')); c ? passed++ : failed++; }
 
 let cleanupCalls, modalHidden, timersCreated;
+let resultsWritten = [], resultNodeExisting = null, txAborted = 0, presenceWrites = [];
 
 let loadError = null;
 try {
     global.PRESENCE_STALE_WARNING_MS = Number(/const PRESENCE_STALE_WARNING_MS = (\d+);/.exec(SRC)[1]);
     global.RECONNECT_GRACE_MS = Number(/const RECONNECT_GRACE_MS = (\d+);/.exec(SRC)[1]);
     global.CONNECTION_SETTLE_MS = Number(/const CONNECTION_SETTLE_MS = (\d+);/.exec(SRC)[1]);
+    global.TECHNICAL_WIN_REASON = /const TECHNICAL_WIN_REASON = "([a-z]+)";/.exec(SRC)[1];
+    eval(extractFunc('getAuthoritativeAbsenceMs'));
+    eval(extractFunc('getOnlineSessionMs'));
     eval(extractFunc('statusForColor'));
     eval(extractFunc('getOpponentAbsenceMs'));
     eval(extractFunc('canTrustAbsenceForCleanup'));
+    eval(extractFunc('writeTechnicalResult'));
     eval(extractFunc('checkOpponentAbsence'));
 } catch (e) { loadError = e.message; }
 
@@ -33,7 +38,7 @@ let clockSkewMs = 0;
 let monoNow = 60000;
 
 function reset() {
-    cleanupCalls = 0; modalHidden = true; timersCreated = [];
+    cleanupCalls = 0; modalHidden = true; timersCreated = []; txAborted = 0;
     global.isOnlineGame = true; global.isBotGame = false; global.isSpectator = false;
     global.roomCode = 'R1'; global.myColor = 'light'; global.myTelegramId = 'ME';
     global.isFirebaseConnected = true;
@@ -49,6 +54,30 @@ function reset() {
     global.fetchAndCacheStatsIfNeeded = function () {};
     global.t = function (k) { return k; };
     global.cleanupAbandonedRoom = function () { cleanupCalls++; };
+    // v180: мок базы. Технический результат пишется ОДНИМ update() на узкие
+    // дочерние пути rooms/<код>/{result,winner,winReason,status}.
+    resultsWritten = [];
+    resultNodeExisting = null;
+    presenceWrites = [];
+    global.technicalResultInFlight = false;
+    global.firebase = { database: { ServerValue: { TIMESTAMP: 1700000000000 } } };
+    global.database = { ref: function (path) { return {
+        update: function (obj) {
+            if (/presence/.test(path)) { presenceWrites.push(path); }
+            if (resultNodeExisting) { txAborted++; return Promise.reject(new Error('result exists')); }
+            resultNodeExisting = obj.result;
+            resultsWritten.push({ path: path, value: obj });
+            return Promise.resolve();
+        },
+        remove: function () { return Promise.resolve(); },
+        transaction: function (fn) {
+            const next = fn(resultNodeExisting);
+            if (next === undefined) { txAborted++; return Promise.resolve({ committed: false }); }
+            resultNodeExisting = next;
+            resultsWritten.push({ path: path, value: next });
+            return Promise.resolve({ committed: true });
+        }
+    }; } };
     global.showInfoModal = function () {};
     global.showScreen = function () {};
     global.loadActiveRooms = function () {};
@@ -62,13 +91,20 @@ function reset() {
 }
 
 // Состояние партии: соперник (dark) молчит absenceSec секунд по серверному времени.
+// v180: у отсутствующего есть серверный absentSince (его ставит либо
+// visibilitychange, либо onDisconnect), у присутствующего — onlineSince,
+// начало его текущей непрерывной online-сессии.
 function stateWithOpponentSilentFor(absenceSec, online) {
+    const now = Date.now();
     return {
         winner: null,
+        result: null,
         players: { light: { id: 'ME', name: 'Me' }, dark: { id: 'OPP', name: 'Opp' } },
         presence: {
-            light: { online: true, lastSeen: Date.now() },
-            dark: { online: (online !== false), lastSeen: Date.now() - absenceSec * 1000 }
+            light: { online: true, onlineSince: now - 600000, lastSeen: now },
+            dark: (online !== false)
+                ? { online: true, onlineSince: now - 600000, lastSeen: now - absenceSec * 1000 }
+                : { online: false, absentSince: now - absenceSec * 1000, lastSeen: now - absenceSec * 1000 }
         }
     };
 }
@@ -93,7 +129,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         getOpponentAbsenceMs('dark') === null);
     checkOpponentAbsence();
     check('1.3 отсчёт не запускается и комната цела',
-        cleanupCalls === 0 && modalHidden === true);
+        resultsWritten.length === 0 );
     check('1.4 мой собственный статус тоже нейтральный (не «ушёл»)',
         statusForColor('light').cls === 'status-neutral');
 
@@ -103,7 +139,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('1.5 связь есть, соперник свежий -> «в игре»',
         statusForColor('dark').cls === 'status-online', statusForColor('dark').cls);
     checkOpponentAbsence();
-    check('1.6 ничего не удаляется', cleanupCalls === 0);
+    check('1.6 ничего не удаляется', resultsWritten.length === 0);
 
     // ===============================================================
     console.log('2. СЕРВЕРНОЕ ВРЕМЯ ВМЕСТО ЧАСОВ ТЕЛЕФОНА');
@@ -114,9 +150,10 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('2.1 расхождение часов не превращает живого соперника в ушедшего',
         statusForColor('dark').cls === 'status-online', statusForColor('dark').cls);
     checkOpponentAbsence();
-    check('2.2 и не приводит к удалению комнаты', cleanupCalls === 0);
+    check('2.2 и не приводит к удалению комнаты', resultsWritten.length === 0);
     check('2.3 в коде используется серверное время, а не голый Date.now()',
-        /const elapsed = getEstimatedServerNow\(\) - \(presence\.lastSeen/.test(SRC) &&
+        /const lastSeenElapsed = getEstimatedServerNow\(\) - \(presence\.lastSeen/.test(SRC) &&
+        /return getEstimatedServerNow\(\) - presence\.absentSince;/.test(SRC) &&
         /return getEstimatedServerNow\(\) - presence\.lastSeen;/.test(SRC));
 
     // ===============================================================
@@ -125,7 +162,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     reset();
     global.currentState = stateWithOpponentSilentFor(30, false);
     checkOpponentAbsence();
-    check('3.1 30 секунд отсутствия -> ещё рано', cleanupCalls === 0);
+    check('3.1 30 секунд отсутствия -> ещё рано', resultsWritten.length === 0);
     check('3.2 отдельный setTimeout(60000) больше НЕ заводится',
         timersCreated.indexOf(60000) === -1, JSON.stringify(timersCreated));
 
@@ -133,7 +170,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.currentState = stateWithOpponentSilentFor(75, false);
     checkOpponentAbsence();
     check('3.3 75 секунд отсутствия -> партия завершается сразу',
-        cleanupCalls === 1 && modalHidden === false);
+        resultsWritten.length === 1 && resultsWritten.length === 1);
 
     // reconnect НЕ даёт новой минуты: шкала привязана к lastSeen соперника
     reset();
@@ -141,11 +178,11 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     monoNow = 20000; // я только что вернулся
     checkOpponentAbsence();
     check('3.4 после МОЕГО reconnect ушедшему остаётся ~10с, а не новые 60',
-        cleanupCalls === 0);
+        resultsWritten.length === 0);
     global.currentState = stateWithOpponentSilentFor(65, false);
     checkOpponentAbsence();
     check('3.5 через оставшиеся секунды партия корректно завершается',
-        cleanupCalls === 1);
+        resultsWritten.length === 1);
     check('3.6 в коде решение читает тот же возраст lastSeen, что и надпись',
         /const absenceMs = getOpponentAbsenceMs\(oppColor\);/.test(SRC) &&
         /if \(absenceMs === null \|\| absenceMs < RECONNECT_GRACE_MS\) return;/.test(SRC));
@@ -157,24 +194,24 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.currentState = stateWithOpponentSilentFor(75, false);
     monoNow = 3000; // связь держится всего 3 секунды (монотонные часы)
     checkOpponentAbsence();
-    check('4.1 связь только что вернулась -> НЕ удалять', cleanupCalls === 0);
+    check('4.1 связь только что вернулась -> НЕ удалять', resultsWritten.length === 0);
     check('4.2 решение лишь отложено: при устойчивой связи оно принимается', (function () {
         monoNow = 30000;
         checkOpponentAbsence();
-        return cleanupCalls === 1;
+        return resultsWritten.length === 1;
     })());
 
     reset();
     global.currentState = stateWithOpponentSilentFor(75, false);
     global.serverTimeOffsetReady = false;
     checkOpponentAbsence();
-    check('4.3 серверное время ещё неизвестно -> НЕ удалять', cleanupCalls === 0);
+    check('4.3 серверное время ещё неизвестно -> НЕ удалять', resultsWritten.length === 0);
 
     reset();
     global.currentState = stateWithOpponentSilentFor(75, false);
     global.isFirebaseConnected = false; global.connectedSinceMono = null;
     checkOpponentAbsence();
-    check('4.4 нет связи -> НЕ удалять', cleanupCalls === 0);
+    check('4.4 нет связи -> НЕ удалять', resultsWritten.length === 0);
 
     check('4.5 путь «не удалось подтвердить -> всё равно удалить» отсутствует',
         /if \(!canTrustAbsenceForCleanup\(\)\) return;/.test(SRC));
@@ -192,28 +229,28 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.isSpectator = true;
     global.currentState = stateWithOpponentSilentFor(300, false);
     checkOpponentAbsence();
-    check('5.1 зритель никогда не удаляет комнату', cleanupCalls === 0);
+    check('5.1 зритель никогда не удаляет комнату', resultsWritten.length === 0);
 
     reset();
     global.isOnlineGame = false; global.isBotGame = true;
     global.currentState = stateWithOpponentSilentFor(300, false);
     checkOpponentAbsence();
-    check('5.2 игра с ботом не затронута', cleanupCalls === 0);
+    check('5.2 игра с ботом не затронута', resultsWritten.length === 0);
 
     reset();
     global.currentState = stateWithOpponentSilentFor(300, false);
     global.currentState.winner = 'light';
     checkOpponentAbsence();
-    check('5.3 законченная партия не запускает очистку', cleanupCalls === 0);
+    check('5.3 законченная партия не запускает очистку', resultsWritten.length === 0);
 
     reset();
     global.currentState = stateWithOpponentSilentFor(300, false);
     global.opponentAbsenceHandled = true;
     checkOpponentAbsence();
-    check('5.4 повторный вызов не удаляет комнату дважды', cleanupCalls === 0);
+    check('5.4 повторный вызов не удаляет комнату дважды', resultsWritten.length === 0);
 
     check('5.5 presence-фиксы v171 на месте',
-        /onDisconnect\(\)\.update\(\{ online: false \}\)/.test(SRC));
+        /onDisconnect\(\)\.update\(\{[\s\S]{0,120}online: false/.test(SRC));
     check('5.6 UID-фикс результата не тронут',
         /function resolveMyOnlineResult\(state\) \{/.test(SRC));
     check('5.7 sync-индикатор хода не тронут',
@@ -235,7 +272,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.myColor = 'dark';
     checkOpponentAbsence();
     check('6.2 ложной очистки нет ни для одного цвета',
-        asLight === 0 && cleanupCalls === 0);
+        asLight === 0 && resultsWritten.length === 0);
 
     global.myColor = 'light';
     global.isFirebaseConnected = true;
@@ -246,20 +283,23 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         statusForColor('light').cls === 'status-online' &&
         statusForColor('dark').cls === 'status-online');
     checkOpponentAbsence();
-    check('6.4 и никакой очистки не запускается', cleanupCalls === 0);
+    check('6.4 и никакой очистки не запускается', resultsWritten.length === 0);
 
     // ===============================================================
-    console.log('7. cleanupAbandonedRoom РОВНО ОДИН РАЗ');
+    console.log('7. ТЕХНИЧЕСКИЙ РЕЗУЛЬТАТ РОВНО ОДИН РАЗ');
     // ===============================================================
     reset();
     global.currentState = stateWithOpponentSilentFor(75, false);
     for (let sec = 0; sec < 10; sec++) {
         global.currentState.presence.dark.lastSeen = Date.now() - (75 + sec) * 1000;
+        global.currentState.presence.dark.absentSince = Date.now() - (75 + sec) * 1000;
         checkOpponentAbsence();
     }
     check('7.1 за 10 секунд подряд очистка вызвана РОВНО один раз',
-        cleanupCalls === 1, 'вызовов: ' + cleanupCalls);
-    check('7.2 модалка показана и остаётся', modalHidden === false);
+        resultsWritten.length === 1, 'записей: ' + resultsWritten.length);
+    check('7.2 результат содержит корректные UID победителя и проигравшего',
+        resultsWritten[0].value.result.winnerId === 'ME' && resultsWritten[0].value.result.loserId === 'OPP' &&
+        resultsWritten[0].value.result.winReason === 'disconnect');
     check('7.3 opponentAbsenceHandled взведён', global.opponentAbsenceHandled === true);
     check('7.4 флаг ставится ДО разрушительного вызова', (function () {
         const m = /function checkOpponentAbsence[\s\S]*?\n}/.exec(SRC);
@@ -274,10 +314,10 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.currentState = stateWithOpponentSilentFor(75, false);
     global.roomSnapshotSeenSinceConnect = false;
     checkOpponentAbsence();
-    check('8.1 нет свежего снапшота после reconnect -> НЕ удалять', cleanupCalls === 0);
+    check('8.1 нет свежего снапшота после reconnect -> НЕ удалять', resultsWritten.length === 0);
     global.roomSnapshotSeenSinceConnect = true;
     checkOpponentAbsence();
-    check('8.2 снапшот пришёл -> решение принимается', cleanupCalls === 1);
+    check('8.2 снапшот пришёл -> решение принимается', resultsWritten.length === 1);
     check('8.3 флаг сбрасывается и при обрыве, и при новом подключении',
         (SRC.match(/roomSnapshotSeenSinceConnect = false;/g) || []).length === 4);
     check('8.4 флаг ставится ТОЛЬКО в колбэке room-listener',
@@ -297,10 +337,10 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.currentState = stateWithOpponentSilentFor(75, false);
     global.serverAckSinceConnect = false; // сервер ещё не ответил после reconnect
     checkOpponentAbsence();
-    check('9.1 без серверного подтверждения cleanup ЗАПРЕЩЁН', cleanupCalls === 0);
+    check('9.1 без серверного подтверждения cleanup ЗАПРЕЩЁН', resultsWritten.length === 0);
     global.serverAckSinceConnect = true;
     checkOpponentAbsence();
-    check('9.2 после серверного подтверждения решение принимается', cleanupCalls === 1);
+    check('9.2 после серверного подтверждения решение принимается', resultsWritten.length === 1);
 
     check('9.3 снапшот комнаты засчитывается ТОЛЬКО после серверного ack',
         /if \(serverAckSinceConnect && myListenerGen === listenerGeneration\) \{/.test(SRC));
@@ -324,21 +364,21 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     monoNow = 3000; // связь стабильна всего 3 секунды
     clockSkewMs = 0;
     checkOpponentAbsence();
-    check('10.1 3 секунды стабильности -> НЕ удалять', cleanupCalls === 0);
+    check('10.1 3 секунды стабильности -> НЕ удалять', resultsWritten.length === 0);
     // системные часы прыгнули на час вперёд — монотонные не изменились
     const jumpedForward = Date.now;
     Date.now = function () { return jumpedForward() + 3600000; };
     checkOpponentAbsence();
     check('10.2 скачок Date.now() ВПЕРЁД не сокращает интервал стабильности',
-        cleanupCalls === 0);
+        resultsWritten.length === 0);
     Date.now = function () { return jumpedForward() - 3600000; };
     checkOpponentAbsence();
-    check('10.3 скачок Date.now() НАЗАД тоже ничего не ломает', cleanupCalls === 0);
+    check('10.3 скачок Date.now() НАЗАД тоже ничего не ломает', resultsWritten.length === 0);
     Date.now = jumpedForward;
     monoNow = 30000; // монотонно прошло 30 секунд
     checkOpponentAbsence();
     check('10.4 по монотонным часам интервал выдержан -> решение принимается',
-        cleanupCalls === 1);
+        resultsWritten.length === 1);
     check('10.5 в коде интервал меряется монотонными часами, а не Date.now()',
         /getMonotonicNow\(\) - connectedSinceMono < CONNECTION_SETTLE_MS/.test(SRC) &&
         /connectedSinceMono = getMonotonicNow\(\);/.test(SRC));
@@ -352,7 +392,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('11.1 пока offset не готов — нейтральный статус, а не ложный «ушёл»',
         statusForColor('dark').cls === 'status-neutral', statusForColor('dark').cls);
     checkOpponentAbsence();
-    check('11.2 и никакого удаления', cleanupCalls === 0);
+    check('11.2 и никакого удаления', resultsWritten.length === 0);
     global.serverTimeOffsetReady = true;
     check('11.3 offset получен — статус считается нормально',
         statusForColor('dark').cls === 'status-left');
@@ -430,7 +470,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.serverAckSinceConnect = true;
     global.roomSnapshotSeenSinceConnect = true;
     checkOpponentAbsence();
-    check('12.11 подтверждённая комната: уход >60с очищается', cleanupCalls === 1);
+    check('12.11 подтверждённая комната: уход >60с очищается', resultsWritten.length === 1);
 
     // --- 12.12 без доказательства текущей комнаты cleanup запрещён ---
     reset();
@@ -438,7 +478,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.serverAckSinceConnect = false;
     global.roomSnapshotSeenSinceConnect = false;
     checkOpponentAbsence();
-    check('12.12 новая комната без доказательства: cleanup ЗАПРЕЩЁН', cleanupCalls === 0);
+    check('12.12 новая комната без доказательства: cleanup ЗАПРЕЩЁН', resultsWritten.length === 0);
 
 
     // ===============================================================
@@ -462,14 +502,14 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('13.4 onDisconnect взводится ДО объявления online', (function () {
         const m = /function setupPresence[\s\S]*?\n}/.exec(SRC);
         if (!m) return false;
-        const od = m[0].indexOf('presenceRef.onDisconnect().update({ online: false })');
-        const setOnline = m[0].indexOf('return presenceRef.set({ online: true');
+        const od = m[0].indexOf('presenceRef.onDisconnect().update({');
+        const setOnline = m[0].indexOf('return presenceRef.set({');
         return od !== -1 && setOnline !== -1 && od < setOnline;
     })());
     check('13.5 online объявляется только после успешной регистрации onDisconnect',
-        /presenceRef\.onDisconnect\(\)\.update\(\{ online: false \}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
+        /presenceRef\.onDisconnect\(\)\.update\(\{[\s\S]{0,200}\}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
     check('13.6 при неудачной регистрации online всё равно объявляется (очередь)',
-        /\.catch\(function \(\) \{[\s\S]{0,400}presenceRef\.set\(\{ online: true/.test(SRC));
+        /\.catch\(function \(\) \{[\s\S]{0,400}presenceRef\.set\(\{/.test(SRC));
     check('13.7 setupPresence вызывается заново после реконнекта -> onDisconnect перевзводится',
         /myPresenceRef\.onDisconnect\(\)\.cancel\(\);/.test(SRC));
 
@@ -477,7 +517,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         const m = /function statusForColor[\s\S]*?\n}/.exec(SRC);
         if (!m) return false;
         const fresh = m[0].indexOf('if (!roomSnapshotSeenSinceConnect)');
-        const elapsed = m[0].indexOf('const elapsed = getEstimatedServerNow()');
+        const elapsed = m[0].indexOf('const lastSeenElapsed = getEstimatedServerNow()');
         return fresh !== -1 && fresh < elapsed;
     })());
 
@@ -512,12 +552,12 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('13.12 гонка: незавершённая транзакция + нет доказательства свежести -> НЕ «ушёл»',
         statusForColor('dark').cls === 'status-neutral', statusForColor('dark').cls);
     checkOpponentAbsence();
-    check('13.13 и живая комната не удаляется', cleanupCalls === 0);
+    check('13.13 и живая комната не удаляется', resultsWritten.length === 0);
     // после подтверждения свежести настоящий уход по-прежнему обрабатывается
     global.roomSnapshotSeenSinceConnect = true;
     checkOpponentAbsence();
     check('13.14 после подтверждения свежести настоящий уход >60с очищается',
-        cleanupCalls === 1);
+        resultsWritten.length === 1);
 
 
     // ===============================================================
@@ -579,6 +619,333 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         /Локальный выход из партии этим guard'ом НЕ затрагивается/.test(SRC));
     check('15.7 отмечено как временная инварианта Фазы 1 (снимется в Фазе 2)',
         (SRC.match(/ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1/g) || []).length === 3);
+
+
+    // ===============================================================
+    console.log('17. v180: ЕДИНАЯ МАШИНА ОТСУТСТВИЯ');
+    // ===============================================================
+    check('17.1 сворачивание пишет online:false + absentSince серверным временем', (function () {
+        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
+        if (!m) return false;
+        const hidden = m[0].slice(0, m[0].indexOf('} else'));
+        return /online: false/.test(hidden) &&
+            /absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(hidden);
+    })());
+    check('17.2 возвращение очищает absentSince', (function () {
+        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
+        const back = m[0].slice(m[0].indexOf('} else'));
+        return /online: true/.test(back) && /absentSince: null/.test(back);
+    })());
+    check('17.3 настоящий обрыв ведёт в ТУ ЖЕ машину (onDisconnect ставит absentSince)',
+        /onDisconnect\(\)\.update\(\{[\s\S]{0,200}absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(SRC));
+    check('17.4 никакого бессрочного «отошёл» не осталось',
+        !/status_away/.test(SRC) && !/away: true/.test(SRC));
+    check('17.5 отсчёт ведётся от absentSince, а не от часов телефона', (function () {
+        const m = /function getOpponentAbsenceMs[\s\S]*?\n}/.exec(SRC);
+        return m && /getEstimatedServerNow\(\) - presence\.absentSince/.test(m[0]) &&
+            !/Date\.now\(\)/.test(m[0]);
+    })());
+
+    // поведение отсчёта
+    // absentSec — сколько соперник отсутствует; myOnlineSec — сколько длится
+    // МОЯ текущая непрерывная online-сессия (по умолчанию давно).
+    function absent(sec, myOnlineSec) {
+        const now = Date.now();
+        return {
+            winner: null,
+            result: null,
+            players: { light: { id: 'ME', name: 'Me' }, dark: { id: 'OPP', name: 'Opp' } },
+            presence: {
+                light: { online: true, onlineSince: now - (myOnlineSec === undefined ? 600 : myOnlineSec) * 1000, lastSeen: now },
+                dark: { online: false, absentSince: now - sec * 1000, lastSeen: now - sec * 1000 }
+            }
+        };
+    }
+    reset(); global.currentState = absent(10); checkOpponentAbsence();
+    check('17.6 отсутствие 10 секунд -> партия продолжается', resultsWritten.length === 0);
+    reset(); global.currentState = absent(30); checkOpponentAbsence();
+    check('17.7 отсутствие 30 секунд -> партия продолжается', resultsWritten.length === 0);
+    reset(); global.currentState = absent(59); checkOpponentAbsence();
+    check('17.8 отсутствие 59 секунд -> партия продолжается', resultsWritten.length === 0);
+    reset(); global.currentState = absent(61); checkOpponentAbsence();
+    check('17.9 отсутствие 61 секунда -> техническое поражение', resultsWritten.length === 1);
+
+    // вернулся до истечения — отсчёт снят
+    reset(); global.currentState = absent(50);
+    global.currentState.presence.dark = { online: true, absentSince: null, onlineSince: Date.now(), lastSeen: Date.now() };
+    check('17.10 вернулся на 50-й секунде -> отсутствия нет', getOpponentAbsenceMs('dark') === null);
+    checkOpponentAbsence();
+    check('17.11 и результат не пишется', resultsWritten.length === 0);
+
+    // ===============================================================
+    console.log('18. v180: ЗАПИСЬ РЕЗУЛЬТАТА');
+    // ===============================================================
+    reset(); global.currentState = absent(75); checkOpponentAbsence();
+    check('18.1 ОДНА атомарная операция на узле комнаты rooms/<код>',
+        resultsWritten.length === 1 && resultsWritten[0].path === 'rooms/R1',
+        resultsWritten[0] && resultsWritten[0].path);
+    check('18.2 операция трогает РОВНО четыре дочерних пути и НИКАКОЙ presence',
+        JSON.stringify(Object.keys(resultsWritten[0].value).sort()) ===
+        JSON.stringify(['result', 'status', 'winReason', 'winner']),
+        JSON.stringify(Object.keys(resultsWritten[0].value)));
+    check('18.3 победитель — оставшийся, проигравший — отсутствующий (по UID)',
+        resultsWritten[0].value.result.winnerId === 'ME' && resultsWritten[0].value.result.loserId === 'OPP');
+    check('18.4 winReason = disconnect и в result, и на уровне комнаты',
+        resultsWritten[0].value.result.winReason === 'disconnect' &&
+        resultsWritten[0].value.winReason === 'disconnect');
+    check('18.5 decidedAt — серверное время', resultsWritten[0].value.result.decidedAt === 1700000000000);
+
+    // однократность
+    for (let i = 0; i < 8; i++) { global.opponentAbsenceHandled = false; checkOpponentAbsence(); }
+    check('18.6 результат пишется РОВНО один раз даже при повторных вызовах',
+        resultsWritten.length === 1, 'записей: ' + resultsWritten.length);
+    check('18.7 повторная попытка не создаёт второго результата',
+        resultNodeExisting && resultNodeExisting.winnerId === 'ME');
+
+    // комната НЕ удаляется
+    check('18.8 комната НЕ удаляется — остаётся finished для Elo/статистики/монет',
+        resultsWritten.length === 1 && cleanupCalls === 0);
+    check('18.9 обычное отсутствие ведёт к результату, а не к удалению комнаты',
+        resultsWritten.length === 1 && cleanupCalls === 0 &&
+        /if \(writeTechnicalResult\(oppColor\)\) \{/.test(SRC));
+
+    // чужой результат не пишем
+    reset(); global.currentState = absent(75);
+    global.myTelegramId = 'OPP'; global.myColor = 'dark';
+    checkOpponentAbsence();
+    check('18.10 отсутствующий сам себе победу не пишет', resultsWritten.length === 0);
+
+    // зритель и бот
+    reset(); global.isSpectator = true; global.currentState = absent(75); checkOpponentAbsence();
+    check('18.11 зритель результат не пишет', resultsWritten.length === 0);
+    reset(); global.isOnlineGame = false; global.isBotGame = true;
+    global.currentState = absent(75); checkOpponentAbsence();
+    check('18.12 бот не затронут', resultsWritten.length === 0);
+
+    // защиты v178/v177 на месте
+    check('18.13 fail-safe перед результатом сохранён',
+        /if \(!canTrustAbsenceForCleanup\(\)\) return;/.test(SRC));
+    check('18.14 запрет офлайн-хода из v178 сохранён',
+        /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC));
+    reset(); global.currentState = absent(75); global.isFirebaseConnected = false;
+    global.connectedSinceMono = null;
+    checkOpponentAbsence();
+    check('18.15 без своей связи результат не пишется (оба отсутствуют)',
+        resultsWritten.length === 0);
+
+
+    // ===============================================================
+    console.log('19. v180: onlineSince — НАЧАЛО ТЕКУЩЕЙ ONLINE-СЕССИИ');
+    // ===============================================================
+    check('19.1 первичный вход (setupPresence) ставит onlineSince', (function () {
+        const m = /function setupPresence[\s\S]*?\n}/.exec(SRC);
+        if (!m) return false;
+        return /presenceRef\.set\(\{[\s\S]{0,220}onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
+    })());
+    check('19.2 возвращение из фона ставит onlineSince заново', (function () {
+        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
+        const back = m[0].slice(m[0].indexOf('} else'));
+        return /onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(back);
+    })());
+    check('19.3 reconnect после настоящего обрыва ставит onlineSince заново', (function () {
+        const m = /connectedRef\.on\("value"[\s\S]*?\n\}\);/.exec(SRC);
+        if (!m) return false;
+        return /myPresenceRef\.update\(\{[\s\S]{0,300}onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
+    })());
+    check('19.4 HEARTBEAT НЕ ТРОГАЕТ onlineSince', (function () {
+        const m = /presenceHeartbeatInterval = setInterval\([\s\S]*?\}, 4000\);/.exec(SRC);
+        if (!m) return false;
+        return m[0].indexOf('onlineSince') === -1;
+    })());
+    check('19.5 сворачивание ставит absentSince и НЕ ставит onlineSince', (function () {
+        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
+        const hidden = m[0].slice(0, m[0].indexOf('} else'));
+        return /absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(hidden) &&
+            hidden.indexOf('onlineSince') === -1;
+    })());
+    check('19.6 onDisconnect ставит absentSince и НЕ трогает onlineSince', (function () {
+        const m = /presenceRef\.onDisconnect\(\)\.update\(\{[\s\S]{0,200}\}\)/.exec(SRC);
+        if (!m) return false;
+        return /absentSince/.test(m[0]) && m[0].indexOf('onlineSince') === -1;
+    })());
+    check('19.7 порядок v178 сохранён: onDisconnect ДО объявления online', (function () {
+        const m = /function setupPresence[\s\S]*?\n}/.exec(SRC);
+        const od = m[0].indexOf('presenceRef.onDisconnect().update({');
+        const setOnline = m[0].indexOf('return presenceRef.set({');
+        return od !== -1 && setOnline !== -1 && od < setOnline;
+    })());
+
+    reset(); global.currentState = absent(300, 10); checkOpponentAbsence();
+    check('19.8 моя online-сессия 10 секунд -> результата НЕТ', resultsWritten.length === 0);
+    reset(); global.currentState = absent(300, 59); checkOpponentAbsence();
+    check('19.9 моя online-сессия 59 секунд -> результата ещё НЕТ', resultsWritten.length === 0);
+    reset(); global.currentState = absent(300, 61); checkOpponentAbsence();
+    check('19.10 моя online-сессия 61 секунда -> результат записан', resultsWritten.length === 1);
+    check('19.11 флаг обработки взведён только после реальной отправки',
+        global.opponentAbsenceHandled === true);
+
+    // ===============================================================
+    console.log('20. v180: ОБА ОТСУТСТВУЮТ');
+    // ===============================================================
+    reset();
+    global.currentState = absent(300, 600);
+    global.currentState.presence.light = { online: false, absentSince: Date.now() - 300000, lastSeen: Date.now() - 300000 };
+    checkOpponentAbsence();
+    check('20.1 оба отсутствуют -> НИКАКОГО автоматического победителя',
+        resultsWritten.length === 0);
+
+    reset();
+    global.currentState = absent(300, 0);
+    checkOpponentAbsence();
+    check('20.2 я только что вернулся -> сопернику даётся НОВАЯ полная минута',
+        resultsWritten.length === 0);
+
+    reset();
+    global.currentState = absent(300, 30);
+    global.currentState.presence.dark = { online: true, absentSince: null, onlineSince: Date.now(), lastSeen: Date.now() };
+    checkOpponentAbsence();
+    check('20.3 соперник вернулся внутри новой минуты -> партия продолжается',
+        resultsWritten.length === 0 && getOpponentAbsenceMs('dark') === null);
+
+    reset();
+    global.currentState = absent(360, 61);
+    checkOpponentAbsence();
+    check('20.4 соперник не вернулся -> поражение после ПОЛНОЙ новой минуты',
+        resultsWritten.length === 1);
+    check('20.5 отсчёт победителя привязан к onlineSince',
+        /getOnlineSessionMs\(presence\[winnerColor\]\)/.test(SRC) &&
+        /myOnlineMs < RECONNECT_GRACE_MS\) return false;/.test(SRC));
+
+    // ===============================================================
+    console.log('21. v180: authoritative absentSince ONLY');
+    // ===============================================================
+    reset();
+    global.currentState = absent(300, 600);
+    delete global.currentState.presence.dark.absentSince;
+    global.currentState.presence.dark.lastSeen = Date.now() - 100000;
+    checkOpponentAbsence();
+    check('21.1 absentSince отсутствует -> технического поражения НЕТ',
+        resultsWritten.length === 0);
+    check('21.2 в решении нет отката на lastSeen', (function () {
+        const m = /function getAuthoritativeAbsenceMs[\s\S]*?\n}/.exec(SRC);
+        return m && m[0].indexOf('lastSeen') === -1;
+    })());
+    check('21.3 партия НЕ удаляется и модалка «покинул игру» не показывается',
+        cleanupCalls === 0 && modalHidden === true);
+
+    // сколь угодно долгое молчание БЕЗ absentSince не создаёт ни результата,
+    // ни второго пути завершения — решение просто откладывается навсегда
+    reset();
+    global.currentState = absent(300, 600);
+    delete global.currentState.presence.dark.absentSince;
+    global.currentState.presence.dark.lastSeen = Date.now() - 3600000;
+    for (var noAuthSec = 0; noAuthSec < 20; noAuthSec++) {
+        global.opponentAbsenceHandled = false;
+        checkOpponentAbsence();
+    }
+    check('21.4 час молчания без absentSince -> НЕТ результата и НЕТ удаления',
+        resultsWritten.length === 0 && cleanupCalls === 0 && modalHidden === true);
+    check('21.5 второго пути завершения по отсутствию в коде НЕТ', (function () {
+        var m = /function checkOpponentAbsence[\s\S]*?\n}/.exec(SRC);
+        if (!m) return false;
+        var body = m[0];
+        // единственный cleanupAbandonedRoom — в ветке «нет ответа на реванш»
+        return (body.match(/cleanupAbandonedRoom\(\)/g) || []).length === 1 &&
+            body.indexOf('rematch_no_response') < body.indexOf('cleanupAbandonedRoom()') &&
+            body.indexOf('LEGACY_ABANDON_MS') === -1;
+    })());
+    check('21.6 константа аварийного выхода полностью удалена из кода',
+        SRC.indexOf('LEGACY_ABANDON_MS') === -1);
+
+    // ===============================================================
+    console.log('22. v180: АТОМАРНОСТЬ И НЕИЗМЕНЯЕМОСТЬ РЕЗУЛЬТАТА');
+    // ===============================================================
+    reset(); global.currentState = absent(75); checkOpponentAbsence();
+    check('22.1 операция НЕ пишет presence ни одним путём',
+        presenceWrites.length === 0 && !('presence' in resultsWritten[0].value));
+    check('22.2 одной операцией: result + winner + winReason + status',
+        !!resultsWritten[0].value.result &&
+        resultsWritten[0].value.winner === 'light' &&
+        resultsWritten[0].value.winReason === 'disconnect' &&
+        resultsWritten[0].value.status === 'finished');
+    check('22.3 winner комнаты совпадает с result.winnerColor',
+        resultsWritten[0].value.winner === resultsWritten[0].value.result.winnerColor);
+    check('22.4 result.status тоже finished',
+        resultsWritten[0].value.result.status === 'finished');
+    check('22.5 цвета победителя и проигравшего различны',
+        resultsWritten[0].value.result.winnerColor !== resultsWritten[0].value.result.loserColor);
+
+    var firstResult = JSON.stringify(resultsWritten[0].value.result);
+    global.opponentAbsenceHandled = false;
+    global.technicalResultInFlight = false;
+    global.currentState.result = resultsWritten[0].value.result;
+    checkOpponentAbsence();
+    check('22.6 повторный вызов при уже известном result ничего не пишет',
+        resultsWritten.length === 1 &&
+        JSON.stringify(resultsWritten[0].value.result) === firstResult);
+    check('22.7 клиентский guard на currentState.result присутствует',
+        /if \(currentState\.winner \|\| currentState\.result\) return false;/.test(SRC));
+    check('22.8 in-flight guard не даёт отправить вторую операцию',
+        /if \(technicalResultInFlight\) return true;/.test(SRC));
+
+    // ===============================================================
+    console.log('23. v180: ОДНА ПАРТИЯ -> ОДИН ИСХОД (гонки)');
+    // ===============================================================
+    check('23.1 обычный ход отменяется, если технический результат уже есть',
+        /if \(!room \|\| !room\.pieces \|\| room\.winner \|\| room\.result\) return;/.test(SRC));
+    check('23.2 сдача, ничья и таймаут проверяют room.result',
+        (SRC.match(/if \(!room \|\| room\.winner \|\| room\.result\) return;/g) || []).length === 3,
+        'найдено: ' + (SRC.match(/if \(!room \|\| room\.winner \|\| room\.result\) return;/g) || []).length);
+    check('23.3 guard стоит в КАЖДОЙ из трёх обычных финальных транзакций', (function () {
+        var bodies = ['newRoom.winReason = "resign";', 'newRoom.winner = "draw";', 'newRoom.winReason = "timeout";'];
+        return bodies.every(function (b) {
+            var i = SRC.indexOf(b);
+            if (i === -1) return false;
+            var guard = SRC.lastIndexOf('room.result) return;', i);
+            var tx = SRC.lastIndexOf('.transaction(function (room)', i);
+            return guard !== -1 && tx !== -1 && guard > tx;
+        });
+    })());
+    check('23.4 технический результат не может перезаписать обычный winner',
+        /if \(currentState\.winner \|\| currentState\.result\) return false;/.test(SRC));
+    check('23.5 отсутствующий не может присудить победу себе',
+        /if \(!myTelegramId \|\| winnerPlayer\.id !== myTelegramId\) return false;/.test(SRC));
+    check('23.6 цвет и UID победителя обязаны совпасть с составом комнаты',
+        /if \(winnerColor !== myColor\) return false;/.test(SRC));
+    check('23.7 реванш снимает result вместе с winner одной операцией',
+        /updates\["result"\] = null;/.test(SRC) && /updates\["winner"\] = null;/.test(SRC));
+
+    reset(); global.currentState = absent(75); checkOpponentAbsence();
+    var beforeSecond = resultsWritten.length;
+    global.opponentAbsenceHandled = false;
+    global.technicalResultInFlight = false;
+    checkOpponentAbsence();
+    check('23.8 второй одновременный вызов не создаёт второй результат',
+        resultsWritten.length === beforeSecond, 'записей: ' + resultsWritten.length);
+
+    // ===============================================================
+    console.log('24. v180: СУЩЕСТВУЮЩИЙ PIPELINE НЕ ДУБЛИРУЕТСЯ');
+    // ===============================================================
+    check('24.1 второго pipeline результата не создано',
+        !/recordGameResultFromTechnicalResult/.test(SRC) &&
+        !/renderTechnicalEndGameModal/.test(SRC));
+    check('24.2 result попадает в состояние комнаты как обычное поле',
+        (SRC.match(/result: room\.result \|\| null,/g) || []).length === 3);
+    check('24.3 существующая UID-атрибуция не тронута',
+        /function resolveMyOnlineResult\(state\) \{/.test(SRC) &&
+        /const winnerId = \(state\.winner === "light"\) \? lightId : darkId;/.test(SRC));
+    check('24.4 Elo-квитанция по-прежнему единственная точка записи рейтинга',
+        (SRC.match(/updates\["eloMatches\/" \+ ctx\.matchId\]/g) || []).length === 1);
+    check('24.5 дедуп монет не тронут',
+        /rewardedMatches/.test(SRC) && /coinRewardAttemptForMatch === matchId/.test(SRC));
+    check('24.6 вернувшийся проигравший идёт через тот же resolveMyOnlineResult',
+        /const myResult = resolveMyOnlineResult\(currentState\);/.test(SRC));
+    check('24.7 у технической победы есть объяснение во всех трёх языках',
+        (SRC.match(/win_reason_disconnect:/g) || []).length === 3);
+    check('24.8 текст показывается ИМЕННО для technical, а не для любой победы',
+        /currentState\.winReason === TECHNICAL_WIN_REASON\) \? t\("win_reason_disconnect"\) : ""/.test(SRC));
+    check('24.9 finished-комната не подметается лобби-sweep-ом',
+        /if \(room\.status === "finished" \|\| room\.winner\) continue;/.test(SRC));
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);

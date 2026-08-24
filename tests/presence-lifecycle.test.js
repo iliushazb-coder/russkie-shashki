@@ -117,9 +117,13 @@ try {
     eval(extractFunc('startOnlineGame'));
     eval(extractFunc('isRoomPlayerStale'));
     eval(extractFunc('runLobbyStaleSweep'));
+    global.TECHNICAL_WIN_REASON = /const TECHNICAL_WIN_REASON = "([a-z]+)";/.exec(SRC)[1];
+    eval(extractFunc('getAuthoritativeAbsenceMs'));
+    eval(extractFunc('getOnlineSessionMs'));
     eval(extractFunc('statusForColor'));
     eval(extractFunc('getOpponentAbsenceMs'));
     eval(extractFunc('canTrustAbsenceForCleanup'));
+    eval(extractFunc('writeTechnicalResult'));
     eval(extractFunc('checkOpponentAbsence'));
 } catch (e) { loadError = e.message; }
 
