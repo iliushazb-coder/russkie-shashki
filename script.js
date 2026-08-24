@@ -738,7 +738,7 @@ const translations = {
         status_connecting: "подключение...",
         status_game_interrupted: "Игра прервана",
         sync_sending_move: "Отправляю ход…",
-        sync_no_connection: "Нет связи. Ход отправится, когда она вернётся",
+        sync_no_connection: "Нет связи. Подождите восстановления соединения",
         sync_checking: "Проверяю соединение…",
         sync_failed: "Не удалось обновить игру",
         btn_sync_retry: "Повторить",
@@ -863,7 +863,7 @@ const translations = {
         status_connecting: "connecting...",
         status_game_interrupted: "Game interrupted",
         sync_sending_move: "Sending your move…",
-        sync_no_connection: "No connection. Your move will be sent once it is back",
+        sync_no_connection: "No connection. Please wait until it is restored",
         sync_checking: "Checking the connection…",
         sync_failed: "Could not refresh the game",
         btn_sync_retry: "Retry",
@@ -988,7 +988,7 @@ const translations = {
         status_connecting: "connessione...",
         status_game_interrupted: "Partita interrotta",
         sync_sending_move: "Invio la mossa…",
-        sync_no_connection: "Nessuna connessione. La mossa partirà al ritorno",
+        sync_no_connection: "Nessuna connessione. Attendi il ripristino",
         sync_checking: "Controllo la connessione…",
         sync_failed: "Impossibile aggiornare la partita",
         btn_sync_retry: "Riprova",
@@ -2166,6 +2166,16 @@ function statusForColor(color) {
         return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
     }
 
+    // POST-RECONNECT FRESHNESS (v178). Соединение может быть уже восстановлено
+    // (isFirebaseConnected === true), но данные ТЕКУЩЕЙ комнаты ещё не
+    // подтверждены после реконнекта. Судить об уходе соперника по таким данным
+    // нельзя: его lastSeen в нашей памяти мог остаться с момента обрыва.
+    // Пока доказательство свежести не получено — нейтральный статус, который
+    // сознательно не равен "ушёл" и потому не запускает отсчёт отсутствия.
+    if (!roomSnapshotSeenSinceConnect) {
+        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+    }
+
     // ВАЖНО: lastSeen — СЕРВЕРНЫЙ timestamp, поэтому сравнивать его с голым
     // Date.now() нельзя: часы телефона могут разойтись с сервером (классика —
     // переключение авиарежима, после которого телефон переустанавливает время).
@@ -2405,17 +2415,27 @@ function setupPresence() {
 
     const setupGen = connectionGeneration;
     const setupListenerGen = listenerGeneration;
-    presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+    // ПОРЯДОК ВАЖЕН (v178): СНАЧАЛА взводим onDisconnect, и только ПОСЛЕ его
+    // успешной регистрации объявляем себя online. Иначе существует окно, в
+    // котором игрок уже помечен online, а серверный обработчик отключения ещё
+    // не установлен: обрыв ровно в этот момент оставил бы presence навсегда
+    // «в игре». onDisconnect — одноразовая серверная операция, поэтому её
+    // нужно взводить заново при КАЖДОЙ настройке присутствия (в том числе
+    // после каждого реконнекта, когда setupPresence вызывается снова).
+    presenceRef.onDisconnect().update({ online: false })
+        .then(function () {
+            return presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP });
+        })
         .then(function () { noteServerAck(setupGen, setupListenerGen); })
-        .catch(function () {});
-    // ВАЖНО (v171): onDisconnect сознательно НЕ трогает lastSeen. Сервер
-    // выполняет эту запись в момент, когда САМ замечает обрыв — при жёстком
-    // закрытии приложения это происходит через ~45-90 секунд. Свежий lastSeen
-    // в этот момент "омолаживал" бы уже ушедшего игрока: отсчёт absence у
-    // соперника и staleness-проверки лобби начинались бы заново (лишняя
-    // вторая минута). lastSeen честно остаётся временем последнего реального
-    // heartbeat, а факт ухода передаёт online:false.
-    presenceRef.onDisconnect().update({ online: false });
+        .catch(function () {
+            // Регистрация не удалась (нет связи) — всё равно пробуем объявить
+            // себя online: запись уйдёт из очереди при восстановлении сети.
+            presenceRef.set({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+                .then(function () { noteServerAck(setupGen, setupListenerGen); })
+                .catch(function () {});
+        });
+    // ВАЖНО (v171): onDisconnect сознательно НЕ трогает lastSeen — см. выше,
+    // регистрация перенесена ПЕРЕД объявлением online.
 
     presenceHeartbeatInterval = setInterval(function () {
         if (document.hidden) {
@@ -3560,6 +3580,17 @@ function handleClick(row, col) {
     if (isSpectator) return; 
 
     if (isOnlineGame && state.turn !== myColor) return;
+    // БЛОКИРОВКА ХОДА БЕЗ СВЯЗИ (v178, Фаза 1).
+    // Если Firebase ТОЧНО сообщает, что соединения нет, online-ход не
+    // выполняется вовсе: не применяется оптимистичное состояние, не двигаются
+    // moveCount/lastSeenMoveCount, не создаётся транзакция и не заводится
+    // ожидание подтверждения. Причина: собственный ход без сети создавал
+    // незавершённую транзакцию на ВЕСЬ узел комнаты (вместе с presence обоих
+    // игроков) и оптимистичное состояние, которого на сервере никогда не было.
+    // Для шашек в реальном времени офлайн-ход бесполезен — соперник всё равно
+    // не увидит его до восстановления связи. Статус «Нет связи…» уже показан
+    // существующим индикатором синхронизации.
+    if (isOnlineGame && !isFirebaseConnected) return;
     // Пока отправленный ход не получил ответа сервера, второй ход запрещён.
     // Без этого возникало бы окно: восстановление откатило доску к серверному
     // состоянию, игрок сходил заново, а следом «оживала» первая транзакция.
@@ -3883,6 +3914,13 @@ function startOnlineGame() {
         mustCaptureHintTimer = null;
     }
 
+    // ПОРЯДОК ВАЖЕН (v178): поколение подписки открывается ДО setupPresence().
+    // Иначе setupPresence захватывал бы ещё СТАРЫЙ listenerGeneration, и
+    // серверное подтверждение его записи presence отбрасывалось бы функцией
+    // noteServerAck как относящееся к прошлой комнате. Доказательство свежести
+    // тогда откладывалось бы до следующего heartbeat (до 4 секунд), а вместе
+    // с ним — и переход статуса соперника из нейтрального в реальный.
+    resetRoomFreshnessProof();
     setupPresence();
     
     // Показываем кнопки реакций только для онлайн-игр
@@ -3894,7 +3932,6 @@ function startOnlineGame() {
     if (roomListenerRef) roomListenerRef.off();
     // Новая подписка на комнату — прежние доказательства свежести больше не
     // действуют: они относились к другой комнате/другому listener'у.
-    resetRoomFreshnessProof();
     const myListenerGen = listenerGeneration;
     roomListenerRef = database.ref("rooms/" + roomCode);
     roomListenerRef.on("value", function (snapshot) {
@@ -5487,6 +5524,16 @@ btnResignYes.addEventListener("click", function () {
     if (!currentState) return;
 
     if (isOnlineGame) {
+    // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
+    // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
+    // владеет presence обоих игроков. Причина техническая, а не игровая:
+    // незавершённая whole-room транзакция накладывается на приходящие
+    // серверные данные и способна подменить присутствие соперника устаревшим
+    // слепком. Снимется в Фазе 2, когда игровое состояние будет физически
+    // отделено от presence.
+        // Локальный выход из партии этим guard'ом НЕ затрагивается —
+        // защищается именно серверная транзакция сдачи.
+        if (!isFirebaseConnected) return;
         database.ref("rooms/" + roomCode).transaction(function (room) {
             if (!room || room.winner) return;
             const newRoom = {};
@@ -5608,6 +5655,16 @@ function checkDrawProposal() {
 if (btnDrawAccept) {
     btnDrawAccept.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
+    // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
+    // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
+    // владеет presence обоих игроков. Причина техническая, а не игровая:
+    // незавершённая whole-room транзакция накладывается на приходящие
+    // серверные данные и способна подменить присутствие соперника устаревшим
+    // слепком. Снимется в Фазе 2, когда игровое состояние будет физически
+    // отделено от presence.
+        // Без связи согласие не отправляем: после восстановления игрок
+        // подтвердит его при актуальном серверном состоянии.
+        if (!isFirebaseConnected) return;
         database.ref("rooms/" + roomCode).transaction(function (room) {
             if (!room || room.winner) return;
             const newRoom = {};
@@ -5888,10 +5945,15 @@ function runSyncRecovery(isManual) {
     syncRecoveryInFlight = true;
     forceResyncFromServer(true).then(function () {
         syncRecoveryFailed = false;
-        // Ожидание снимается: серверное состояние получено и currentState
-        // приведён к нему. Если сервер наш ход уже содержит — он подтверждён;
-        // если нет — доска вернулась к реальной позиции.
-        pendingMoveStartedAt = null;
+        // ВАЖНО (v178): восстановление НЕ снимает ожидание подтверждения хода.
+        // Раньше здесь стояло pendingMoveStartedAt = null — то есть успешное
+        // ЧТЕНИЕ объявлялось признаком того, что транзакция хода завершилась.
+        // Это неверно: чтение и судьба транзакции — независимые события, и при
+        // незавершённой локальной записи прочитанное состояние вообще может
+        // быть локальным представлением, а не каноническим серверным.
+        // Ожидание снимает ТОЛЬКО реальный исход транзакции — её .then или
+        // .catch в performMove. Так исключён сценарий «recovery объявил ход
+        // законченным, а транзакция ожила и применилась позже».
         syncRecoveryInFlight = false;
         updateTimerDisplay();
     }).catch(function () {
@@ -5958,6 +6020,18 @@ function checkTimeout() {
     if (elapsed <= currentState.timeControlSeconds) return;
 
     const loser = currentState.turn;
+    // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
+    // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
+    // владеет presence обоих игроков. Причина техническая, а не игровая:
+    // незавершённая whole-room транзакция накладывается на приходящие
+    // серверные данные и способна подменить присутствие соперника устаревшим
+    // слепком. Снимется в Фазе 2, когда игровое состояние будет физически
+    // отделено от presence.
+    // Для таймаута это особенно важно: решение принимает АВТОМАТИКА по
+    // локальному таймеру. Клиент без подтверждённой связи не должен запускать
+    // серверно значимую транзакцию — тем более что его собственные данные о
+    // партии могли устареть за время обрыва.
+    if (!isFirebaseConnected) return;
     database.ref("rooms/" + roomCode).transaction(function (room) {
         if (!room || room.winner) return;
         if (room.turn !== loser) return room;
