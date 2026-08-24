@@ -167,6 +167,21 @@ function setupCommonGlobals() {
     global.statsCache = {}; global.opponentAbsenceHandled = false;
     global.lastRenderedSignature = null; global.boardBuilt = false;
     global.pendingSyncChain = null; global.opponentGraceTimer = null;
+    // ONLINE PRESENCE (v177): переменные единой шкалы отсутствия
+    global.isFirebaseConnected = true;
+    global.connectedSinceMono = -60000;
+    global.connectionGeneration = 1;
+    global.listenerGeneration = 0;
+    global.resetRoomFreshnessProof = function () { global.listenerGeneration++; };
+    global.serverAckSinceConnect = true;
+    global.roomSnapshotSeenSinceConnect = true;
+    global.getMonotonicNow = function () { return 0; };
+    global.noteServerAck = function () { global.serverAckSinceConnect = true; };
+    global.connectedSinceMs = Date.now() - 60000;
+    global.CONNECTION_SETTLE_MS = 15000;
+    global.serverTimeOffsetReady = true;
+    global.cachedServerTimeOffsetMs = 0;
+    global.getEstimatedServerNow = function () { return Date.now(); };
     global.mustCaptureHintTimer = null; global.myPresenceRef = null;
     global.presenceHeartbeatInterval = null; global.currentState = null;
     global.reactionsRow = stubEl();
