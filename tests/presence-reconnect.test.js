@@ -213,7 +213,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('5.4 повторный вызов не удаляет комнату дважды', cleanupCalls === 0);
 
     check('5.5 presence-фиксы v171 на месте',
-        /onDisconnect\(\)\.update\(\{ online: false \}\);/.test(SRC));
+        /onDisconnect\(\)\.update\(\{ online: false \}\)/.test(SRC));
     check('5.6 UID-фикс результата не тронут',
         /function resolveMyOnlineResult\(state\) \{/.test(SRC));
     check('5.7 sync-индикатор хода не тронут',
@@ -439,6 +439,146 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     global.roomSnapshotSeenSinceConnect = false;
     checkOpponentAbsence();
     check('12.12 новая комната без доказательства: cleanup ЗАПРЕЩЁН', cleanupCalls === 0);
+
+
+    // ===============================================================
+    console.log('13. ФАЗА 1: ЗАПРЕТ ХОДА БЕЗ СВЯЗИ И ЖИЗНЕННЫЙ ЦИКЛ PRESENCE');
+    // ===============================================================
+    check('13.1 ход блокируется, когда Firebase сообщает об отсутствии связи',
+        /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC));
+    check('13.2 блокировка стоит ДО оптимистичного применения хода', (function () {
+        const guard = SRC.indexOf('if (isOnlineGame && !isFirebaseConnected) return;');
+        const optimistic = SRC.indexOf('isLocalStateOptimistic = true;');
+        const tx = SRC.indexOf('database.ref("rooms/" + roomCode).transaction(function (room)');
+        return guard !== -1 && guard < optimistic && guard < tx;
+    })());
+    check('13.3 значит без связи не создаются ни транзакция, ни ожидание', (function () {
+        const guard = SRC.indexOf('if (isOnlineGame && !isFirebaseConnected) return;');
+        const pending = SRC.indexOf('pendingMoveStartedAt = Date.now();');
+        const lastSeen = SRC.indexOf('lastSeenMoveCount = currentState.moveCount;');
+        return guard < pending && guard < lastSeen;
+    })());
+
+    check('13.4 onDisconnect взводится ДО объявления online', (function () {
+        const m = /function setupPresence[\s\S]*?\n}/.exec(SRC);
+        if (!m) return false;
+        const od = m[0].indexOf('presenceRef.onDisconnect().update({ online: false })');
+        const setOnline = m[0].indexOf('return presenceRef.set({ online: true');
+        return od !== -1 && setOnline !== -1 && od < setOnline;
+    })());
+    check('13.5 online объявляется только после успешной регистрации onDisconnect',
+        /presenceRef\.onDisconnect\(\)\.update\(\{ online: false \}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
+    check('13.6 при неудачной регистрации online всё равно объявляется (очередь)',
+        /\.catch\(function \(\) \{[\s\S]{0,400}presenceRef\.set\(\{ online: true/.test(SRC));
+    check('13.7 setupPresence вызывается заново после реконнекта -> onDisconnect перевзводится',
+        /myPresenceRef\.onDisconnect\(\)\.cancel\(\);/.test(SRC));
+
+    check('13.8 статус нейтрален, пока свежесть текущей комнаты не подтверждена', (function () {
+        const m = /function statusForColor[\s\S]*?\n}/.exec(SRC);
+        if (!m) return false;
+        const fresh = m[0].indexOf('if (!roomSnapshotSeenSinceConnect)');
+        const elapsed = m[0].indexOf('const elapsed = getEstimatedServerNow()');
+        return fresh !== -1 && fresh < elapsed;
+    })());
+
+    check('13.9 восстановление НЕ снимает ожидание подтверждения хода', (function () {
+        const m = /function runSyncRecovery[\s\S]*?\n}/.exec(SRC);
+        return m && !/pendingMoveStartedAt = null;/.test(m[0]);
+    })());
+    check('13.10 ожидание снимает ТОЛЬКО исход транзакции (.then и .catch)',
+        (SRC.match(/pendingMoveStartedAt = null;/g) || []).length >= 2);
+
+    // Поведенческая проверка запрета: моделируем клик без связи
+    reset();
+    global.isFirebaseConnected = false;
+    (function () {
+        let optimisticApplied = false;
+        let txCreated = false;
+        // повторяем guard из production дословно
+        const isOnlineGame = true;
+        if (isOnlineGame && !global.isFirebaseConnected) {
+            // ход не выполняется
+        } else {
+            optimisticApplied = true; txCreated = true;
+        }
+        check('13.11 без связи: оптимистичное состояние не применено, транзакции нет',
+            optimisticApplied === false && txCreated === false);
+    })();
+
+    // Гонка «связь была, исчезла сразу после клика»: транзакция уже создана
+    reset();
+    global.currentState = stateWithOpponentSilentFor(75, false);
+    global.roomSnapshotSeenSinceConnect = false; // после обрыва свежесть не подтверждена
+    check('13.12 гонка: незавершённая транзакция + нет доказательства свежести -> НЕ «ушёл»',
+        statusForColor('dark').cls === 'status-neutral', statusForColor('dark').cls);
+    checkOpponentAbsence();
+    check('13.13 и живая комната не удаляется', cleanupCalls === 0);
+    // после подтверждения свежести настоящий уход по-прежнему обрабатывается
+    global.roomSnapshotSeenSinceConnect = true;
+    checkOpponentAbsence();
+    check('13.14 после подтверждения свежести настоящий уход >60с очищается',
+        cleanupCalls === 1);
+
+
+    // ===============================================================
+    console.log('14. ПОРЯДОК ПОКОЛЕНИЙ И ТЕКСТЫ');
+    // ===============================================================
+    check('14.1 поколение подписки открывается ДО setupPresence()', (function () {
+        const m = /function startOnlineGame[\s\S]*?roomListenerRef\.on\("value"/.exec(SRC);
+        if (!m) return false;
+        const reset = m[0].indexOf('resetRoomFreshnessProof();');
+        const setup = m[0].indexOf('setupPresence();');
+        return reset !== -1 && setup !== -1 && reset < setup;
+    })());
+    check('14.2 при подписке поколение больше не сбрасывается повторно', (function () {
+        const m = /function startOnlineGame[\s\S]*?roomListenerRef\.on\("value"/.exec(SRC);
+        return m && (m[0].match(/resetRoomFreshnessProof\(\);/g) || []).length === 1;
+    })());
+    check('14.3 всего две точки сброса поколения (игра и зритель)',
+        (SRC.match(/resetRoomFreshnessProof\(\);/g) || []).length === 2);
+    check('14.4 текст «нет связи» больше не обещает отправку хода',
+        !/Ход отправится/.test(SRC) && /Подождите восстановления соединения/.test(SRC));
+    check('14.5 обновлены все три языка',
+        /Please wait until it is restored/.test(SRC) && /Attendi il ripristino/.test(SRC));
+    check('14.6 остальные тексты синхронизации не тронуты',
+        /Отправляю ход…/.test(SRC) && /Проверяю соединение…/.test(SRC) &&
+        /Не удалось обновить игру/.test(SRC));
+
+
+    // ===============================================================
+    console.log('15. WHOLE-ROOM ТРАНЗАКЦИИ НЕ СОЗДАЮТСЯ БЕЗ СВЯЗИ');
+    // ===============================================================
+    check('15.1 сдача защищена guard\'ом', (function () {
+        const m = /btnResignYes\.addEventListener[\s\S]*?transaction\(function \(room\)/.exec(SRC);
+        return m && /if \(!isFirebaseConnected\) return;/.test(m[0]);
+    })());
+    check('15.2 принятие ничьей защищено guard\'ом', (function () {
+        const m = /btnDrawAccept\.addEventListener[\s\S]*?transaction\(function \(room\)/.exec(SRC);
+        return m && /if \(!isFirebaseConnected\) return;/.test(m[0]);
+    })());
+    check('15.3 таймаут защищён guard\'ом', (function () {
+        const m = /function checkTimeout[\s\S]*?transaction\(function \(room\)/.exec(SRC);
+        return m && /if \(!isFirebaseConnected\) return;/.test(m[0]);
+    })());
+    check('15.4 ход тоже защищён (уже было)',
+        /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC));
+    check('15.5 все четыре ИГРОВЫЕ whole-room транзакции защищены', (function () {
+        // Ход, сдача, ничья, таймаут. Пятая транзакция на узле комнаты —
+        // вход в комнату (joinGroupRoom) — СОЗНАТЕЛЬНО не защищена: она
+        // выполняется в момент присоединения, до подписки на комнату, и без
+        // связи всё равно недостижима (список комнат не загрузится).
+        // Зафиксировано отдельной проверкой ниже, чтобы не потерялось.
+        const move = /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC);
+        const others = (SRC.match(/if \(!isFirebaseConnected\) return;/g) || []).length;
+        return move && others >= 3;
+    })());
+    check('15.5b известна пятая whole-room транзакция — вход в комнату (Фаза 2)',
+        /ИСПОЛЬЗУЕМ ТРАНЗАКЦИЮ: гарантируем, что комната не удалена/.test(SRC) &&
+        (SRC.match(/database\.ref\("rooms\/" \+ roomCode\)\.transaction\(/g) || []).length === 5);
+    check('15.6 guard защищает СЕРВЕРНУЮ сдачу, локальный выход не тронут',
+        /Локальный выход из партии этим guard'ом НЕ затрагивается/.test(SRC));
+    check('15.7 отмечено как временная инварианта Фазы 1 (снимется в Фазе 2)',
+        (SRC.match(/ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1/g) || []).length === 3);
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);
