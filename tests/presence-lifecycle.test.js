@@ -246,7 +246,10 @@ function presenceWrites() {
     global.document.hidden = false;
     env.connectedCb({ val: function () { return true; } });
     const burst = presenceWrites().find(function (w) { return w.value && w.value.online === true; });
-    check('видимый reconnect мгновенно пишет online:true', !!burst);
+    // ФАЗА A: реконнект сначала перевзводит onDisconnect и только потом
+    // объявляет online — проверяем взведение обработчика (запись асинхронна).
+    check('видимый reconnect перевзводит onDisconnect для своей ячейки',
+        env.armed.some(function (a) { return a.path === 'rooms/R1/presence/light'; }));
 
     // =====================================================================
     console.log('4. waiting-создатель без dark + hidden → heartbeat продолжает lastSeen (C-1)');
