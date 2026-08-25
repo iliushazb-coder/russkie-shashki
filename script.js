@@ -8112,6 +8112,16 @@ function renderLobbyListFromCache() {
         let darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
         lightName = escapeHtml(lightName);
         darkName = escapeHtml(darkName);
+        // v182: code — это КЛЮЧ УЗЛА Firebase, а не наш сгенерированный код.
+        // Ключ задаёт тот, кто создаёт комнату, а RTDB запрещает в ключах
+        // только . $ # [ ] / и управляющие символы — кавычка и угловые
+        // скобки разрешены. Без экранирования такой ключ разрывал бы
+        // атрибут data-code="..." и вносил в лобби чужую разметку через
+        // innerHTML. Экранируем тем же escapeHtml, что и имена строкой выше.
+        // Обратное чтение не меняется: getAttribute() отдаёт уже
+        // раскодированную строку, поэтому обычный код комнаты приходит в
+        // обработчик ровно таким же, как раньше.
+        const codeAttr = escapeHtml(code);
 
         if (room.status === "waiting") {
             // Не показываем в списке доступных соперников самого себя
@@ -8120,7 +8130,7 @@ function renderLobbyListFromCache() {
                 waitingHtml += `
                     <div class="group-room-card">
                         <div class="group-room-info waiting">🟡 ${lightName}</div>
-                        <button class="group-join-btn" data-code="${code}">Играть</button>
+                        <button class="group-join-btn" data-code="${codeAttr}">Играть</button>
                     </div>
                 `;
             }
@@ -8149,14 +8159,14 @@ function renderLobbyListFromCache() {
                 activeHtml += `
                     <div class="group-room-card">
                         <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
-                        <button class="group-resume-btn" data-code="${code}">${t("btn_continue")}</button>
+                        <button class="group-resume-btn" data-code="${codeAttr}">${t("btn_continue")}</button>
                     </div>
                 `;
             } else {
                 activeHtml += `
                     <div class="group-room-card">
                         <div class="group-room-info active">⚫ ${lightName} vs ⚪ ${darkName}</div>
-                        <button class="group-watch-btn" data-code="${code}">Смотреть</button>
+                        <button class="group-watch-btn" data-code="${codeAttr}">Смотреть</button>
                     </div>
                 `;
             }

@@ -969,9 +969,13 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         return /id="spectator-interrupted-modal"/.test(html) &&
             /data-i18n="status_game_interrupted"/.test(html);
     })());
-    check('25.6 cache-bust поднят до v181, style.css остался v12', (function () {
+    // Проверяем НАМЕРЕНИЕ, а не конкретную цифру: cache-bust script.js должен
+    // быть не ниже 181 (версии, в которой появился этот текст), а style.css
+    // обязан оставаться на v12 — он с тех пор не менялся.
+    check('25.6 cache-bust script.js >= 181, style.css остался v12', (function () {
         const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
-        return /script\.js\?v=181/.test(html) && /style\.css\?v=12/.test(html) && !/script\.js\?v=180/.test(html);
+        const m = /script\.js\?v=(\d+)/.exec(html);
+        return !!m && Number(m[1]) >= 181 && /style\.css\?v=12/.test(html);
     })());
 
     // поведение: игрок видит подтверждение, зритель — прежнюю формулировку
