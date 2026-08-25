@@ -947,6 +947,53 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('24.9 finished-комната не подметается лобби-sweep-ом',
         /if \(room\.status === "finished" \|\| room\.winner\) continue;/.test(SRC));
 
+
+    // ===============================================================
+    console.log('25. v181: ТЕКСТ ПРОМЕЖУТОЧНОГО СОСТОЯНИЯ');
+    // ===============================================================
+    check('25.1 новый ключ есть во всех трёх языках',
+        (SRC.match(/status_confirming_result:/g) || []).length === 3);
+    check('25.2 RU / EN / IT формулировки точные',
+        /status_confirming_result: "Подтверждение результата…"/.test(SRC) &&
+        /status_confirming_result: "Confirming result…"/.test(SRC) &&
+        /status_confirming_result: "Conferma del risultato…"/.test(SRC));
+    check('25.3 старый ключ НЕ переименован и НЕ изменён (его использует модалка зрителя)',
+        /status_game_interrupted: "Игра прервана"/.test(SRC) &&
+        /status_game_interrupted: "Game interrupted"/.test(SRC) &&
+        /status_game_interrupted: "Partita interrotta"/.test(SRC));
+    check('25.4 условие ветки и cls НЕ изменились',
+        /if \(elapsed > RECONNECT_GRACE_MS\) \{/.test(SRC) &&
+        /cls: "status-left" \};\n    \}/.test(SRC.replace(/\r/g, '')));
+    check('25.5 модалка зрителя в index.html по-прежнему на старом ключе', (function () {
+        const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+        return /id="spectator-interrupted-modal"/.test(html) &&
+            /data-i18n="status_game_interrupted"/.test(html);
+    })());
+    check('25.6 cache-bust поднят до v181, style.css остался v12', (function () {
+        const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
+        return /script\.js\?v=181/.test(html) && /style\.css\?v=12/.test(html) && !/script\.js\?v=180/.test(html);
+    })());
+
+    // поведение: игрок видит подтверждение, зритель — прежнюю формулировку
+    reset(); global.currentState = absent(75); global.isSpectator = false;
+    check('25.7 игрок после истечения минуты получает ключ status_confirming_result',
+        statusForColor('dark').text === 'status_confirming_result',
+        statusForColor('dark').text);
+    check('25.8 класс статуса не изменился',
+        statusForColor('dark').cls === 'status-left');
+    global.isSpectator = true;
+    check('25.9 зритель получает прежний ключ status_game_interrupted',
+        statusForColor('dark').text === 'status_game_interrupted', statusForColor('dark').text);
+    global.isSpectator = false;
+
+    // до истечения минуты ничего не поменялось
+    reset(); global.currentState = absent(30);
+    check('25.10 обратный отсчёт до 60с не затронут',
+        /status_offline \(status_left 30sec\)/.test(statusForColor('dark').text), statusForColor('dark').text);
+    reset(); global.currentState = absent(75);
+    check('25.11 момент появления промежуточного текста прежний (>60с)',
+        statusForColor('dark').text === 'status_confirming_result');
+
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);
 })();

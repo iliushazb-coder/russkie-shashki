@@ -746,6 +746,7 @@ const translations = {
         sec: "с",
         status_connecting: "подключение...",
         status_game_interrupted: "Игра прервана",
+        status_confirming_result: "Подтверждение результата…",
         sync_sending_move: "Отправляю ход…",
         sync_no_connection: "Нет связи. Подождите восстановления соединения",
         sync_checking: "Проверяю соединение…",
@@ -872,6 +873,7 @@ const translations = {
         sec: "s",
         status_connecting: "connecting...",
         status_game_interrupted: "Game interrupted",
+        status_confirming_result: "Confirming result…",
         sync_sending_move: "Sending your move…",
         sync_no_connection: "No connection. Please wait until it is restored",
         sync_checking: "Checking the connection…",
@@ -998,6 +1000,7 @@ const translations = {
         sec: "s",
         status_connecting: "connessione...",
         status_game_interrupted: "Partita interrotta",
+        status_confirming_result: "Conferma del risultato…",
         sync_sending_move: "Invio la mossa…",
         sync_no_connection: "Nessuna connessione. Attendi il ripristino",
         sync_checking: "Controllo la connessione…",
@@ -2213,7 +2216,14 @@ function statusForColor(color) {
     const isStale = presence.online === false || lastSeenElapsed > PRESENCE_STALE_WARNING_MS;
 
     if (elapsed > RECONNECT_GRACE_MS) {
-        return { text: t("status_game_interrupted"), cls: "status-left" };
+        // v181: ИЗМЕНЁН ТОЛЬКО ТЕКСТ. Условие, момент его появления и cls —
+        // прежние. Для ИГРОКА эти секунды не поломка партии: минута истекла,
+        // и клиент ждёт, пока СЕРВЕР подтвердит технический результат по
+        // своим часам. «Игра прервана» об этом врало.
+        // ЗРИТЕЛЮ формулировка остаётся прежней: у него на экране своя
+        // модалка "Игра прервана" (тот же ключ в index.html), и он ничего
+        // не подтверждает — для bot-зеркала результата вообще не будет.
+        return { text: t(isSpectator ? "status_game_interrupted" : "status_confirming_result"), cls: "status-left" };
     }
     if (isStale) {
         // Считаем оставшееся время до конца "минуты форы"
