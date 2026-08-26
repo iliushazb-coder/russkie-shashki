@@ -8088,13 +8088,19 @@ function renderLobbyListFromCache() {
         // Не показываем завершенные игры
         if (room.status === "finished" || room.winner) continue;
 
-        const lightIsStale = isRoomPlayerStale(room, "light");
-
-        // Лобби больше никогда само не удаляет комнаты.
-        // Если игрок временно пропал — комнату просто не показываем.
-        if (room.status === "waiting" && lightIsStale) {
+        // v183 (BUG №1): waiting-комната — ВСЕГДА приватное приглашение.
+        // Её создаёт только «Играть с другом», и войти в неё можно только по
+        // Telegram-ссылке. Публичный список раньше показывал её всем подряд с
+        // кнопкой «Играть», и посторонний занимал место приглашённого друга.
+        // Публичный экран показывает ТОЛЬКО идущие партии с двумя игроками.
+        //
+        // Создатель при этом остаётся на своём экране ожидания, а вход по
+        // ссылке идёт мимо лобби: checkForInviteLink() читает комнату сам.
+        if (room.status === "waiting") {
             continue;
         }
+
+        const lightIsStale = isRoomPlayerStale(room, "light");
 
         // Активная партия, где ОБЕ стороны давно оффлайн — гарантированно
         // заброшена (та же семантика, что и в runLobbyStaleSweep, которая
@@ -8123,18 +8129,7 @@ function renderLobbyListFromCache() {
         // обработчик ровно таким же, как раньше.
         const codeAttr = escapeHtml(code);
 
-        if (room.status === "waiting") {
-            // Не показываем в списке доступных соперников самого себя
-            const isMine = room.players && room.players.light && room.players.light.id === myTelegramId;
-            if (!isMine) {
-                waitingHtml += `
-                    <div class="group-room-card">
-                        <div class="group-room-info waiting">🟡 ${lightName}</div>
-                        <button class="group-join-btn" data-code="${codeAttr}">Играть</button>
-                    </div>
-                `;
-            }
-        } else if (room.status === "active") {
+        if (room.status === "active") {
             // Свою bot-партию не показываем себе вообще — единственный
             // официальный путь продолжить её: "Играть с ботом" -> "Продолжить"
             // (owner-synced flow через botSessions). Раньше "Кто играет" вела

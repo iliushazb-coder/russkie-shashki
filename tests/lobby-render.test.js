@@ -80,7 +80,11 @@ console.log('=== S-1. ЭКРАНИРОВАНИЕ КЛЮЧА КОМНАТЫ В Л
 })();
 
 // --- 1. production действительно использует экранированное значение ---
-check('1.1 найдены все три кнопки лобби (join/resume/watch)', templates.length === 3,
+// v183 (BUG №1): публичной кнопки «Играть» больше нет — waiting-комната
+// приватная и в лобби не рисуется вовсе. Остались только кнопки идущих
+// партий: «Продолжить» участнику и «Смотреть» постороннему.
+check('1.1 в лобби остались только кнопки active-партий (resume/watch)',
+    templates.length === 2 && !/<button class="group-join-btn"/.test(LOBBY),
     'найдено ' + templates.length);
 check('1.2 ни одна кнопка не подставляет сырой ${code}',
     !/data-code="\$\{code\}"/.test(LOBBY));
@@ -135,8 +139,9 @@ check('4.3 круговой путь: экранирование -> разбор
     decodeEntities(escapeHtml('A&B<C>"D\'E')) === 'A&B<C>"D\'E');
 
 // --- 5. обработчики кнопок не изменены ---
-check('5.1 join по-прежнему читает getAttribute("data-code")',
-    /joinGroupRoom\(this\.getAttribute\('data-code'\)\)/.test(SRC));
+check('5.1 обработчик join сохранён в коде (не удалён), но кнопки больше нет',
+    /joinGroupRoom\(this\.getAttribute\('data-code'\)\)/.test(SRC) &&
+    !/<button class="group-join-btn"/.test(LOBBY));
 check('5.2 watch по-прежнему читает getAttribute("data-code")',
     /watchGroupRoom\(this\.getAttribute\('data-code'\)\)/.test(SRC));
 check('5.3 resume по-прежнему читает getAttribute("data-code")',

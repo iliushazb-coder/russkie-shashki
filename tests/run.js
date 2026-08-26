@@ -21,7 +21,8 @@ const FILES = [
   ['N. ONLINE MOVE SYNC', 'move-sync.test.js'],
   ['O. ONLINE PRESENCE / RECONNECT', 'presence-reconnect.test.js'],
   ['P. LOBBY RENDER / ЭКРАНИРОВАНИЕ КЛЮЧА (S-1)', 'lobby-render.test.js'],
-  ['Q. ENGINE GUARDS: ход назад + турецкий удар (T-1)', 'engine-guards.test.js']
+  ['Q. ENGINE GUARDS: ход назад + турецкий удар (T-1)', 'engine-guards.test.js'],
+  ['R. ПРИВАТНОСТЬ ПРИГЛАШЕНИЯ (BUG №1)', 'invite-privacy.test.js']
 ];
 
 let totalPass = 0, totalFail = 0, hardFail = false;
