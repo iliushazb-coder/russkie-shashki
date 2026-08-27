@@ -508,8 +508,18 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     })());
     check('13.5 online объявляется только после успешной регистрации onDisconnect',
         /presenceRef\.onDisconnect\(\)\.update\(\{[\s\S]{0,200}\}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
-    check('13.6 при неудачной регистрации online всё равно объявляется (очередь)',
-        /\.catch\(function \(\) \{[\s\S]{0,400}presenceRef\.set\(\{/.test(SRC));
+    // v184: ОЖИДАНИЕ ПЕРЕВЁРНУТО ОСОЗНАННО. Раньше .catch() специально ставил
+    // online:true в offline-очередь. Именно эта запись воскрешала брошенную
+    // партию после реконнекта: очередь отправлялась и перезаписывала
+    // серверное состояние, поставленное onDisconnect. Теперь при отсутствии
+    // связи не пишем ничего; при живой связи прежнее поведение сохранено.
+    check('13.6 без связи online в очередь НЕ ставится', (function () {
+        const m = /\.catch\(function \(\) \{[\s\S]{0,700}presenceRef\.set\(\{/.exec(SRC);
+        if (!m) return false;
+        return /if \(!isFirebaseConnected\) return;/.test(m[0]);
+    })());
+    check('13.6b при живой связи прежний fallback сохранён',
+        /\.catch\(function \(\) \{[\s\S]{0,900}presenceRef\.set\(\{[\s\S]{0,200}online: true/.test(SRC));
     check('13.7 setupPresence вызывается заново после реконнекта -> onDisconnect перевзводится',
         /myPresenceRef\.onDisconnect\(\)\.cancel\(\);/.test(SRC));
 
@@ -631,10 +641,19 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         return /online: false/.test(hidden) &&
             /absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(hidden);
     })());
+    // v184: ветка visible больше не пишет присутствие сама — она идёт тем же
+    // свежим путём, что и реконнект. Требование прежнее: возвращение очищает
+    // absentSince. Проверяем там, где эта запись теперь физически находится.
     check('17.2 возвращение очищает absentSince', (function () {
+        const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
+        if (!m) return false;
+        return /online: true/.test(m[0]) && /absentSince: null/.test(m[0]);
+    })());
+    check('17.2b ветка visible ведёт в свежий путь, а не пишет из кеша', (function () {
         const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
         const back = m[0].slice(m[0].indexOf('} else'));
-        return /online: true/.test(back) && /absentSince: null/.test(back);
+        return /revivePresenceAfterReconnect\(\)/.test(back) &&
+            back.indexOf('online: true') === -1;
     })());
     check('17.3 настоящий обрыв ведёт в ТУ ЖЕ машину (onDisconnect ставит absentSince)',
         /onDisconnect\(\)\.update\(\{[\s\S]{0,200}absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(SRC));
@@ -743,14 +762,32 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         return /presenceRef\.set\(\{[\s\S]{0,220}onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
     })());
     check('19.2 возвращение из фона ставит onlineSince заново', (function () {
-        const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
-        const back = m[0].slice(m[0].indexOf('} else'));
-        return /onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(back);
-    })());
-    check('19.3 reconnect после настоящего обрыва ставит onlineSince заново', (function () {
-        const m = /connectedRef\.on\("value"[\s\S]*?\n\}\);/.exec(SRC);
+        const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
         if (!m) return false;
-        return /myPresenceRef\.update\(\{[\s\S]{0,300}onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
+        return /onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
+    })());
+    // v184: реконнект вынесен в revivePresenceAfterReconnect(). Требование
+    // прежнее — новая online-сессия начинается заново, — но теперь этому
+    // предшествуют свежее чтение комнаты, проверка both-offline и
+    // перевооружение одноразового onDisconnect.
+    check('19.3 reconnect после настоящего обрыва ставит onlineSince заново', (function () {
+        const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
+        if (!m) return false;
+        return /onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
+    })());
+    check('19.3b реконнект перевооружает одноразовый onDisconnect ДО online:true', (function () {
+        const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
+        if (!m) return false;
+        const arm = m[0].indexOf('presenceRef.onDisconnect().update(');
+        const on = m[0].indexOf('online: true');
+        return arm !== -1 && on !== -1 && arm < on;
+    })());
+    check('19.3c реконнект проверяет both-offline ДО объявления online', (function () {
+        const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
+        if (!m) return false;
+        const chk = m[0].indexOf('isRoomAbandonedNow(room)');
+        const on = m[0].indexOf('online: true');
+        return chk !== -1 && on !== -1 && chk < on;
     })());
     check('19.4 HEARTBEAT НЕ ТРОГАЕТ onlineSince', (function () {
         const m = /presenceHeartbeatInterval = setInterval\([\s\S]*?\}, 4000\);/.exec(SRC);

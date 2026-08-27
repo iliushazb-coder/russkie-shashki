@@ -120,22 +120,7 @@ connectedRef.on("value", function(snap) {
         // online:true мгновенно), heartbeat (≤4с) и setupPresence при
         // полном перезапуске приложения.
         if (myPresenceRef && isOnlineGame && !isSpectator && roomCode && !document.hidden) {
-            // Promise этой записи разрешается ТОЛЬКО после подтверждения
-            // сервером — это и есть доказанный круговой обмен.
-            const gen = connectionGeneration;
-            const lgen = listenerGeneration;
-            // v180: reconnect после настоящего обрыва — это НАЧАЛО НОВОЙ
-            // непрерывной online-сессии, поэтому onlineSince ставится заново.
-            // Пока я сам отсутствовал, я никого не ждал: соперник обязан
-            // получить полную свежую минуту, отсчитанную от этого момента.
-            myPresenceRef.update({
-                online: true,
-                absentSince: null,
-                onlineSince: firebase.database.ServerValue.TIMESTAMP,
-                lastSeen: firebase.database.ServerValue.TIMESTAMP
-            })
-                .then(function () { noteServerAck(gen, lgen); })
-                .catch(function () {});
+            revivePresenceAfterReconnect();
         }
     }
 });
@@ -2544,6 +2529,11 @@ function handleVisibilityChange() {
     if (!myPresenceRef) return;
 
     if (document.hidden) {
+        // v184: при отсутствии связи НЕ пишем. Иначе absentSince уйдёт в
+        // очередь и после реконнекта запишется задним числом — минута
+        // начнётся заново, хотя человека не было всё это время. Настоящее
+        // отсутствие уже зафиксирует серверный onDisconnect.
+        if (!isFirebaseConnected) return;
         // ЕДИНАЯ МАШИНА ОТСУТСТВИЯ (v180). Свернул, переключился в другое
         // приложение, ответил на звонок — для партии это одно и то же:
         // игрока нет перед доской. Правило игры: минута на возвращение.
@@ -2556,16 +2546,24 @@ function handleVisibilityChange() {
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     } else {
-        // Игрок вернулся к доске — отсутствие закончилось, отсчёт снимается.
-        // onlineSince открывает НОВУЮ непрерывную online-сессию: с этой
-        // секунды и только с неё я снова «жду» соперника. Heartbeat это поле
-        // не трогает никогда — иначе ожидание обнулялось бы каждые 4 секунды.
-        myPresenceRef.update({
-            online: true,
-            absentSince: null,
-            onlineSince: firebase.database.ServerValue.TIMESTAMP,
-            lastSeen: firebase.database.ServerValue.TIMESTAMP
-        });
+        // v184: без связи не пишем — иначе online:true и absentSince:null
+        // уйдут в очередь и воскресят партию после реконнекта. Возвращение
+        // в игру доведёт до конца обработчик .info/connected.
+        if (!isFirebaseConnected) return;
+
+        // v184 BOTH-OFFLINE: возвращение к доске идёт ТЕМ ЖЕ свежим путём,
+        // что и реконнект.
+        //
+        // Раньше здесь стояла проверка isRoomAbandonedNow(currentState), и она
+        // была бесполезна: currentState собирается в слушателе комнаты из
+        // фиксированного списка полей, и поля status там НЕТ вообще. Значит
+        // room.status === undefined, предикат всегда возвращал false, и
+        // ветка спокойно писала online:true — воскрешая брошенную партию.
+        //
+        // Кешу здесь доверять нельзя в принципе: он собран для отрисовки
+        // доски, а не для решения о жизни комнаты. Читаем настоящее
+        // состояние с сервера, и только оно решает.
+        revivePresenceAfterReconnect();
     }
 }
 
@@ -2609,8 +2607,14 @@ function setupPresence() {
         })
         .then(function () { noteServerAck(setupGen, setupListenerGen); })
         .catch(function () {
-            // Регистрация не удалась (нет связи) — всё равно пробуем объявить
-            // себя online: запись уйдёт из очереди при восстановлении сети.
+            // v184: если связи нет — НЕ объявляем себя online. Прежний код
+            // сознательно ставил эту запись в очередь, и она воскрешала
+            // партию после реконнекта. Объявление online доведёт до конца
+            // обработчик .info/connected, предварительно перевооружив
+            // onDisconnect и проверив, не брошена ли партия.
+            if (!isFirebaseConnected) return;
+            // Связь есть, но регистрация не прошла (транзиентная ошибка) —
+            // прежнее поведение сохраняется.
             presenceRef.set({
                 online: true,
                 absentSince: null,
@@ -2624,6 +2628,12 @@ function setupPresence() {
     // регистрация перенесена ПЕРЕД объявлением online.
 
     presenceHeartbeatInterval = setInterval(function () {
+        // ЕДИНОЕ ПРАВИЛО (v184): при отсутствии связи обычные клиентские
+        // записи присутствия НЕ выполняются вообще. Firebase ставит их в
+        // очередь и отправляет после реконнекта, а там они перезаписывают
+        // серверное состояние, поставленное onDisconnect. За offline на
+        // сервере отвечает onDisconnect, и только он.
+        if (!isFirebaseConnected) return;
         if (document.hidden) {
             // Фоновое исключение (v171) — ТОЛЬКО для создателя waiting-комнаты
             // без соперника (см. myWaitingRoomNoOpponent). Пишем ТОЛЬКО
@@ -2638,7 +2648,11 @@ function setupPresence() {
         }
         const beatGen = connectionGeneration;
         const beatListenerGen = listenerGeneration;
-        presenceRef.update({ online: true, lastSeen: firebase.database.ServerValue.TIMESTAMP })
+        // Heartbeat пишет ТОЛЬКО lastSeen. Раньше он писал ещё online:true, и
+        // именно эта запись, накопившись в offline-очереди, воскрешала
+        // присутствие ушедшего игрока после реконнекта. Флаг online ставят
+        // три других пути: setupPresence, ветка visible и реконнект.
+        presenceRef.update({ lastSeen: firebase.database.ServerValue.TIMESTAMP })
             .then(function () { noteServerAck(beatGen, beatListenerGen); })
             .catch(function () {});
     }, 4000);
@@ -2652,6 +2666,74 @@ function stopPresenceHeartbeat() {
         presenceHeartbeatInterval = null;
     }
     document.removeEventListener("visibilitychange", handleVisibilityChange);
+}
+
+// v184: тихий выход из брошенной партии. Никакого результата, никаких
+// начислений — просто закрываем экран и возвращаемся в меню.
+function leaveAbandonedRoomToMenu() {
+    detachMyPresence();
+    roomCode = null;
+    isOnlineGame = false;
+    isSpectator = false;
+    showScreen(menuScreen);
+    loadActiveRooms();
+    showInfoModal(t("err_no_active_game"), false);
+}
+
+// v184: возвращение присутствия ПОСЛЕ реального реконнекта.
+//
+// Прежний код писал online:true сразу, и это давало сразу три проблемы:
+//   1. партия объявлялась живой раньше, чем кто-либо мог проверить, не
+//      истекли ли both-offline 60 секунд;
+//   2. onDisconnect — одноразовая серверная операция; после срабатывания её
+//      никто не перевооружал, и следующий обрыв не отмечался вовсе,
+//      оставляя игрока навсегда online:true;
+//   3. writeTechnicalResult требует online === false, поэтому из-за пункта 2
+//      техническое поражение переставало наступать в принципе.
+//
+// Правильный порядок: свежее состояние комнаты -> проверка брошенности ->
+// перевооружение onDisconnect -> и только потом online:true.
+function revivePresenceAfterReconnect() {
+    const gen = connectionGeneration;
+    const lgen = listenerGeneration;
+    const targetRoom = roomCode;
+    const presenceRef = myPresenceRef;
+
+    const roomRef = database.ref("rooms/" + targetRoom);
+    // get() отдаёт максимально свежее серверное значение; на старых сборках
+    // SDK его может не быть — тогда обычный once("value").
+    const read = (typeof roomRef.get === "function")
+        ? roomRef.get()
+        : roomRef.once("value");
+
+    read.then(function (snapshot) {
+        // Пока читали, человек мог уйти в другую комнату или стать зрителем.
+        if (roomCode !== targetRoom || myPresenceRef !== presenceRef) return;
+        if (!isFirebaseConnected) return;
+
+        const room = snapshot && snapshot.val ? snapshot.val() : null;
+        if (isRoomAbandonedNow(room)) {
+            leaveAbandonedRoomToMenu();
+            return;
+        }
+
+        // Перевооружаем ОДНОРАЗОВЫЙ onDisconnect и только после его
+        // подтверждения объявляем себя online — тот же порядок, что в
+        // setupPresence.
+        presenceRef.onDisconnect().update({
+            online: false,
+            absentSince: firebase.database.ServerValue.TIMESTAMP
+        }).then(function () {
+            if (roomCode !== targetRoom || myPresenceRef !== presenceRef) return;
+            if (!isFirebaseConnected) return;
+            return presenceRef.update({
+                online: true,
+                absentSince: null,
+                onlineSince: firebase.database.ServerValue.TIMESTAMP,
+                lastSeen: firebase.database.ServerValue.TIMESTAMP
+            }).then(function () { noteServerAck(gen, lgen); });
+        }).catch(function () {});
+    }).catch(function () {});
 }
 
 // Общая функция: полностью "отвязываемся" от presence текущей комнаты.
@@ -6328,7 +6410,11 @@ function checkForInviteLink() {
 
         const room = snapshot.val();
 
-        if (!room || !room.pieces || room.status === "finished" || room.winner) {
+        // v184 BOTH-OFFLINE добавлен к тем же условиям, по которым ссылка уже
+        // сегодня отказывается открывать завершённую партию: сообщение и
+        // возврат в меню те же, новых текстов не вводим.
+        if (!room || !room.pieces || room.status === "finished" || room.winner ||
+            isRoomAbandonedNow(room)) {
             settled = true;
             clearTimeout(timeoutId);
             roomCode = null;
@@ -7963,6 +8049,13 @@ function resumeOwnActiveRoom(code) {
             return false;
         }
 
+        // v184 BOTH-OFFLINE: продолжить нельзя. Проверяем ДО startOnlineGame(),
+        // потому что setupPresence там немедленно поставит online:true и
+        // absentSince:null — то есть сотрёт улику, по которой партия мертва.
+        if (isRoomAbandonedNow(room)) {
+            return false;
+        }
+
         let color = null;
         if (room.players.light && room.players.light.id === myTelegramId) {
             color = "light";
@@ -8022,6 +8115,41 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 });
+
+// ===== BOTH-OFFLINE ABANDONED (60 секунд) =====
+//
+// Единственный новый предикат. Отвечает на один вопрос: оба ли текущих игрока
+// отсутствуют НЕПРЕРЫВНО не меньше минуты.
+//
+// Считаем от absentSince, а не от lastSeen. absentSince пишется СЕРВЕРНЫМ
+// временем и только в момент реального ухода — сворачиванием или серверным
+// onDisconnect. Любое возвращение ставит его в null. Значит непрерывность
+// отсутствия закодирована самим полем, историю хранить не нужно. lastSeen для
+// этого не годится: он дрожит на каждом heartbeat.
+//
+// Минута идёт с ухода ВТОРОГО игрока, то есть от МАКСИМУМА двух absentSince.
+// Пока один в игре, предикат ложен по построению — существующее техническое
+// поражение при одном отсутствующем не затрагивается.
+//
+// FAIL CLOSED: пока .info/serverTimeOffset не получен, getEstimatedServerNow()
+// вырождается в часы телефона. Без подтверждённого смещения не судим вовсе.
+function isRoomAbandonedNow(room) {
+    if (!room) return false;
+    if (!serverTimeOffsetReady) return false;
+    if (room.status !== "active") return false;
+    if (room.winner || room.result) return false;
+
+    const p = room.presence;
+    if (!p || !p.light || !p.dark) return false;
+    if (p.light.online !== false || p.dark.online !== false) return false;
+
+    const lightAbsent = p.light.absentSince;
+    const darkAbsent = p.dark.absentSince;
+    if (typeof lightAbsent !== "number" || typeof darkAbsent !== "number") return false;
+
+    const secondLeftAt = Math.max(lightAbsent, darkAbsent);
+    return (getEstimatedServerNow() - secondLeftAt) >= RECONNECT_GRACE_MS;
+}
 
 // --- Была ли сторона комнаты "давно оффлайн" — та же семантика, что и
 // раньше, но вынесена в отдельную функцию, чтобы переиспользовать и в
@@ -8111,6 +8239,12 @@ function renderLobbyListFromCache() {
         // sweep — сам факт открытия/обновления лобби у ЛЮБОГО пользователя
         // уже достаточен, чтобы не показать заведомо мёртвую партию.
         if (room.status === "active" && lightIsStale && isRoomPlayerStale(room, "dark")) {
+            continue;
+        }
+
+        // v184 BOTH-OFFLINE: логически мёртвая партия не показывается никому,
+        // независимо от того, успел ли кто-нибудь физически её удалить.
+        if (isRoomAbandonedNow(room)) {
             continue;
         }
 
@@ -8255,6 +8389,20 @@ function runLobbyStaleSweep() {
         // давно оффлайн — партия гарантированно заброшена. child_removed
         // сам уберёт её из кеша/списка, когда remove() ниже реально пройдёт —
         // здесь кеш вручную не трогаем.
+        // v184 BOTH-OFFLINE: best-effort физическая уборка. Не получится —
+        // не страшно: видимость и возможность продолжить уже закрыты
+        // предикатом на всех путях чтения.
+        if (isRoomAbandonedNow(room)) {
+            if (room.players && room.players.light && room.players.light.id) {
+                database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
+            }
+            if (room.players && room.players.dark && room.players.dark.id) {
+                database.ref("users/" + room.players.dark.id + "/rooms/" + code).remove();
+            }
+            database.ref("rooms/" + code).remove();
+            continue;
+        }
+
         if (room.status === "active" && lightIsStale && darkIsStale) {
             if (room.players && room.players.light && room.players.light.id) {
                 database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
@@ -8460,6 +8608,14 @@ function joinGroupRoom(code) {
 // Единственный официальный способ продолжить свою bot-игру теперь —
 // "Играть с ботом" -> "Продолжить" (owner-synced flow через botSessions).
 function watchGroupRoom(code) {
+    // v184 BOTH-OFFLINE: смотреть мёртвую партию нельзя. Кеш лобби здесь
+    // всегда заполнен — кнопка существует только на отрисованном списке.
+    const cached = lobbyRoomsByCode ? lobbyRoomsByCode[code] : null;
+    if (isRoomAbandonedNow(cached)) {
+        showInfoModal(t("err_no_active_game"), false);
+        scheduleLobbyRender();
+        return;
+    }
     watchGroupRoomAsSpectator(code);
 }
 

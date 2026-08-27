@@ -60,6 +60,12 @@ global.RECONNECT_GRACE_MS = 60000;
 global.getEstimatedServerNow = function () { return Date.now(); };
 eval(grab('escapeHtml'));
 eval(grab('isRoomPlayerStale'));
+global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
+global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
+global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };
+global.RECONNECT_GRACE_MS = global.RECONNECT_GRACE_MS || 60000;
+global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
+eval(grab('isRoomAbandonedNow'));
 eval(grab('renderLobbyListFromCache'));
 
 const NOW = Date.now();
@@ -153,13 +159,20 @@ check('5.1 экранирование ключа комнаты из v182 сох
 check('5.2 имена игроков по-прежнему экранируются',
     /lightName = escapeHtml\(lightName\);/.test(grab('renderLobbyListFromCache')) &&
     /darkName = escapeHtml\(darkName\);/.test(grab('renderLobbyListFromCache')));
-check('5.3 presence/disconnect/abandoned не тронуты',
-    SRC.indexOf('isRoomAbandoned') === -1 &&
+// v184: ОЖИДАНИЕ ИЗМЕНЕНО ОСОЗНАННО. Проверка писалась в v183, чтобы
+// доказать, что из отвергнутых кандидатов не перенесено ничего.
+// isRoomAbandonedNow добавлен намеренно — это и есть правка both-offline.
+check('5.3 из отвергнутых архитектур не перенесено ничего',
     SRC.indexOf('presenceSessions') === -1 &&
-    SRC.indexOf('disconnectedAt') === -1);
+    SRC.indexOf('disconnectedAt') === -1 &&
+    SRC.indexOf('presenceV2') === -1 &&
+    SRC.indexOf('roomsV2') === -1);
+check('5.3b добавлен ровно один новый предикат both-offline',
+    (SRC.match(/function isRoomAbandonedNow/g) || []).length === 1);
 check('5.4 cache-bust поднят, style.css не тронут', (function () {
     const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-    return /script\.js\?v=183/.test(html) && /style\.css\?v=12/.test(html);
+    const m = /script\.js\?v=(\d+)/.exec(html);
+    return !!m && Number(m[1]) >= 183 && /style\.css\?v=12/.test(html);
 })());
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

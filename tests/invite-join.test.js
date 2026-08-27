@@ -29,7 +29,13 @@ try {
   // существуют (нужно для прогона теста против старых версий через TARGET_SCRIPT).
   try { eval(extractFunc('buildInviteDarkClaim')); } catch (e) {}
   try { eval(extractFunc('decideInviteRetry')); } catch (e) {}
-  eval(extractFunc('checkForInviteLink'));
+  global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
+global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
+global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };
+global.RECONNECT_GRACE_MS = global.RECONNECT_GRACE_MS || 60000;
+global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
+eval(extractFunc('isRoomAbandonedNow'));
+eval(extractFunc('checkForInviteLink'));
 } catch (e) { loadError = e.message; }
 
 function mkRoom(status, lightId, darkId) {

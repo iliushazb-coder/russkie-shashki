@@ -22,7 +22,8 @@ const FILES = [
   ['O. ONLINE PRESENCE / RECONNECT', 'presence-reconnect.test.js'],
   ['P. LOBBY RENDER / ЭКРАНИРОВАНИЕ КЛЮЧА (S-1)', 'lobby-render.test.js'],
   ['Q. ENGINE GUARDS: ход назад + турецкий удар (T-1)', 'engine-guards.test.js'],
-  ['R. ПРИВАТНОСТЬ ПРИГЛАШЕНИЯ (BUG №1)', 'invite-privacy.test.js']
+  ['R. ПРИВАТНОСТЬ ПРИГЛАШЕНИЯ (BUG №1)', 'invite-privacy.test.js'],
+  ['S. BOTH-OFFLINE 60s + ЗАКРЫТИЕ ПУТЕЙ ВОСКРЕШЕНИЯ (v184)', 'both-offline-abandoned.test.js']
 ];
 
 let totalPass = 0, totalFail = 0, hardFail = false;

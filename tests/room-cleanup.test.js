@@ -130,7 +130,13 @@ const flush = () => new Promise(function (r) { realSetTimeout(r, 20); });
 let loadError = null;
 try {
     eval(extractFunc('stopPresenceHeartbeat'));
-    eval(extractFunc('handleVisibilityChange'));
+    global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
+global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
+global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };
+global.RECONNECT_GRACE_MS = global.RECONNECT_GRACE_MS || 60000;
+global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
+eval(extractFunc('isRoomAbandonedNow'));
+eval(extractFunc('handleVisibilityChange'));
     eval(extractFunc('detachMyPresence'));
     eval(extractFunc('setupPresence'));
     eval(extractFunc('startOnlineGame'));

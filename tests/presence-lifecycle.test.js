@@ -116,7 +116,20 @@ try {
     eval(extractFunc('setupPresence'));
     eval(extractFunc('startOnlineGame'));
     eval(extractFunc('isRoomPlayerStale'));
-    eval(extractFunc('runLobbyStaleSweep'));
+    global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
+global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
+global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };
+global.RECONNECT_GRACE_MS = global.RECONNECT_GRACE_MS || 60000;
+global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
+eval(extractFunc('isRoomAbandonedNow'));
+global.showScreen = global.showScreen || function () {};
+global.loadActiveRooms = global.loadActiveRooms || function () {};
+global.showInfoModal = global.showInfoModal || function () {};
+global.menuScreen = global.menuScreen || 'MENU';
+global.t = global.t || function (k) { return k; };
+eval(extractFunc('leaveAbandonedRoomToMenu'));
+eval(extractFunc('revivePresenceAfterReconnect'));
+eval(extractFunc('runLobbyStaleSweep'));
     global.TECHNICAL_WIN_REASON = /const TECHNICAL_WIN_REASON = "([a-z]+)";/.exec(SRC)[1];
     eval(extractFunc('getAuthoritativeAbsenceMs'));
     eval(extractFunc('getOnlineSessionMs'));
@@ -244,13 +257,24 @@ function presenceWrites() {
         'записано: ' + JSON.stringify(presenceWrites()));
 
     // =====================================================================
-    console.log('3. active + visible → .info/connected пишет online:true (reconnect не сломан)');
+    console.log('3. active + visible → reconnect идёт через проверку, а не мгновенную запись');
     // =====================================================================
+    // v184: ОЖИДАНИЕ ИЗМЕНЕНО ОСОЗНАННО. Раньше обработчик .info/connected
+    // писал online:true немедленно. Именно это воскрешало брошенную партию:
+    // запись шла раньше, чем кто-либо мог проверить both-offline 60 секунд,
+    // и раньше, чем перевооружался одноразовый onDisconnect.
+    // Теперь обработчик вызывает revivePresenceAfterReconnect(), который
+    // сначала читает свежее состояние комнаты.
     env.writes = [];
     global.document.hidden = false;
     env.connectedCb({ val: function () { return true; } });
-    const burst = presenceWrites().find(function (w) { return w.value && w.value.online === true; });
-    check('видимый reconnect мгновенно пишет online:true', !!burst);
+    const immediate = presenceWrites().find(function (w) { return w.value && w.value.online === true; });
+    check('видимый reconnect НЕ пишет online:true мгновенно', !immediate,
+        'записано: ' + JSON.stringify(presenceWrites()));
+    check('видимый reconnect запускает проверяющий путь', (function () {
+        const blk = SRC.slice(SRC.indexOf('const connectedRef = database.ref(".info/connected")'));
+        return /revivePresenceAfterReconnect\(\)/.test(blk.slice(0, 3000));
+    })());
 
     // =====================================================================
     console.log('4. waiting-создатель без dark + hidden → heartbeat продолжает lastSeen (C-1)');
