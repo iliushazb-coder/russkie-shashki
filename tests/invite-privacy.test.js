@@ -157,10 +157,21 @@ console.log('\n=== 4. ВХОД ПО ССЫЛКЕ НЕ СЛОМАН ===');
 
 check('4.1 createRoomAndShowWaiting на месте', /function createRoomAndShowWaiting/.test(SRC));
 check('4.2 экран ожидания создателя сохранён', /showScreen\(waitingScreen\)/.test(SRC));
-check('4.3 checkForInviteLink читает комнату САМ, минуя лобби',
-    /function checkForInviteLink[\s\S]{0,1400}database\.ref\("rooms\/" \+ roomCode\)\.once\("value"\)/.test(SRC));
-check('4.4 deep-link не зависит от joinGroupRoom',
-    grab('checkForInviteLink').indexOf('joinGroupRoom') === -1);
+check('4.3 checkForInviteLink читает комнату САМ, минуя лобби', (function () {
+    // Окно расширено: перед первым once() теперь стоит блок снятия
+    // собственного захвата (v188). Смысл проверки прежний — функция читает
+    // комнату напрямую, а не через кеш лобби.
+    const f = grab('checkForInviteLink');
+    return f.indexOf('database.ref("rooms/" + roomCode).once("value")') !== -1 &&
+        f.indexOf('lobbyRoomsByCode') === -1;
+})());
+check('4.4 deep-link не зависит от joinGroupRoom', (function () {
+    // Проверяем КОД, а не текст: в комментарии joinGroupRoom упоминается как
+    // объяснение, почему окно между захватом места и сменой статуса безопасно.
+    const code = grab('checkForInviteLink').split('\n')
+        .filter(function (l) { return l.trim().indexOf('//') !== 0; }).join('\n');
+    return code.indexOf('joinGroupRoom') === -1;
+})());
 check('4.5 joinGroupRoom НЕ удалён из кода', /function joinGroupRoom\(code\) \{/.test(SRC));
 check('4.6 переход waiting -> active по-прежнему делается транзакцией',
     /currentRoom\.status = "active";/.test(grab('joinGroupRoom')));

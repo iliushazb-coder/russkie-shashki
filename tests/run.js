@@ -41,6 +41,7 @@ const FILES = [
   ['T. CLOCK SAFETY — серверное время вместо часов телефона', 'clock-safety.test.js'],
   ['U. ТАБЛИЦА СТАТИСТИКИ — ВСЕ ИГРОКИ В ОБЕИХ ВКЛАДКАХ', 'leaderboard-all-players.test.js'],
   ['V. НАДЁЖНОСТЬ САМОГО РАННЕРА', 'runner-selftest.test.js'],
+  ['W. INVITE JOIN RACE — атомарный захват места', 'invite-race.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

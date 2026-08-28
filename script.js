@@ -6434,11 +6434,20 @@ function checkForInviteLink() {
 
     let settled = false;
 
+    const inviteRoomCodeAtStart = roomCode;
+
     const timeoutId = setTimeout(function () {
         if (settled) return;
 
         settled = true;
+        // В этой версии нет отдельного сохранённого seat-claim: место и
+        // перевод комнаты в active выполняются одной root-транзакцией. Поэтому
+        // таймауту нечего отдельно удалять и он не может повредить уже active
+        // или finished комнату чтением устаревшего локального кеша.
         roomCode = null;
+        myColor = "light";
+        isOnlineGame = false;
+        isSpectator = false;
         showScreen(menuScreen);
         loadActiveRooms();
         showInfoModal(t("err_load_game"), false);
@@ -6591,18 +6600,28 @@ function checkForInviteLink() {
         isSpectator = false;
         waitingText.textContent = t("connecting_to_friend");
 
-        // Возвращаем проверенную рабочую схему из старой версии:
-        // без Firebase transaction().
-        database.ref("rooms/" + roomCode).update({
-            status: "active",
-            "players/dark": {
-                id: myTelegramId,
-                name: myTelegramName
-            },
-            turnStartedAt: firebase.database.ServerValue.TIMESTAMP
-        }).then(function () {
-            if (settled) return;
+        // Один атомарный join по КОРНЮ комнаты. Здесь намеренно НЕТ отдельного
+        // постоянного захвата players/dark перед активацией: именно промежуток
+        // между двумя серверными операциями создавал все timeout-cleanup гонки.
+        // Теперь либо waiting-комната одним commit становится active с нашим
+        // dark, либо на сервере не меняется вообще ничего.
+        const inviteRoomRef = database.ref("rooms/" + inviteRoomCodeAtStart);
 
+        function finishInviteFailure(msgKey) {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeoutId);
+            roomCode = null;
+            myColor = "light";
+            isOnlineGame = false;
+            isSpectator = false;
+            showScreen(menuScreen);
+            loadActiveRooms();
+            showInfoModal(t(msgKey), false);
+        }
+
+        function finishInviteSuccess() {
+            if (settled) return;
             settled = true;
             clearTimeout(timeoutId);
 
@@ -6621,21 +6640,108 @@ function checkForInviteLink() {
                 showScreen(gameScreen);
                 startOnlineGame();
             }, 800);
-        }).catch(function (error) {
-            console.error("Invite update failed:", error);
+        }
 
-            if (settled) return;
+        // Старый root-transaction (44d3af0) ломался на холодном кеше: callback
+        // получал null и сам же abort'ил транзакцию. Здесь корень уже прочитан
+        // once() выше, а дополнительный value-listener удерживается ДО полного
+        // завершения transaction, чтобы кеш комнаты не был выброшен в процессе.
+        let warmHandler = null;
+        let latestWarmRoom = null;
+        function detachWarmListener() {
+            if (!warmHandler) return;
+            inviteRoomRef.off("value", warmHandler);
+            warmHandler = null;
+        }
 
-            settled = true;
-            clearTimeout(timeoutId);
-            roomCode = null;
-            myColor = "light";
-            isOnlineGame = false;
-            isSpectator = false;
-            showScreen(menuScreen);
-            loadActiveRooms();
-            showInfoModal(t("err_join_failed"), false);
-        });
+        let inviteJoinAttempts = 0;
+        const INVITE_JOIN_MAX_ATTEMPTS = 3;
+
+        function startAtomicInviteJoin() {
+            inviteJoinAttempts++;
+            return new Promise(function (resolve) {
+                let first = true;
+                warmHandler = inviteRoomRef.on("value", function (snap) {
+                    latestWarmRoom = snap ? snap.val() : null;
+                    if (!first) return;
+                    first = false;
+                    resolve();
+                });
+            }).then(function () {
+                // Если 10 секунд истекли ЕЩЁ ДО старта серверной транзакции,
+                // ничего больше не запускаем. Это отличает «таймаут до join»
+                // от «таймаут, пока уже отправленный атомарный join ждёт ACK».
+                if (settled) {
+                    detachWarmListener();
+                    return null;
+                }
+
+                // applyLocally=false не даёт speculative active попасть в тот же
+                // локальный кеш до server commit. Но главное здесь — сама запись
+                // ОДНА: dark + status + turnStartedAt атомарны относительно всех
+                // конкурирующих изменений комнаты.
+                return inviteRoomRef.transaction(function (currentRoom) {
+                    return buildAtomicInviteJoin(currentRoom, myTelegramId, myTelegramName);
+                }, undefined, false);
+            }).then(function (result) {
+                detachWarmListener();
+
+                if (settled) {
+                    // Таймаут уже вернул пользователя в меню. Отдельного seat,
+                    // который нужно чистить, нет. Если commit состоялся — это
+                    // полноценная active-комната с обоими игроками; повторный
+                    // вход по ссылке восстановит dark. Если нет — сервер вообще
+                    // не изменён.
+                    return;
+                }
+
+                if (result && result.committed) {
+                    finishInviteSuccess();
+                    return;
+                }
+
+                // Прерывание само по себе НЕ означает "занято". Классифицируем
+                // только по последнему подтверждённому состоянию удерживаемого
+                // listener-а. Если оно не даёт однозначного ответа — общая
+                // ошибка входа, а не ложный err_room_taken.
+                const verdictRoom = result && result.snapshot && typeof result.snapshot.val === "function"
+                    ? result.snapshot.val()
+                    : latestWarmRoom;
+                const verdict = classifyAtomicInviteJoinFailure(verdictRoom, myTelegramId);
+                if (verdict === "occupied" || verdict === "not_waiting") {
+                    finishInviteFailure("err_room_taken");
+                    return;
+                }
+                if (verdict === "missing") { finishInviteFailure("err_no_active_game"); return; }
+                if (verdict === "self") { finishInviteFailure("err_play_self"); return; }
+                if (verdict === "won") { finishInviteSuccess(); return; }
+
+                // verdict === "unknown": комната свободна и ждёт, значит
+                // прерывание было ЛОЖНЫМ — транзакция не смогла договориться
+                // с сервером, а не место занято.
+                //
+                // Повтор здесь обязателен. Без него единственное транзиентное
+                // прерывание на неустойчивой сети превращается в отказ входа,
+                // хотя комната свободна. В двухфазной версии такой повтор был,
+                // и терять его вместе с лишними состояниями не нужно: он не
+                // добавляет промежуточного состояния на сервере, потому что
+                // неудавшаяся транзакция не оставляет следов.
+                if (inviteJoinAttempts < INVITE_JOIN_MAX_ATTEMPTS) {
+                    return startAtomicInviteJoin();
+                }
+
+                // Попытки исчерпаны, а комната всё ещё свободна. Это «не
+                // смогли записать», а НЕ «место занято»: ровно на этой подмене
+                // ломалась откаченная схема 44d3af0.
+                finishInviteFailure("err_join_failed");
+            }).catch(function (error) {
+                detachWarmListener();
+                console.error("Invite atomic join failed:", error);
+                finishInviteFailure("err_join_failed");
+            });
+        }
+
+        startAtomicInviteJoin();
 
     }).catch(function (error) {
         console.error("Invite room read failed:", error);
@@ -8210,6 +8316,40 @@ function isRoomAbandonedNow(room) {
 
     const secondLeftAt = Math.max(lightAbsent, darkAbsent);
     return (getEstimatedServerNow() - secondLeftAt) >= RECONNECT_GRACE_MS;
+}
+
+// Единый колбэк атомарного invite-join. В отличие от двухфазной схемы
+// здесь нет промежуточного сохранённого players/dark: место и activation
+// появляются на сервере одним commit.
+function buildAtomicInviteJoin(currentRoom, uid, name) {
+    if (!currentRoom || !currentRoom.pieces || !currentRoom.players) return undefined;
+    if (currentRoom.winner || currentRoom.result || currentRoom.status === "finished") return undefined;
+
+    const light = currentRoom.players.light;
+    if (light && light.id === uid) return undefined;
+
+    const dark = currentRoom.players.dark;
+    if (dark && dark.id && dark.id !== uid) return undefined;
+
+    // Идемпотентный повтор: комната уже active именно с нами.
+    if (currentRoom.status === "active" && dark && dark.id === uid) return currentRoom;
+    if (currentRoom.status !== "waiting") return undefined;
+
+    currentRoom.players.dark = { id: uid, name: name };
+    currentRoom.status = "active";
+    currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+    return currentRoom;
+}
+
+function classifyAtomicInviteJoinFailure(room, uid) {
+    if (!room || !room.pieces || !room.players) return "missing";
+    const light = room.players.light;
+    if (light && light.id === uid) return "self";
+    const dark = room.players.dark;
+    if (dark && dark.id === uid && room.status === "active" && !room.winner && !room.result) return "won";
+    if (dark && dark.id && dark.id !== uid) return "occupied";
+    if (room.status !== "waiting") return "not_waiting";
+    return "unknown";
 }
 
 // --- Была ли сторона комнаты "давно оффлайн" — та же семантика, что и
