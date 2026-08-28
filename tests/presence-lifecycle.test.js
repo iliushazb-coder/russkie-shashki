@@ -115,7 +115,20 @@ try {
     eval(extractFunc('detachMyPresence'));
     eval(extractFunc('setupPresence'));
     eval(extractFunc('startOnlineGame'));
-    eval(extractFunc('isRoomPlayerStale'));
+    // CLOCK SAFETY (v185): staleness считается по серверному времени и требует
+// подтверждённого .info/serverTimeOffset; разрушительное удаление — ещё и
+// живой связи. Подставляем в харнесс то, что в бою даёт приложение.
+global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
+global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
+global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };
+global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
+global.connectedSinceMono = (typeof connectedSinceMono !== 'undefined') ? connectedSinceMono : 0;
+global.serverAckSinceConnect = (typeof serverAckSinceConnect !== 'undefined') ? serverAckSinceConnect : true;
+global.CONNECTION_SETTLE_MS = global.CONNECTION_SETTLE_MS || 15000;
+global.getMonotonicNow = global.getMonotonicNow || function () { return 999999; };
+eval(extractFunc('canJudgeStaleByServerTime'));
+eval(extractFunc('canDeleteStaleRoomFromLobby'));
+eval(extractFunc('isRoomPlayerStale'));
     global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
 global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
 global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };

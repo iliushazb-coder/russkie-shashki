@@ -95,6 +95,19 @@ global.document = { getElementById: function (id) { return id === 'group-rooms-l
 global.myTelegramId = 'STRANGER';
 global.t = function (k) { return k; };
 eval(grab('escapeHtml'));
+// CLOCK SAFETY (v185): staleness считается по серверному времени и требует
+// подтверждённого .info/serverTimeOffset; разрушительное удаление — ещё и
+// живой связи. Подставляем в харнесс то, что в бою даёт приложение.
+global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
+global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
+global.getEstimatedServerNow = global.getEstimatedServerNow || function () { return Date.now() + cachedServerTimeOffsetMs; };
+global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
+global.connectedSinceMono = (typeof connectedSinceMono !== 'undefined') ? connectedSinceMono : 0;
+global.serverAckSinceConnect = (typeof serverAckSinceConnect !== 'undefined') ? serverAckSinceConnect : true;
+global.CONNECTION_SETTLE_MS = global.CONNECTION_SETTLE_MS || 15000;
+global.getMonotonicNow = global.getMonotonicNow || function () { return 999999; };
+eval(grab('canJudgeStaleByServerTime'));
+eval(grab('canDeleteStaleRoomFromLobby'));
 eval(grab('isRoomPlayerStale'));
 eval(grab('renderLobbyListFromCache'));
 function render(rooms) { renderedHtml = ''; global.lobbyRoomsByCode = rooms; renderLobbyListFromCache(); return renderedHtml; }

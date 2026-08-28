@@ -3328,7 +3328,16 @@ function updateTimerDisplay() {
         turnTimerDiv.textContent = "";
         return;
     }
-    const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
+    // CLOCK SAFETY: turnStartedAt приходит с сервера через
+    // ServerValue.TIMESTAMP, поэтому сравнивать его можно только с серверным
+    // временем. Голые часы телефона расходятся с сервером (классика —
+    // авиарежим, после которого время переустанавливается), и таймер тогда
+    // показывал бы чужое время.
+    // Отображение НЕ делаем fail-closed: пока смещение не получено,
+    // getEstimatedServerNow() вырождается в Date.now() — то есть в прежнее
+    // поведение. Пустой таймер выглядел бы поломкой, а показ ничего
+    // необратимого не решает.
+    const elapsed = (getEstimatedServerNow() - currentState.turnStartedAt) / 1000;
     let remaining = currentState.timeControlSeconds - elapsed;
     if (remaining > currentState.timeControlSeconds) remaining = currentState.timeControlSeconds;
     const whoseTurn = currentState.turn === "light" ? t("whites") : t("blacks");
@@ -4018,7 +4027,28 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         currentState.longRoadStreak = drawState.longRoadStreak;
 
         if (optimisticResult.mustContinueFrom === null && currentState.timeControlSeconds > 0) {
-            currentState.turnStartedAt = Date.now();
+            // CLOCK SAFETY. Оптимистичная метка обязана быть в ТОМ ЖЕ базисе,
+            // что и серверная, которую пришлёт слушатель.
+            //
+            // STARTUP RACE. Пока .info/serverTimeOffset не получен,
+            // getEstimatedServerNow() равен часам телефона, и метка вышла бы
+            // недостоверной. Дальше события складывались так: смещение
+            // приходит РАНЬШЕ серверного снимка комнаты, checkTimeout
+            // разблокируется и сравнивает серверное «сейчас» с локальной
+            // меткой. При телефоне, отстающем на 10 минут, это даёт elapsed
+            // около 600 секунд и ложное поражение по времени.
+            //
+            // Поэтому недостоверную метку НЕ СТАВИМ ВОВСЕ. Настоящее значение
+            // принесёт слушатель комнаты: транзакция пишет туда
+            // ServerValue.TIMESTAMP, а не эту локальную величину.
+            // До его прихода обе читающие функции выходят по собственной
+            // охране !currentState.turnStartedAt — таймер пуст, таймаут не
+            // срабатывает. Это доли секунды после подключения.
+            //
+            // Сам ход НЕ блокируем: он обратим, а поражение по времени — нет.
+            currentState.turnStartedAt = serverTimeOffsetReady
+                ? getEstimatedServerNow()
+                : null;
         }
 
         if (optimisticResult.winner) {
@@ -6320,7 +6350,16 @@ function checkTimeout() {
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
 
-    const elapsed = (Date.now() - currentState.turnStartedAt) / 1000;
+    // CLOCK SAFETY, FAIL CLOSED. Поражение по времени необратимо, поэтому без
+    // подтверждённого .info/serverTimeOffset решение не принимается вовсе.
+    // Пока смещение не получено, getEstimatedServerNow() равен часам телефона,
+    // а по ним засчитывать поражение нельзя: при спешащих часах соперник
+    // проигрывал бы раньше срока.
+    // Цена отказа — партия живёт лишние доли секунды после подключения.
+    // Цена ошибки — незаслуженное поражение. Размен очевиден.
+    if (!serverTimeOffsetReady) return;
+
+    const elapsed = (getEstimatedServerNow() - currentState.turnStartedAt) / 1000;
     if (elapsed <= currentState.timeControlSeconds) return;
 
     const loser = currentState.turn;
@@ -8154,10 +8193,55 @@ function isRoomAbandonedNow(room) {
 // --- Была ли сторона комнаты "давно оффлайн" — та же семантика, что и
 // раньше, но вынесена в отдельную функцию, чтобы переиспользовать и в
 // рендере, и в периодическом sweep'е, не только внутри одного listener'а. ---
+// CLOCK SAFETY: можно ли вообще судить о возрасте серверных меток.
+// Пока .info/serverTimeOffset не получен, cachedServerTimeOffsetMs равен нулю
+// и getEstimatedServerNow() вырождается в часы телефона — то есть ровно в ту
+// ошибку, которую мы чиним. Без подтверждённого смещения не судим.
+function canJudgeStaleByServerTime() {
+    return serverTimeOffsetReady;
+}
+
+// CLOCK SAFETY: разрушительное удаление ЧУЖОЙ комнаты требует большего, чем
+// просто скрытие карточки. Скрыть — обратимо, удалить — нет.
+//
+// Почему порог именно такой, а не строже.
+//
+// canTrustAbsenceForCleanup() неприменима: она требует
+// roomSnapshotSeenSinceConnect, а этот флаг выставляет только слушатель
+// КОМНАТЫ — в лобби он всегда false.
+//
+// serverAckSinceConnect тоже неприменим, хотя выглядит подходящим. Он
+// выставляется ИСКЛЮЧИТЕЛЬНО из presence-путей: три места в setupPresence()
+// и одно в revivePresenceAfterReconnect(). Человек, который просто открыл
+// «Кто играет?» и ни в какую партию не заходил, presence не создаёт вовсе,
+// поэтому флаг у него навсегда остаётся false. С этим условием обычный
+// посетитель лобби не убрал бы НИ ОДНОЙ протухшей комнаты, и мусор копился
+// бы до тех пор, пока кто-нибудь не сыграет партию.
+//
+// Остаются три условия, которые в лобби осмысленны и проверяемы:
+//   isFirebaseConnected     связь есть прямо сейчас;
+//   CONNECTION_SETTLE_MS    она держится дольше окна нестабильности,
+//                           отсчёт по МОНОТОННЫМ часам — их нельзя сбить
+//                           переводом системного времени;
+//   serverTimeOffsetReady   смещение получено, то есть обмен с сервером
+//                           реально состоялся, и меткам можно верить.
+// Любое из них ложно — не удаляем. Fail closed сохранён.
+function canDeleteStaleRoomFromLobby() {
+    if (!isFirebaseConnected || connectedSinceMono === null) return false;
+    if (getMonotonicNow() - connectedSinceMono < CONNECTION_SETTLE_MS) return false;
+    if (!serverTimeOffsetReady) return false;
+    return true;
+}
+
 function isRoomPlayerStale(room, color) {
     const p = room && room.presence && room.presence[color];
     if (!p) return true;
-    return (Date.now() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
+    // lastSeen — СЕРВЕРНЫЙ timestamp. Сравнение с голым Date.now() давало обе
+    // ошибки сразу: при отстающих часах разность выходила меньше порога и
+    // мёртвая комната висела в списке вечно, при спешащих — живую комнату
+    // скрывало и физически удаляло из чужого лобби.
+    if (!canJudgeStaleByServerTime()) return false;
+    return (getEstimatedServerNow() - (p.lastSeen || 0)) > RECONNECT_GRACE_MS;
 }
 
 // --- Сигнатура ТОЛЬКО тех полей, что реально влияют на отображение строки
@@ -8348,12 +8432,29 @@ function renderLobbyListFromCache() {
 // ленивое удаление окончательно заброшенных active-комнат) — не вторая
 // параллельная система, тот же самый порог RECONNECT_GRACE_MS. ---
 function runLobbyStaleSweep() {
+    // CLOCK SAFETY: удалять чужие комнаты можно только при доказанно надёжном
+    // времени и живой связи. Скрытие в рендере остаётся мягче — оно обратимо.
+    const mayDelete = canDeleteStaleRoomFromLobby();
     for (const code in lobbyRoomsByCode) {
         const room = lobbyRoomsByCode[code];
         if (!room) continue;
 
-        // АВТО-ЧИСТКА: зависшее предложение реванша
-        if (room.rematchProposal) {
+        // АВТО-ЧИСТКА: зависшее предложение реванша.
+        //
+        // CLOCK SAFETY. Это тоже РАЗРУШИТЕЛЬНАЯ запись в чужую комнату, и она
+        // обязана идти под тем же порогом, что удаление самой комнаты.
+        // Две причины, обе проверены:
+        //   1. без связи remove() не отменяется, а уходит в offline-очередь
+        //      Firebase и применяется позже — уже к другому состоянию;
+        //   2. isRoomPlayerStale() отвечает true при ПОЛНОСТЬЮ отсутствующем
+        //      presence (первая строка `if (!p) return true;`) — раньше, чем
+        //      дойдёт до проверки серверного времени. То есть без порога
+        //      отсутствие presence само по себе разрешало бы удаление даже
+        //      при недостоверных часах.
+        //
+        // Саму строку `if (!p) return true;` не трогаем: она обслуживает ещё и
+        // РЕНДЕР, где скрытие обратимо. Достаточно закрыть разрушительный путь.
+        if (mayDelete && room.rematchProposal) {
             const proposerColor = room.rematchProposal.by;
             const answererColor = proposerColor === "light" ? "dark" : "light";
             if (isRoomPlayerStale(room, answererColor)) {
@@ -8375,7 +8476,8 @@ function runLobbyStaleSweep() {
         // online:false, но его lastSeen поддерживает фоновый heartbeat —
         // см. myWaitingRoomNoOpponent в setupPresence). joinGroupRoom входит
         // через транзакцию и при гонке с удалением чисто отменится.
-        if (room.status === "waiting" &&
+        if (mayDelete &&
+            room.status === "waiting" &&
             !(room.players && room.players.dark) &&
             lightIsStale) {
             if (room.players && room.players.light && room.players.light.id) {
@@ -8392,7 +8494,26 @@ function runLobbyStaleSweep() {
         // v184 BOTH-OFFLINE: best-effort физическая уборка. Не получится —
         // не страшно: видимость и возможность продолжить уже закрыты
         // предикатом на всех путях чтения.
-        if (isRoomAbandonedNow(room)) {
+        //
+        // CLOCK SAFETY. Порог mayDelete нужен и здесь, хотя сам предикат
+        // fail-closed по serverTimeOffsetReady. Этого мало: смещение,
+        // однажды полученное, остаётся true и после обрыва связи, а
+        // isRoomAbandonedNow не проверяет isFirebaseConnected вовсе.
+        //
+        // Гонка, которую это закрывает:
+        //   лобби видело обоих offline и потеряло связь;
+        //   один игрок вернулся раньше минуты, но отключённый клиент этого
+        //   не видит — его кеш заморожен на старом состоянии;
+        //   sweep продолжает крутиться по setInterval, через минуту предикат
+        //   на устаревшем кеше становится true;
+        //   remove() уходит в offline-очередь Firebase и применяется ПОСЛЕ
+        //   реконнекта — к уже ЖИВОЙ комнате.
+        //
+        // Сам isRoomAbandonedNow и вся логическая блокировка abandoned на
+        // resume, deep-link, рендере и реконнекте НЕ меняются: там решение
+        // принимается по свежим данным, и порог связи им не нужен.
+        // Здесь же речь о необратимой записи в чужую комнату.
+        if (mayDelete && isRoomAbandonedNow(room)) {
             if (room.players && room.players.light && room.players.light.id) {
                 database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
             }
@@ -8403,7 +8524,7 @@ function runLobbyStaleSweep() {
             continue;
         }
 
-        if (room.status === "active" && lightIsStale && darkIsStale) {
+        if (mayDelete && room.status === "active" && lightIsStale && darkIsStale) {
             if (room.players && room.players.light && room.players.light.id) {
                 database.ref("users/" + room.players.light.id + "/rooms/" + code).remove();
             }
