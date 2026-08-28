@@ -25,6 +25,7 @@ const FILES = [
   ['R. ПРИВАТНОСТЬ ПРИГЛАШЕНИЯ (BUG №1)', 'invite-privacy.test.js'],
   ['S. BOTH-OFFLINE 60s + ЗАКРЫТИЕ ПУТЕЙ ВОСКРЕШЕНИЯ (v184)', 'both-offline-abandoned.test.js'],
   ['T. CLOCK SAFETY — серверное время вместо часов телефона', 'clock-safety.test.js'],
+  ['U. ТАБЛИЦА СТАТИСТИКИ — ВСЕ ИГРОКИ В ОБЕИХ ВКЛАДКАХ', 'leaderboard-all-players.test.js'],
 ];
 
 let totalPass = 0, totalFail = 0, hardFail = false;
