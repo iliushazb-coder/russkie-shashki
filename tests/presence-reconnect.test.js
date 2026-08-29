@@ -1009,10 +1009,13 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     // Проверяем НАМЕРЕНИЕ, а не конкретную цифру: cache-bust script.js должен
     // быть не ниже 181 (версии, в которой появился этот текст), а style.css
     // обязан оставаться на v12 — он с тех пор не менялся.
-    check('25.6 cache-bust script.js >= 181, style.css остался v12', (function () {
+        check('25.6 cache-bust обоих ресурсов не отстаёт', (function () {
         const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
         const m = /script\.js\?v=(\d+)/.exec(html);
-        return !!m && Number(m[1]) >= 181 && /style\.css\?v=12/.test(html);
+        // v189: style.css меняется впервые (геометрия доски), поэтому жёсткое
+        // v=12 больше неверно. Смысл прежний: обе версии не отстают.
+        const c = /style\.css\?v=(\d+)/.exec(html);
+        return !!m && Number(m[1]) >= 181 && !!c && Number(c[1]) >= 12;
     })());
 
     // поведение: игрок видит подтверждение, зритель — прежнюю формулировку

@@ -1,3 +1,29 @@
+/* ===== ГЕОМЕТРИЯ ДОСКИ =====
+   Раньше размеры задавались напрямую в vw:
+       подписи clamp(20px, 6vw, 32px), клетка clamp(32px, 10.2vw, 50px)
+   Сумма ширин при этом никак не была связана с шириной экрана:
+       2*6vw + 8*10.2vw = 93.6vw  плюс 28px отступов и рамки обёртки
+       плюс 28px padding у body — итого 93.6vw + 56px.
+   Это меньше 100vw только начиная примерно с 875px, поэтому на ЛЮБОМ
+   телефоне обёртка вылезала за экран на 28-37px. body центрирует её, так
+   что обрезались ОБЕ колонки координат, а overflow-x: hidden прятал
+   переполнение вместо того, чтобы его не допускать.
+
+   Теперь ширина сходится ПО ПОСТРОЕНИЮ: сначала считаем, сколько места
+   реально доступно, затем вычитаем подписи, а остаток делим на 8 клеток.
+   Подогнанных коэффициентов нет — при любой ширине экрана сумма колонок
+   равна доступному месту либо меньше него (когда клетка упирается в
+   потолок 50px на больших экранах, где поведение не меняется вовсе). */
+:root {
+    /* 28px — padding body слева и справа; ещё 28px — padding 12px и
+       рамка 2px обёртки с обеих сторон. */
+    --board-avail: calc(100vw - 56px);
+    /* Подписи координат: доля доступного места с полом и потолком. */
+    --coord-size: clamp(18px, calc(var(--board-avail) * 0.055), 32px);
+    /* Клетка: весь остаток на восемь, но не крупнее прежнего потолка. */
+    --cell-size: min(50px, calc((var(--board-avail) - 2 * var(--coord-size)) / 8));
+}
+
 * {
     box-sizing: border-box;
     -webkit-tap-highlight-color: transparent;
@@ -262,9 +288,13 @@ h1 {
 }
 
 #board-wrapper {
+    /* Страховка на случай, если какая-то среда посчитает vw иначе
+       (например, с учётом полосы прокрутки): обёртка в любом случае не
+       выходит за пределы родителя. */
+    max-width: 100%;
     display: grid;
-    grid-template-columns: clamp(20px, 6vw, 32px) repeat(8, clamp(32px, 10.2vw, 50px)) clamp(20px, 6vw, 32px);
-    grid-template-rows: clamp(20px, 6vw, 32px) repeat(8, clamp(32px, 10.2vw, 50px)) clamp(20px, 6vw, 32px);
+    grid-template-columns: var(--coord-size) repeat(8, var(--cell-size)) var(--coord-size);
+    grid-template-rows: var(--coord-size) repeat(8, var(--cell-size)) var(--coord-size);
     border-radius: 14px;
     padding: 12px;
     background:
@@ -284,8 +314,8 @@ h1 {
     grid-column: 2 / span 8;
     grid-row: 2 / span 8;
     display: grid;
-    grid-template-columns: repeat(8, clamp(32px, 10.2vw, 50px));
-    grid-template-rows: repeat(8, clamp(32px, 10.2vw, 50px));
+    grid-template-columns: repeat(8, var(--cell-size));
+    grid-template-rows: repeat(8, var(--cell-size));
     border-radius: 3px;
     overflow: hidden;
     border: 1px solid #d4a94f;
@@ -311,8 +341,8 @@ h1 {
 }
 
 .square {
-    width: clamp(32px, 10.2vw, 50px);
-    height: clamp(32px, 10.2vw, 50px);
+    width: var(--cell-size);
+    height: var(--cell-size);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -469,8 +499,8 @@ h1 {
 }
 
 .label {
-    width: clamp(32px, 10.2vw, 50px);
-    height: clamp(20px, 6vw, 32px);
+    width: var(--cell-size);
+    height: var(--coord-size);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -482,8 +512,8 @@ h1 {
 
 .labels-left .label,
 .labels-right .label {
-    width: clamp(20px, 6vw, 32px);
-    height: clamp(32px, 10.2vw, 50px);
+    width: var(--coord-size);
+    height: var(--cell-size);
 }
 
 /* Анимация выделения работает только на transform (мгновенно для GPU) */

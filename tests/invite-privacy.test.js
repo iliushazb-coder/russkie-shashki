@@ -193,10 +193,22 @@ check('5.3 из отвергнутых архитектур не перенес�
     SRC.indexOf('roomsV2') === -1);
 check('5.3b добавлен ровно один новый предикат both-offline',
     (SRC.match(/function isRoomAbandonedNow/g) || []).length === 1);
-check('5.4 cache-bust поднят, style.css не тронут', (function () {
+// v189: style.css меняется ВПЕРВЫЕ (геометрия доски), поэтому жёсткая
+// привязка к v=12 больше неверна. Смысл проверки прежний: версия каждого
+// ресурса не отстаёт от той, на которой он был закреплён.
+check('5.4 cache-bust поднят для ОБОИХ ресурсов', (function () {
     const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
-    const m = /script\.js\?v=(\d+)/.exec(html);
-    return !!m && Number(m[1]) >= 183 && /style\.css\?v=12/.test(html);
+    const js = /script\.js\?v=(\d+)/.exec(html);
+    const css = /style\.css\?v=(\d+)/.exec(html);
+    return !!js && Number(js[1]) >= 183 && !!css && Number(css[1]) >= 12;
+})());
+check('5.4b если style.css изменён, его версия обязана быть выше 12', (function () {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+    const css = /style\.css\?v=(\d+)/.exec(html);
+    const cssSrc = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+    // Признак новой геометрии — переменные доски.
+    const changed = cssSrc.indexOf('--cell-size') !== -1;
+    return !changed || (!!css && Number(css[1]) > 12);
 })());
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
