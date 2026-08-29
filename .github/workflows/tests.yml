@@ -1,0 +1,34 @@
+# Проверка каждого push и pull request.
+#
+# Зависимостей у проекта нет и package-lock.json тоже, поэтому npm ci здесь
+# неприменим — он требует lock-файл. Заводить lock только ради CI не нужно:
+# npm test запускает голый Node без единого внешнего пакета.
+#
+# Код возврата важнее вывода: сюита, упавшая при загрузке, печатает ноль
+# проверок и молча уменьшает общий счёт. Раннер это ловит и завершается
+# ненулевым кодом, а GitHub Actions падает по коду возврата шага.
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Поставить Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Синтаксис script.js
+        run: npm run check
+
+      - name: Все тесты
+        run: npm test
