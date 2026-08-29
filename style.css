@@ -1079,7 +1079,7 @@ h1 {
 }
 
 .piece-dark {
-    background-image: url('assets/piece_dark.png') !important;
+    background-image: url('assets/piece_dark.png?v=2') !important;
     background-size: contain !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
@@ -1090,21 +1090,21 @@ h1 {
 }
 
 .piece-light {
-    background-image: url('assets/piece_light.png') !important;
+    background-image: url('assets/piece_light.png?v=2') !important;
     background-size: contain !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
 
 .piece-dark.king {
-    background-image: url('assets/king_dark.png') !important;
+    background-image: url('assets/king_dark.png?v=2') !important;
     background-size: contain !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
 
 .piece-light.king {
-    background-image: url('assets/king_light.png') !important;
+    background-image: url('assets/king_light.png?v=2') !important;
     background-size: contain !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
