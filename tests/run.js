@@ -42,6 +42,8 @@ const FILES = [
   ['U. ТАБЛИЦА СТАТИСТИКИ — ВСЕ ИГРОКИ В ОБЕИХ ВКЛАДКАХ', 'leaderboard-all-players.test.js'],
   ['V. НАДЁЖНОСТЬ САМОГО РАННЕРА', 'runner-selftest.test.js'],
   ['W. INVITE JOIN RACE — атомарный захват места', 'invite-race.test.js'],
+  ['X. FIREBASE AUTH GATE v193', 'auth-gate-v193.test.js'],
+  ['Y. ВОРОТА: ЗАКРЕПЛЕНИЕ ГАРАНТИЙ', 'auth-gate-regression.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

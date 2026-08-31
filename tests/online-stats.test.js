@@ -5,6 +5,12 @@ function ex(n){const re=new RegExp('function '+n+'\\([^)]*\\) \\{','g');const m=
 if(!m)throw new Error('нет '+n);let s=m.index,i=src.indexOf('{',s),d=1;i++;
 while(d>0){if(src[i]==='{')d++;else if(src[i]==='}')d--;i++;}return src.slice(s,i);}
 
+
+// v193 auth harness: these legacy behavioural suites exercise already-authenticated flows.
+global.firebaseAuthReady = true;
+global.localOnlyBotGame = false;
+global.canUseFirebase = function () { return true; };
+global.requireFirebaseAuth = function () { return true; };
 let passed=0, failed=0;
 function check(n,c,d){console.log((c?'✅ ':'❌ ')+n+(!c&&d?' — '+d:''));c?passed++:failed++;}
 

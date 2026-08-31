@@ -97,6 +97,7 @@ async function recordAs(client, state, marker) {
     global.currentState = state;
     global.isOnlineGame = true; global.isBotGame = false; global.isSpectator = false;
     global.isLocalStateOptimistic = false;
+global.canUseFirebase = function () { return true; };
     global.roomCode = 'ROOM_T';
     global.statsRecordedForRoom = client.statsRecordedForRoom;
     global.statsInFlightOnlineMarker = null;

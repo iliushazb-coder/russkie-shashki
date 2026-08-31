@@ -62,6 +62,7 @@ global.database = { ref: function () { return {
     transaction: function (fn) { transactions.push(fn); return { then: function () { return this; }, catch: function () { return this; } }; }
 }; } };
 global.firebase = { database: { ServerValue: { TIMESTAMP: 'TS' } } };
+global.canUseFirebase = function () { return true; };
 eval(grab('checkTimeout'));
 
 function gameState(o) {

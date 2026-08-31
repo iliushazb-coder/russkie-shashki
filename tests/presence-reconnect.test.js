@@ -11,6 +11,12 @@
 //  4. Перед удалением живой комнаты — fail-safe: любое сомнение = не удалять.
 const { SRC, extractFunc } = require('./helpers/loader');
 
+
+// v193 auth harness: these legacy behavioural suites exercise already-authenticated flows.
+global.firebaseAuthReady = true;
+global.localOnlyBotGame = false;
+global.canUseFirebase = function () { return true; };
+global.requireFirebaseAuth = function () { return true; };
 let passed = 0, failed = 0;
 function check(n, c, d) { console.log((c ? '  ✅ ' : '  ❌ ') + n + (!c && d ? ' — ' + d : '')); c ? passed++ : failed++; }
 
@@ -506,17 +512,20 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         const setOnline = m[0].indexOf('return presenceRef.set({');
         return od !== -1 && setOnline !== -1 && od < setOnline;
     })());
-    check('13.5 online объявляется только после успешной регистрации onDisconnect',
-        /presenceRef\.onDisconnect\(\)\.update\(\{[\s\S]{0,200}\}\)\s*\n\s*\.then\(function \(\) \{\s*\n\s*return presenceRef\.set\(/.test(SRC));
-    // v184: ОЖИДАНИЕ ПЕРЕВЁРНУТО ОСОЗНАННО. Раньше .catch() специально ставил
-    // online:true в offline-очередь. Именно эта запись воскрешала брошенную
-    // партию после реконнекта: очередь отправлялась и перезаписывала
-    // серверное состояние, поставленное onDisconnect. Теперь при отсутствии
-    // связи не пишем ничего; при живой связи прежнее поведение сохранено.
-    check('13.6 без связи online в очередь НЕ ставится', (function () {
-        const m = /\.catch\(function \(\) \{[\s\S]{0,700}presenceRef\.set\(\{/.exec(SRC);
+    check('13.5 online объявляется только после успешной регистрации onDisconnect', (function () {
+        const m = /function setupPresence[\s\S]*?\n}/.exec(SRC);
         if (!m) return false;
-        return /if \(!isFirebaseConnected\) return;/.test(m[0]);
+        const arm = m[0].indexOf('presenceRef.onDisconnect().update({');
+        const then = m[0].indexOf('.then(function () {', arm);
+        const gate = m[0].indexOf('if (!canUseFirebase()) return;', then);
+        const setOnline = m[0].indexOf('return presenceRef.set({', then);
+        return arm !== -1 && then > arm && gate > then && setOnline > gate;
+    })());
+    check('13.6 без связи online в очередь НЕ ставится', (function () {
+        const m = /\.catch\(function \(\) \{[\s\S]{0,900}presenceRef\.set\(\{/.exec(SRC);
+        if (!m) return false;
+        return /if \(!isFirebaseConnected\) return;/.test(m[0]) &&
+            /if \(!canUseFirebase\(\)\) return;/.test(m[0]);
     })());
     check('13.6b при живой связи прежний fallback сохранён',
         /\.catch\(function \(\) \{[\s\S]{0,900}presenceRef\.set\(\{[\s\S]{0,200}online: true/.test(SRC));
@@ -641,9 +650,6 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         return /online: false/.test(hidden) &&
             /absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(hidden);
     })());
-    // v184: ветка visible больше не пишет присутствие сама — она идёт тем же
-    // свежим путём, что и реконнект. Требование прежнее: возвращение очищает
-    // absentSince. Проверяем там, где эта запись теперь физически находится.
     check('17.2 возвращение очищает absentSince', (function () {
         const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
         if (!m) return false;
@@ -652,8 +658,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('17.2b ветка visible ведёт в свежий путь, а не пишет из кеша', (function () {
         const m = /function handleVisibilityChange[\s\S]*?\n}/.exec(SRC);
         const back = m[0].slice(m[0].indexOf('} else'));
-        return /revivePresenceAfterReconnect\(\)/.test(back) &&
-            back.indexOf('online: true') === -1;
+        return /revivePresenceAfterReconnect\(\)/.test(back) && back.indexOf('online: true') === -1;
     })());
     check('17.3 настоящий обрыв ведёт в ТУ ЖЕ машину (onDisconnect ставит absentSince)',
         /onDisconnect\(\)\.update\(\{[\s\S]{0,200}absentSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(SRC));
@@ -766,10 +771,6 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         if (!m) return false;
         return /onlineSince: firebase\.database\.ServerValue\.TIMESTAMP/.test(m[0]);
     })());
-    // v184: реконнект вынесен в revivePresenceAfterReconnect(). Требование
-    // прежнее — новая online-сессия начинается заново, — но теперь этому
-    // предшествуют свежее чтение комнаты, проверка both-offline и
-    // перевооружение одноразового onDisconnect.
     check('19.3 reconnect после настоящего обрыва ставит onlineSince заново', (function () {
         const m = /^function revivePresenceAfterReconnect\([\s\S]*?\n\}/m.exec(SRC);
         if (!m) return false;
@@ -1006,14 +1007,10 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         return /id="spectator-interrupted-modal"/.test(html) &&
             /data-i18n="status_game_interrupted"/.test(html);
     })());
-    // Проверяем НАМЕРЕНИЕ, а не конкретную цифру: cache-bust script.js должен
-    // быть не ниже 181 (версии, в которой появился этот текст), а style.css
-    // обязан оставаться на v12 — он с тех пор не менялся.
-        check('25.6 cache-bust обоих ресурсов не отстаёт', (function () {
+    // Проверяем НАМЕРЕНИЕ, а не конкретную цифру: обе версии ресурсов не должны отставать.
+    check('25.6 cache-bust обоих ресурсов не отстаёт', (function () {
         const html = require('fs').readFileSync(require('path').join(__dirname, '..', 'index.html'), 'utf8');
         const m = /script\.js\?v=(\d+)/.exec(html);
-        // v189: style.css меняется впервые (геометрия доски), поэтому жёсткое
-        // v=12 больше неверно. Смысл прежний: обе версии не отстают.
         const c = /style\.css\?v=(\d+)/.exec(html);
         return !!m && Number(m[1]) >= 181 && !!c && Number(c[1]) >= 12;
     })());

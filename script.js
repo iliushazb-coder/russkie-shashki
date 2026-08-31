@@ -17,6 +17,7 @@ const firebaseConfig = {
 
 firebase.initializeApp(firebaseConfig);
 
+const auth = firebase.auth();
 const appCheck = firebase.appCheck();
 appCheck.activate('6LdveXstAAAAAEH1UUtHVPTzlUOx-b82D5eWDXNw', true);
 
@@ -293,6 +294,9 @@ function processCoinPopupQueue() {
 // Стартовый подарок.
 // Firebase transaction гарантирует, что +500 выдаётся только один раз.
 function claimWelcomeCoins() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve();
     if (!myTelegramId) return Promise.resolve(false);
 
     const economyRef =
@@ -336,6 +340,9 @@ function claimWelcomeCoins() {
 // Проверка даты и изменение баланса находятся
 // в одной transaction().
 function claimDailyCoins() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve();
     if (!myTelegramId) return Promise.resolve(false);
 
     return getFirebaseServerDayKey().then(function (todayKey) {
@@ -381,6 +388,9 @@ function claimDailyCoins() {
 // Сначала стартовый подарок, затем ежедневный,
 // чтобы две transaction не выполнялись одновременно.
 function initializeEconomy() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve();
     if (!myTelegramId) return;
 
     claimWelcomeCoins()
@@ -443,6 +453,9 @@ function getCurrentRewardMatchId() {
 // Атомарная выплата результата одной партии.
 // rewardedMatches и баланс меняются В ОДНОЙ transaction().
 function awardCoinsForMatch(matchId, amount) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve();
     if (!myTelegramId || !matchId) {
         return Promise.resolve({
             rewarded: false,
@@ -667,18 +680,32 @@ function playSoundForMoveType(type, wasKing) {
 
 // ===== ТЕЛЕГРАМ-ПОЛЬЗОВАТЕЛЬ =====
 
-function getMyTelegramUser() {
-    if (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user) {
-        const u = Telegram.WebApp.initDataUnsafe.user;
-        const name = u.username ? ("@" + u.username) : (u.first_name || "Игрок");
-        return { id: "tg_" + u.id, name: name };
-    }
-    let id = localStorage.getItem("shashki_test_id");
-    if (!id) {
-        id = "test_" + Math.random().toString(36).slice(2, 10);
-        localStorage.setItem("shashki_test_id", id);
-    }
-    return { id: id, name: "Игрок (браузер)" };
+// ===== ВОРОТА ДОСТУПА К FIREBASE =====
+//
+// До подтверждённого входа через Telegram НИ ОДНА запись в Firebase не
+// выполняется. Правила v12 всё равно отклонят такие записи, но полагаться
+// на отказ сервера нельзя: сейчас правила ещё не опубликованы, и клиент
+// обязан молчать сам.
+//
+// Локальная часть игры при этом работает: доска, ходы, бот. Не сохраняется
+// только то, что живёт в Firebase — сессия партии с ботом, статистика,
+// монеты, лобби и приглашения.
+let firebaseAuthReady = false;
+let localOnlyBotGame = false;
+let pendingFirebaseIdentity = null;
+let firebaseFlowsStarted = false;
+function canUseFirebase() {
+    const currentUser = auth && auth.currentUser;
+    return firebaseAuthReady === true && !localOnlyBotGame
+        && typeof myTelegramId === "string" && /^tg_\d+$/.test(myTelegramId)
+        && !!currentUser && currentUser.uid === myTelegramId;
+}
+
+// Единая точка отказа для онлайновых разделов меню.
+function requireFirebaseAuth() {
+    if (canUseFirebase()) return true;
+    showInfoModal(t("err_auth_required"), false);
+    return false;
 }
 
 let myTelegramId = null;
@@ -768,6 +795,7 @@ const translations = {
         err_opponent_offline: "Соперник оффлайн\n\n",
         err_opponent_offline_2: " больше не находится в игре.",
         err_join_failed: "Не удалось подключиться к игре. Попробуйте ещё раз.",
+        err_auth_required: "Онлайн доступен только после входа через Telegram. Закройте и снова откройте игру.",
         err_room_taken: "Комната уже занята или не существует.",
         err_search_failed: "Не удалось начать поиск. Проверьте интернет-соединение.",
         err_game_closed: "Игра была завершена или закрыта.",
@@ -895,6 +923,7 @@ const translations = {
         err_opponent_offline: "Opponent is offline\n\n",
         err_opponent_offline_2: " is no longer in the game.",
         err_join_failed: "Failed to join the game. Try again.",
+        err_auth_required: "Online is available only after signing in via Telegram. Close and reopen the game.",
         err_room_taken: "Room is already taken or doesn't exist.",
         err_search_failed: "Failed to start search. Check your internet connection.",
         err_game_closed: "The game was ended or closed.",
@@ -1022,6 +1051,7 @@ const translations = {
         err_opponent_offline: "L'avversario è offline\n\n",
         err_opponent_offline_2: " non è più in gioco.",
         err_join_failed: "Impossibile unirsi alla partita. Riprova.",
+        err_auth_required: "L'online è disponibile solo dopo l'accesso tramite Telegram. Chiudi e riapri il gioco.",
         err_room_taken: "La stanza è già occupata o non esiste.",
         err_search_failed: "Impossibile avviare la ricerca. Controlla la connessione.",
         err_game_closed: "La partita è stata terminata o chiusa.",
@@ -2399,6 +2429,7 @@ let technicalResultInFlight = false;
 // ниже — fail-fast: окончательный арбитраж делает Firebase .validate по
 // СЕРВЕРНОМУ времени, а не часами телефона.
 function writeTechnicalResult(absentColor) {
+    if (!canUseFirebase()) return false;
     // --- контекст: только живая online-партия между людьми ---
     if (!isOnlineGame || isBotGame || isSpectator) return false;
     if (!roomCode || !currentState || !currentState.players) return false;
@@ -2510,6 +2541,7 @@ function canTrustAbsenceForCleanup() {
 }
 
 function cleanupAbandonedRoom() {
+    if (!canUseFirebase()) return;
     if (!roomCode) return;
     const codeToClean = roomCode;
     if (myTelegramId) {
@@ -2526,6 +2558,7 @@ function cleanupAbandonedRoom() {
 // ===== СИСТЕМА ПРИСУТСТВИЯ (ONLINE / OFFLINE) =====
 
 function handleVisibilityChange() {
+    if (!canUseFirebase()) return;
     if (!myPresenceRef) return;
 
     if (document.hidden) {
@@ -2568,6 +2601,7 @@ function handleVisibilityChange() {
 }
 
 function setupPresence() {
+    if (!canUseFirebase()) return;
     if (!myTelegramId || !roomCode) return;
 
     // Перед перенастройкой presence отменяем старый onDisconnect.
@@ -2598,6 +2632,7 @@ function setupPresence() {
             absentSince: firebase.database.ServerValue.TIMESTAMP
         })
         .then(function () {
+            if (!canUseFirebase()) return;
             return presenceRef.set({
                 online: true,
                 absentSince: null,
@@ -2613,6 +2648,7 @@ function setupPresence() {
             // обработчик .info/connected, предварительно перевооружив
             // onDisconnect и проверив, не брошена ли партия.
             if (!isFirebaseConnected) return;
+            if (!canUseFirebase()) return;
             // Связь есть, но регистрация не прошла (транзиентная ошибка) —
             // прежнее поведение сохраняется.
             presenceRef.set({
@@ -2628,6 +2664,7 @@ function setupPresence() {
     // регистрация перенесена ПЕРЕД объявлением online.
 
     presenceHeartbeatInterval = setInterval(function () {
+        if (!canUseFirebase()) return;
         // ЕДИНОЕ ПРАВИЛО (v184): при отсутствии связи обычные клиентские
         // записи присутствия НЕ выполняются вообще. Firebase ставит их в
         // очередь и отправляет после реконнекта, а там они перезаписывают
@@ -2694,6 +2731,7 @@ function leaveAbandonedRoomToMenu() {
 // Правильный порядок: свежее состояние комнаты -> проверка брошенности ->
 // перевооружение onDisconnect -> и только потом online:true.
 function revivePresenceAfterReconnect() {
+    if (!canUseFirebase()) return;
     const gen = connectionGeneration;
     const lgen = listenerGeneration;
     const targetRoom = roomCode;
@@ -2742,7 +2780,7 @@ function revivePresenceAfterReconnect() {
 // переход в режим зрителя) — иначе глобальный слушатель .info/connected
 // может позже "оживить" presence уже неактуальной, старой комнаты.
 function detachMyPresence() {
-    if (myPresenceRef) {
+    if (myPresenceRef && canUseFirebase()) {
         myPresenceRef.onDisconnect().cancel();
     }
     stopPresenceHeartbeat();
@@ -2751,7 +2789,7 @@ function detachMyPresence() {
 }
 
 function markMyselfLeftExplicitly() {
-    if (myPresenceRef) {
+    if (myPresenceRef && canUseFirebase()) {
         // v180: явный выход — та же машина отсутствия, что и сворачивание.
         myPresenceRef.update({
             online: false,
@@ -3447,7 +3485,7 @@ function renderEndGameModal() {
             playWinSound();
             endGameShownForRoom = marker;
         }
-        if (isBotGame) {
+        if (isBotGame && !localOnlyBotGame) {
             // Bot-ветка: НЕ ставим statsRecordedForRoom заранее — только
             // после того, как Firebase реально подтвердил результат (успех
             // ИЛИ committed:false из-за уже засчитанного matchId — оба это
@@ -3623,6 +3661,7 @@ function getEloMatchContext() {
 // Инициализируются ОБА игрока, а не только я: соперник мог ни разу не
 // открыть новую версию, и без его записи отклонился бы весь update.
 function ensureStatsInitialized(id, name) {
+    if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
     return database.ref("stats/" + id).transaction(function (current) {
         const result = current || {};
         if (typeof result.wins !== "number") result.wins = 0;
@@ -3648,6 +3687,7 @@ let eloWriteInFlightMatchId = null;
 // два матча одного игрока, стартовавшие с одного снимка, сложат свои дельты
 // вместо того чтобы затереть результат друг друга.
 function recordEloMatchResult(ctx, marker) {
+    if (!canUseFirebase()) { statsInFlightOnlineMarker = null; return; }
     if (eloWriteInFlightMatchId === ctx.matchId) return;
     const attempts = eloWriteAttempts[ctx.matchId] || 0;
     if (attempts >= ELO_MAX_WRITE_ATTEMPTS) {
@@ -3662,6 +3702,7 @@ function recordEloMatchResult(ctx, marker) {
         ensureStatsInitialized(ctx.lightId, ctx.lightName),
         ensureStatsInitialized(ctx.darkId, ctx.darkName)
     ]).then(function () {
+        if (!canUseFirebase()) throw new Error("firebase_auth_required");
         // Вызываем increment ЧЕРЕЗ объект SDK, а не сохранённой ссылкой:
         // отвязанная функция зависела бы от деталей реализации firebase-compat.
         const inc = function (delta) { return firebase.database.ServerValue.increment(delta); };
@@ -3716,6 +3757,7 @@ function recordEloMatchResult(ctx, marker) {
 let ratingSnapshotWrittenFor = null;
 
 function ensureMyRatingSnapshot(room) {
+    if (!canUseFirebase()) return;
     if (!isOnlineGame || isBotGame || isSpectator) return;
     if (!roomCode || !myTelegramId || !myColor) return;
     if (!room || room.status !== "active" || room.winner) return;
@@ -3731,6 +3773,7 @@ function ensureMyRatingSnapshot(room) {
     ratingSnapshotWrittenFor = stamp;
 
     ensureStatsInitialized(myTelegramId, myTelegramName).then(function (result) {
+        if (!canUseFirebase()) throw new Error("firebase_auth_required");
         const val = (result && result.snapshot) ? result.snapshot.val() : null;
         const myRating = normalizeEloRating(val && val.rating);
         return database.ref("rooms/" + targetRoom + "/ratingsAtStart/" + targetColor).set(myRating);
@@ -3743,7 +3786,9 @@ function ensureMyRatingSnapshot(room) {
 }
 
 function recordGameResult(onlineMarker) {
-    if (isSpectator) return; // Зритель никогда не участвует в статистике
+    if (isSpectator) return;
+    if (!canUseFirebase()) { statsInFlightForRoom = null; statsInFlightOnlineMarker = null; return; }
+    if (isBotGame && localOnlyBotGame) { statsInFlightForRoom = null; return; } // Зритель никогда не участвует в статистике
     // В онлайн-игре НЕ пишем статистику по локальному оптимистичному
     // состоянию: currentState.winner мог быть выставлен из ещё не
     // подтверждённого хода, а Firebase-транзакция способна его отклонить —
@@ -4001,6 +4046,7 @@ function forceResyncFromServer(silent) {
 }
 
 function performMove(fromRow, fromCol, toRow, toCol) {
+    if (isOnlineGame && !canUseFirebase()) { showInfoModal(t("err_auth_required"), false); return; }
     if (isOnlineGame) {
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
@@ -4181,7 +4227,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
             playSoundForMoveType(result.moveType, movingPieceWasKing);
             renderBoard();
-            if (isBotGame) syncBotStateToFirebase();
+            if (isBotGame && !localOnlyBotGame) syncBotStateToFirebase();
         }
     }
 }
@@ -4465,6 +4511,9 @@ function deserializeOwnerBotState(raw) {
 // реально запишется только ОДНА — вторая попытка увидит уже записанную
 // active-сессию и корректно abort'ится вместо слепой перезаписи. ---
 function createOwnerBotSession(chosenDifficulty, initialGameState) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ committed: false, authRequired: true });
     const newBotColor = "dark";
     const newMyColor = "light";
     const matchId = "bot_" + myTelegramId + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
@@ -4506,6 +4555,9 @@ function createOwnerBotSession(chosenDifficulty, initialGameState) {
 // --- Подписка на общую сессию. onUpdate вызывается при каждом новом
 // значении, включая самое первое. ---
 function attachToOwnerBotSession(onUpdate) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return null;
     const ref = database.ref("botSessions/" + myTelegramId);
     const listener = ref.on("value", function (snapshot) { onUpdate(snapshot.val()); });
     return { ref: ref, listener: listener };
@@ -4535,6 +4587,9 @@ function applyRemoteOwnerState(session) {
 // доказанно чистую attemptMove(), не мутирует ничего снаружи, не делает
 // побочных эффектов — Firebase может вызвать его больше одного раза. ---
 function applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ committed: false, authRequired: true });
     const expectedMatchId = currentBotMatchId;
     const expectedRevision = ownerSessionRevision;
     const myColorAtCallTime = myColor;
@@ -4582,6 +4637,9 @@ function applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol) {
 // устройство никогда бы не узнало о сдаче. Callback чист — использует
 // только gameState.turn из свежего session, ничего внешнего. ---
 function attemptOwnerSurrender() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ committed: false, authRequired: true });
     const expectedMatchId = currentBotMatchId;
     const expectedRevision = ownerSessionRevision;
 
@@ -4611,6 +4669,9 @@ function attemptOwnerSurrender() {
 // --- Bot move: lock через ВСЮ сессию (не только child) — устаревшее
 // локальное представление отсеивается СРАЗУ, не тратя впустую Hard-поиск. ---
 function tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotColor) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ acquired: false, authRequired: true });
     return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
         if (!session) return;
         if (session.status !== "active") return;
@@ -4636,6 +4697,9 @@ function tryAcquireBotMoveLock(expectedMatchId, expectedRevision, expectedBotCol
 }
 
 function commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, bestMove) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ committed: false, authRequired: true });
     return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
         if (!session) return;
         if (session.matchId !== expectedMatchId) return;
@@ -4692,6 +4756,9 @@ function commitBotMove(expectedMatchId, expectedRevision, expectedBotColor, best
 // цвет был у ПРЕДЫДУЩЕЙ партии), это чистая функция входа, не источник
 // новой недетерминированности. ---
 function applyRematchViaSession(expectedOldMatchId, freshInitialGameState) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ committed: false, authRequired: true });
     const newMatchId = "bot_" + myTelegramId + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
     return database.ref("botSessions/" + myTelegramId).transaction(function (session) {
         if (!session) return;
@@ -4733,6 +4800,9 @@ function applyRematchViaSession(expectedOldMatchId, freshInitialGameState) {
 // callback повторно и переписать её нечестно) — вызывающий код уже знает
 // старый код заранее, из того же чтения, что дало ему expectedOldMatchIdOrNull. ---
 function replaceOwnerBotSessionWithNew(expectedOldMatchIdOrNull, chosenDifficulty, freshInitialGameState) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve({ committed: false, authRequired: true });
     const newMatchId = "bot_" + myTelegramId + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
     const newSpectateRoomCode = generateRoomCode();
     const newBotColor = "dark";
@@ -4789,6 +4859,9 @@ function normalizeRecentMatchIds(value) {
 }
 
 function recordBotGameResultIdempotent(matchId, didIWin, level) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return Promise.resolve(null);
     return database.ref("statsBot/" + myTelegramId).transaction(function (current) {
         const result = current || { wins: 0, losses: 0, name: myTelegramName, recentMatchIds: [] };
         result.name = myTelegramName;
@@ -4839,6 +4912,7 @@ function isMyOwnBotGameRoom(room) {
 // небезопасно при двух owner-устройствах (чужой поздний disconnect может
 // стереть чужой, более новый lock/комнату). ---
 function mirrorCommittedStateToSpectateRoom(spectateCode, committedSession) {
+    if (!canUseFirebase()) return Promise.resolve();
     if (!spectateCode || !committedSession) return Promise.resolve();
     const gameState = deserializeOwnerBotState(committedSession.state);
     const botPlayer = { id: "bot", name: "🤖 Компьютер" };
@@ -4878,8 +4952,10 @@ function mirrorCommittedStateToSpectateRoom(spectateCode, committedSession) {
 // существующей spectate room. Останавливается независимо на каждом
 // устройстве при локальном выходе в меню. ---
 function startOwnerPresenceHeartbeat() {
+    if (!canUseFirebase()) return;
     if (ownerSessionHeartbeatInterval) return;
     ownerSessionHeartbeatInterval = setInterval(function () {
+        if (!canUseFirebase()) return;
         if (!botSpectateRoomCode) return;
         const now = firebase.database.ServerValue.TIMESTAMP;
         database.ref("rooms/" + botSpectateRoomCode + "/presence").update({
@@ -4937,6 +5013,7 @@ let lastRenderedOwnerRevision = null;
 // серии создают новый spectateRoomCode) — не на каждый onOwnerSessionUpdate,
 // иначе на каждый ход плодились бы новые listener'ы. ---
 function ensureOwnerSpectatorsListener() {
+    if (!canUseFirebase()) return;
     if (!botSpectateRoomCode) return;
     if (ownerSpectatorsListenerRef && ownerSpectatorsListenerCode === botSpectateRoomCode) return;
     if (ownerSpectatorsListenerRef) {
@@ -4998,6 +5075,8 @@ function onOwnerSessionUpdate(session) {
 // --- Подключение к своей owner-сессии — используется и при обычном старте,
 // и при attach через "Кто играет" со второго устройства. ---
 function attachOwnerBotGame() {
+    if (!canUseFirebase()) return false;
+    localOnlyBotGame = false;
     isBotGame = true;
     isOnlineGame = false;
     isSpectator = false;
@@ -5045,6 +5124,7 @@ function attemptOwnerHumanMove(fromRow, fromCol, toRow, toCol) {
 // ===== ЗЕРКАЛО ИГРЫ С БОТОМ (чтобы её было видно в "Играть онлайн") =====
 
 function startBotSpectateRoom() {
+    if (localOnlyBotGame || !canUseFirebase()) return;
     // Если кода ещё нет (первая игра) — генерируем.
     // Если уже есть (реванш) — переиспользуем СТАРЫЙ код, чтобы зрители
     // не потеряли комнату и автоматически "переехали" в новую партию.
@@ -5094,6 +5174,7 @@ function startBotSpectateRoom() {
         // Периодически подтверждаем "присутствие" за обе стороны, чтобы комната
         // не считалась заброшенной и автоматически не удалилась во время игры.
         botSpectatePresenceInterval = setInterval(function () {
+            if (!canUseFirebase() || localOnlyBotGame) return;
             if (!botSpectateRoomCode) return;
             const now = firebase.database.ServerValue.TIMESTAMP;
             database.ref("rooms/" + botSpectateRoomCode + "/presence").update({
@@ -5116,23 +5197,20 @@ function startBotSpectateRoom() {
 }
 
 function stopBotSpectateRoom() {
-    if (botSpectatePresenceInterval) {
-        clearInterval(botSpectatePresenceInterval);
-        botSpectatePresenceInterval = null;
-    }
-    if (botSpectateListenerRef) {
-        botSpectateListenerRef.off();
-        botSpectateListenerRef = null;
-    }
+    if (botSpectatePresenceInterval) { clearInterval(botSpectatePresenceInterval); botSpectatePresenceInterval = null; }
+    if (botSpectateListenerRef) { botSpectateListenerRef.off(); botSpectateListenerRef = null; }
     if (botSpectateRoomCode) {
-        database.ref("rooms/" + botSpectateRoomCode).onDisconnect().cancel();
-        database.ref("rooms/" + botSpectateRoomCode).remove();
+        if (!localOnlyBotGame && canUseFirebase()) {
+            database.ref("rooms/" + botSpectateRoomCode).onDisconnect().cancel();
+            database.ref("rooms/" + botSpectateRoomCode).remove();
+        }
         botSpectateRoomCode = null;
     }
 }
 
 function syncBotStateToFirebase() {
-    if (!botSpectateRoomCode || !currentState) return;
+    if (localOnlyBotGame || !canUseFirebase()) return Promise.resolve();
+    if (!botSpectateRoomCode || !currentState) return Promise.resolve();
     database.ref("rooms/" + botSpectateRoomCode).update({
         pieces: currentState.pieces,
         turn: currentState.turn,
@@ -5166,6 +5244,7 @@ function getMaxDepthForDifficulty(difficulty) {
 // партия стартует только после выбора одной из трёх кнопок; ничего не
 // сохраняется между вызовами — botDifficulty выставляется заново каждый раз.
 function promptBotDifficultyThenStart() {
+    if (!canUseFirebase()) { pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null; botDifficultyModal.classList.remove("hidden"); return; }
     // Перед показом выбора уровня — проверяем, нет ли уже АКТИВНОЙ общей
     // сессии (например, партия начата на другом устройстве). Молча
     // уничтожать её нельзя — предлагаем явный выбор.
@@ -5249,6 +5328,12 @@ btnDifficultyBack.addEventListener("click", function () {
 // --- Единая точка запуска новой bot-серии (и с чистого места, и как явная
 // замена уже существующей активной сессии после подтверждения). ---
 function startOwnerBotGameWithDifficulty(chosenDifficulty) {
+    if (localOnlyBotGame || !canUseFirebase()) {
+        pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null;
+        localOnlyBotGame = true; ownerSessionAttached = false; botDifficulty = chosenDifficulty; isOnlineGame = false; isSpectator = false; isBotGame = true;
+        showScreen(gameScreen); startOfflineGame(); return;
+    }
+    localOnlyBotGame = false;
     isOnlineGame = false;
     isSpectator = false;
     isBotGame = true;
@@ -5271,7 +5356,7 @@ function startOwnerBotGameWithDifficulty(chosenDifficulty) {
                 return;
             }
             // Старую публичную комнату удаляем ТОЛЬКО после успешной замены, не до неё.
-            if (oldSpectateCode && oldSpectateCode !== result.newSession.spectateRoomCode) {
+            if (canUseFirebase() && oldSpectateCode && oldSpectateCode !== result.newSession.spectateRoomCode) {
                 database.ref("rooms/" + oldSpectateCode).remove().catch(function () {
                     // Не критично: осиротевшая комната лениво подчистится
                     // существующим stale-room механизмом showGroupLobby()
@@ -5283,6 +5368,7 @@ function startOwnerBotGameWithDifficulty(chosenDifficulty) {
             // хода — иначе "Кто играет" не увидит партию, пока кто-то не
             // сходит (а по реальным Rules пустая комната без players вообще
             // не прошла бы первую запись через move-triggered mirror).
+            if (!canUseFirebase()) return;
             mirrorCommittedStateToSpectateRoom(result.newSession.spectateRoomCode, result.newSession);
             attachOwnerBotGame();
         }).catch(function () {
@@ -5302,7 +5388,7 @@ function startOwnerBotGameWithDifficulty(chosenDifficulty) {
             // быстро нажал) уже создал активную сессию раньше нас —
             // attachOwnerBotGame() всё равно корректно подключится к
             // РЕАЛЬНОЙ (не обязательно "нашей") сессии через listener.
-            if (result.committed && oldFinishedSpectateCode && oldFinishedSpectateCode !== result.session.spectateRoomCode) {
+            if (canUseFirebase() && result.committed && oldFinishedSpectateCode && oldFinishedSpectateCode !== result.session.spectateRoomCode) {
                 // showGroupLobby() lazy-очистка стоит только на
                 // status==="active" (проверено по коду) — finished-комнату
                 // она никогда сама не удалит. Подчищаем здесь, ТОЛЬКО
@@ -5311,6 +5397,7 @@ function startOwnerBotGameWithDifficulty(chosenDifficulty) {
                     // Не критично — тот же принцип, что и в replace-ветке.
                 });
             }
+            if (!canUseFirebase()) return;
             if (result.committed) {
                 // Публичную комнату создаём СРАЗУ, до первого хода. Пишем
                 // только если ЭТО устройство реально выиграло гонку
@@ -5361,7 +5448,7 @@ function startOfflineGame() {
     // поэтому roomCode нельзя использовать как уникальный ID партии.
     currentBotMatchId =
         "bot_" +
-        myTelegramId +
+        (myTelegramId || "local") +
         "_" +
         Date.now() +
         "_" +
@@ -5450,7 +5537,7 @@ function startOfflineGame() {
     renderBoard();
 
     if (isBotGame) {
-        startBotSpectateRoom();
+        if (!localOnlyBotGame && canUseFirebase()) startBotSpectateRoom();
         // Если бот играет белыми, он должен сделать первый ход
         if (botColor === "light" && currentState.turn === "light") {
             if (!botMoveTimer) {
@@ -5468,6 +5555,9 @@ function startOfflineGame() {
 // ===== АКТИВНЫЕ ИГРЫ =====
 
 function loadActiveRooms() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return;
     const sectionEl = document.getElementById("active-rooms-section");
     const listEl = document.getElementById("active-rooms-list");
     const noGameText = document.getElementById("no-active-game-text");
@@ -5491,6 +5581,7 @@ function loadActiveRooms() {
         codes.forEach(function (code) {
             database.ref("rooms/" + code).once("value").then(function (roomSnap) {
                 pending--;
+                if (!canUseFirebase()) return;
                 const room = roomSnap.val();
 
                 const lightP = room && room.players && room.players.light;
@@ -5567,6 +5658,7 @@ function loadActiveRooms() {
 // ===== КНОПКИ МЕНЮ =====
 
 function createOnlineRoom() {
+    if (!canUseFirebase()) return;
     // Если у меня уже была своя незавершённая комната ожидания (например, я
     // вышел и нажал "Играть онлайн" ещё раз) — сначала удаляем старую,
     // чтобы не копились "призраки" вроде "Илюша ждёт соперника" по пять раз.
@@ -5613,6 +5705,7 @@ function createOnlineRoom() {
     };
 
     database.ref("rooms/" + roomCode).set(initialState).then(function () {
+        if (!canUseFirebase()) return;
         myPendingOnlineRoom = roomCode;
 
         database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
@@ -5627,6 +5720,7 @@ function createOnlineRoom() {
             const matchedRoomCode = snapshot.val();
             if (matchedRoomCode) {
                 activeMatchRef.off();
+                if (!canUseFirebase()) { activeMatchRef = null; return; }
                 activeMatchRef.remove();
                 myPendingOnlineRoom = null;
                 roomCode = matchedRoomCode;
@@ -5643,6 +5737,7 @@ function createOnlineRoom() {
 }
 
 btnPlayOnline.addEventListener("click", function () {
+    if (!requireFirebaseAuth()) return;
     isBotGame = false;
     showGroupLobby();
 });
@@ -5652,6 +5747,7 @@ btnCancelMatchmaking.addEventListener("click", function () {
 });
 
 btnPlayFriend.addEventListener("click", function () {
+    if (!requireFirebaseAuth()) return;
     isBotGame = false;
     showScreen(timeControlScreen);
 });
@@ -5672,6 +5768,9 @@ if (btnBackFromTimeControl) {
 }
 
 function createRoomAndShowWaiting() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return;
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = generateRoomCode();
@@ -5717,6 +5816,7 @@ function createRoomAndShowWaiting() {
     };
 
     database.ref("rooms/" + roomCode).set(initialState).then(function () {
+        if (!canUseFirebase()) return;
         database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
             opponentName: "Ожидание подключения...",
             myColor: "light"
@@ -5781,6 +5881,8 @@ if (btnBackBotNo) {
         if (backConfirmModal) backConfirmModal.classList.add("hidden");
     });
 }
+function finishLocalOnlyBotSeries() { const wasLocalOnly = localOnlyBotGame; localOnlyBotGame = false; if (wasLocalOnly) activatePendingFirebaseFlows(); }
+
 if (btnBackBotYes) {
     btnBackBotYes.addEventListener("click", function() {
         if (backConfirmModal) backConfirmModal.classList.add("hidden");
@@ -5801,6 +5903,7 @@ if (btnBackBotYes) {
             stopBotSpectateRoom(); // Удаляем фантомную комнату
         }
         isBotGame = false;
+        finishLocalOnlyBotSeries();
         showScreen(menuScreen);
         loadActiveRooms();
     });
@@ -5817,7 +5920,7 @@ if (btnBackBotYes) {
 // и модалкой "Игра прервана" — оба места делают ровно одно и то же. ---
 function leaveSpectatorAndReturnToLobby() {
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
+    if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
     isSpectator = false;
     isOnlineGame = false;
     isBotGame = false;
@@ -5843,6 +5946,7 @@ btnResignYes.addEventListener("click", function () {
     if (!currentState) return;
 
     if (isOnlineGame) {
+        if (!requireFirebaseAuth()) return;
     // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
     // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
     // владеет presence обоих игроков. Причина техническая, а не игровая:
@@ -5887,7 +5991,7 @@ btnResignYes.addEventListener("click", function () {
         currentState.winner = currentState.turn === "light" ? "dark" : "light";
         currentState.winReason = "resign";
         renderBoard();
-        if (isBotGame) syncBotStateToFirebase();
+        if (isBotGame && !localOnlyBotGame) syncBotStateToFirebase();
     }
 });
 
@@ -5896,6 +6000,7 @@ btnResignYes.addEventListener("click", function () {
 if (btnOfferDraw) {
     btnOfferDraw.addEventListener("click", function () {
         if (!isOnlineGame || !currentState || currentState.winner) return;
+        if (!requireFirebaseAuth()) return;
         database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
     });
 }
@@ -5915,6 +6020,7 @@ if (btnReactAngry) {
 
 function sendReaction(emoji) {
     if (isSpectator) return;
+    if (!requireFirebaseAuth()) return;
     if (!isOnlineGame || !currentState || currentState.winner) return;
     // ts: Date.now() гарантирует, что каждое нажатие уникально
     database.ref("rooms/" + roomCode + "/reaction").set({
@@ -5988,6 +6094,7 @@ if (btnDrawAccept) {
     // отделено от presence.
         // Без связи согласие не отправляем: после восстановления игрок
         // подтвердит его при актуальном серверном состоянии.
+        if (!requireFirebaseAuth()) return;
         if (!isFirebaseConnected) return;
         database.ref("rooms/" + roomCode).transaction(function (room) {
             // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
@@ -6016,6 +6123,7 @@ if (btnDrawAccept) {
 if (btnDrawDecline) {
     btnDrawDecline.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
+        if (!requireFirebaseAuth()) return;
         database.ref("rooms/" + roomCode + "/drawProposal").remove();
     });
 }
@@ -6023,6 +6131,7 @@ if (btnDrawDecline) {
 if (btnDrawCancel) {
     btnDrawCancel.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
+        if (!requireFirebaseAuth()) return;
         database.ref("rooms/" + roomCode + "/drawProposal").remove();
     });
 }
@@ -6035,7 +6144,7 @@ btnCloseGame.addEventListener("click", function () {
     // Если мы зритель — просто отписываемся от комнаты и выходим в меню
     if (isSpectator) {
         if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-        if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
+        if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
         showScreen(menuScreen);
         loadActiveRooms();
         return;
@@ -6057,6 +6166,7 @@ btnCloseGame.addEventListener("click", function () {
             stopBotSpectateRoom();
         }
         isBotGame = false;
+        finishLocalOnlyBotSeries();
         showScreen(menuScreen);
         return;
     }
@@ -6064,6 +6174,7 @@ btnCloseGame.addEventListener("click", function () {
 });
 
 function cleanupFinishedRoom() {
+    if (!canUseFirebase()) { detachMyPresence(); return; }
     if (!roomCode) return;
     const codeToClean = roomCode;
     if (myTelegramId) {
@@ -6079,6 +6190,7 @@ function cleanupFinishedRoom() {
 
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
+        if (!requireFirebaseAuth()) return;
         database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
     } else if (isBotGame && ownerSessionAttached) {
         endGameModal.classList.add("hidden");
@@ -6112,6 +6224,7 @@ btnNewGame.addEventListener("click", function () {
 });
 
 function performRematchReset() {
+    if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
     // Используем .update() вместо .transaction().
     // Это избегает циклов retry, которые конфликтуют с App Check Enforce.
     // Мы берем цвета игроков из локального состояния (они 100% точные).
@@ -6216,7 +6329,7 @@ btnRematchAccept.addEventListener("click", function () {
 
 btnRematchDecline.addEventListener("click", function () {
     rematchRequestModal.classList.add("hidden");
-    database.ref("rooms/" + roomCode + "/rematchProposal").remove();
+    if (canUseFirebase()) database.ref("rooms/" + roomCode + "/rematchProposal").remove();
 });
 
 // Кнопка «Повторить» создаётся лениво и существует только в состоянии
@@ -6348,6 +6461,7 @@ function updatePresenceOnly() {
 function checkTimeout() {
     if (isSpectator) return;
     if (!isOnlineGame || !currentState || currentState.winner) return;
+    if (!canUseFirebase()) return;
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
 
     // CLOCK SAFETY, FAIL CLOSED. Поражение по времени необратимо, поэтому без
@@ -6414,6 +6528,9 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
 }
 
 function checkForInviteLink() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return false;
     let startParam = null;
 
     if (window.Telegram &&
@@ -6622,6 +6739,7 @@ function checkForInviteLink() {
 
         function finishInviteSuccess() {
             if (settled) return;
+            if (!canUseFirebase()) { finishInviteFailure("err_auth_required"); return; }
             settled = true;
             clearTimeout(timeoutId);
 
@@ -6680,7 +6798,8 @@ function checkForInviteLink() {
                 // локальный кеш до server commit. Но главное здесь — сама запись
                 // ОДНА: dark + status + turnStartedAt атомарны относительно всех
                 // конкурирующих изменений комнаты.
-                return inviteRoomRef.transaction(function (currentRoom) {
+                if (!canUseFirebase()) return Promise.resolve(null);
+        return inviteRoomRef.transaction(function (currentRoom) {
                     return buildAtomicInviteJoin(currentRoom, myTelegramId, myTelegramName);
                 }, undefined, false);
             }).then(function (result) {
@@ -7216,12 +7335,14 @@ if (btnBotDetailsClose) {
 // ===== ИГРАТЬ ОНЛАЙН (МАТЧМЕЙКИНГ) =====
 
 function startOnlineSearch() {
+    if (!canUseFirebase()) return;
     showScreen(matchmakingScreen);
     isMatchmakingResolved = false;
 
     // 1. Сначала создаём свою комнату и встаём в очередь.
     // ЖДЁМ полного завершения записи в базу (Promise), чтобы избежать гонки условий.
     addToMatchmakingQueue().then(function() {
+        if (!canUseFirebase()) return;
         
         // 2. ТОЛЬКО ПОСЛЕ успешной записи — подключаем слушатель очереди
         matchmakingQueueRef = database.ref("matchmakingQueue");
@@ -7250,6 +7371,7 @@ function startOnlineSearch() {
             const matchedRoomCode = snapshot.val();
             if (matchedRoomCode) {
                 if (!isMatchmakingResolved) {
+                    if (!canUseFirebase()) return;
                     isMatchmakingResolved = true;
                     
                     if (matchmakingQueueRef) { 
@@ -7278,6 +7400,7 @@ function startOnlineSearch() {
 }
 
 function addToMatchmakingQueue() {
+    if (!canUseFirebase()) return;
     // Возвращаем Promise, чтобы вызывающая функция могла дождаться завершения записи в базу
     return new Promise(function(resolve, reject) {
         roomCode = generateRoomCode();
@@ -7315,12 +7438,14 @@ function addToMatchmakingQueue() {
 
         // Создаём комнату в базе
         database.ref("rooms/" + roomCode).set(initialState).then(function() {
+            if (!canUseFirebase()) throw new Error("firebase_auth_required");
             // После создания комнаты — записываем ссылку в профиль пользователя
             return database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
                 opponentName: "Поиск соперника...",
                 myColor: "light"
             });
         }).then(function() {
+            if (!canUseFirebase()) throw new Error("firebase_auth_required");
             // После создания комнаты — включаем presence (сердцебиение)
             setupPresence();
 
@@ -7328,6 +7453,7 @@ function addToMatchmakingQueue() {
             const myQueueRef = database.ref("matchmakingQueue/" + myTelegramId);
             return myQueueRef.set({ name: myTelegramName, timestamp: Date.now(), roomCode: roomCode });
         }).then(function() {
+            if (!canUseFirebase()) throw new Error("firebase_auth_required");
             // Устанавливаем onDisconnect для удаления из очереди при закрытии приложения
             database.ref("matchmakingQueue/" + myTelegramId).onDisconnect().remove();
             resolve(); // Готово! Сообщаем, что можно начинать слушать очередь
@@ -7339,6 +7465,7 @@ function addToMatchmakingQueue() {
 }
 
 function tryMatchOpponent(opponentId, opponentData) {
+    if (!canUseFirebase()) return;
     // Если мы уже нашли матч или нас уже нашли — выходим
     if (isMatchmakingResolved) return;
 
@@ -7364,6 +7491,7 @@ function tryMatchOpponent(opponentId, opponentData) {
         room.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
         return room;
     }).then(function(result) {
+        if (!canUseFirebase()) return;
         if (result.committed) {
             // Успех! Мы победили в гонке — мы JOINER (присоединившийся)
             isMatchmakingResolved = true;
@@ -7395,6 +7523,7 @@ function tryMatchOpponent(opponentId, opponentData) {
             
             // Отправляем сигнал создателю комнаты, чтобы он зашёл в игру
             database.ref("users/" + opponentId + "/activeMatch").set(roomCode).then(function() {
+                if (!canUseFirebase()) return;
                 showScreen(gameScreen);
                 startOnlineGame();
             });
@@ -7408,6 +7537,7 @@ function tryMatchOpponent(opponentId, opponentData) {
 }
 
 function cancelOnlineSearch() {
+    if (!canUseFirebase()) return;
     isMatchmakingResolved = true; // Останавливаем любые фоновые попытки матчмейкинга
     if (matchmakingQueueRef) { 
         matchmakingQueueRef.off("value"); 
@@ -8179,33 +8309,48 @@ function getAllLegalMovesForBot(state, color) {
 
 // ===== СТАРТ ПРИЛОЖЕНИЯ =====
 
+// РАЗДЕЛЁННЫЙ СТАРТ.
+//
+// startApp() — только интерфейс: он обязан работать всегда, в том числе
+// когда вход не удался. Язык и переводы инициализируются здесь же, как и
+// раньше: initDataUnsafe.language_code для UI допустим, прав он не даёт.
+//
+// startFirebaseFlows() — всё, что обращается к Firebase. Вызывается ТОЛЬКО
+// после подтверждённого входа.
 function startApp() {
-    const me = getMyTelegramUser();
-    myTelegramId = me.id;
-    myTelegramName = me.name;
-
-    initializeEconomy();
-
-    const greetingNameSpan = document.getElementById("user-greeting-name");
-    if (greetingNameSpan) {
-        let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName;
-        greetingNameSpan.textContent = displayName;
-    }
-
-    // Применяем переводы к интерфейсу при старте
     applyTranslationsToDOM();
+}
 
+function startFirebaseFlows(me) {
+    if (!me || typeof me.id !== "string" || !/^tg_\d+$/.test(me.id)) return false;
+    if (!auth.currentUser || auth.currentUser.uid !== me.id) return false;
+    if (localOnlyBotGame) { pendingFirebaseIdentity = me; firebaseAuthReady = false; return false; }
+    myTelegramId = me.id; myTelegramName = me.name; firebaseAuthReady = true; firebaseFlowsStarted = true; pendingFirebaseIdentity = null;
+    initializeEconomy();
+    const greetingNameSpan = document.getElementById("user-greeting-name");
+    if (greetingNameSpan) { let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName; greetingNameSpan.textContent = displayName; }
     const joinedViaLink = checkForInviteLink();
-    if (!joinedViaLink) {
-        loadActiveRooms();
-    }
+    if (!joinedViaLink) loadActiveRooms();
+    return true;
+}
+function queueOrStartFirebaseFlows(me) {
+    if (localOnlyBotGame) { pendingFirebaseIdentity = me; firebaseAuthReady = false; return false; }
+    return startFirebaseFlows(me);
+}
+function activatePendingFirebaseFlows() {
+    if (localOnlyBotGame || !pendingFirebaseIdentity) return false;
+    const me = pendingFirebaseIdentity;
+    if (!auth.currentUser || auth.currentUser.uid !== me.id) { pendingFirebaseIdentity = null; firebaseAuthReady = false; return false; }
+    return startFirebaseFlows(me);
 }
 
 // Общая функция: возврат в свою собственную активную партию — как игрок,
 // а не зритель. Используется и из списка "Кто играет?", и при повторном
 // открытии своей же ссылки-приглашения.
 function resumeOwnActiveRoom(code) {
+    if (!canUseFirebase()) return Promise.resolve(false);
     return database.ref("rooms/" + code).once("value").then(function (snapshot) {
+        if (!canUseFirebase()) return false;
         const room = snapshot.val();
 
         if (!room ||
@@ -8270,8 +8415,8 @@ document.addEventListener('DOMContentLoaded', function() {
             // потеря сети) по-прежнему обрабатывается через onDisconnect/presence.
             if (myPendingOnlineRoom) {
                 const roomToRemove = myPendingOnlineRoom;
-                database.ref("rooms/" + roomToRemove).remove();
-                database.ref("users/" + myTelegramId + "/rooms/" + roomToRemove).remove();
+                if (canUseFirebase()) database.ref("rooms/" + roomToRemove).remove();
+                if (canUseFirebase()) database.ref("users/" + myTelegramId + "/rooms/" + roomToRemove).remove();
                 if (activeMatchRef) { activeMatchRef.off(); activeMatchRef = null; }
                 myPendingOnlineRoom = null;
                 stopPresenceHeartbeat();
@@ -8594,6 +8739,13 @@ function renderLobbyListFromCache() {
 // ленивое удаление окончательно заброшенных active-комнат) — не вторая
 // параллельная система, тот же самый порог RECONNECT_GRACE_MS. ---
 function runLobbyStaleSweep() {
+    // При потере подтверждённой Firebase Auth sweep может продолжать жить по
+    // старому setInterval, но не имеет права делать ни одной серверной записи.
+    // Рендер локального кеша безопасен и остаётся доступен.
+    if (!canUseFirebase()) {
+        scheduleLobbyRender();
+        return;
+    }
     // CLOCK SAFETY: удалять чужие комнаты можно только при доказанно надёжном
     // времени и живой связи. Скрытие в рендере остаётся мягче — оно обратимо.
     const mayDelete = canDeleteStaleRoomFromLobby();
@@ -8738,6 +8890,9 @@ function stopGroupLobbyListening() {
 }
 
 function showGroupLobby() {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return;
     const groupLobbyScreen = document.getElementById("group-lobby-screen");
     const groupRoomsList = document.getElementById("group-rooms-list");
 
@@ -8815,12 +8970,16 @@ function showGroupLobby() {
 
 // Функция присоединения к открытой комнате
 function joinGroupRoom(code) {
+    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
+    // Локальная игра при этом продолжает работать.
+    if (!canUseFirebase()) return;
     roomCode = code;
     myColor = "dark";
     isOnlineGame = true;
     isSpectator = false;
 
     database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
+        if (!canUseFirebase()) return;
         const room = snapshot.val();
         if (!room || room.status !== "waiting") {
             showInfoModal(t("err_room_taken"), false);
@@ -8845,6 +9004,7 @@ function joinGroupRoom(code) {
             currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
             return currentRoom;
         }).then(function(result) {
+            if (!canUseFirebase()) return;
             if (!result.committed) {
                 showInfoModal("Комната уже занята, удалена или не существует.", false);
                 return;
@@ -8891,6 +9051,7 @@ function joinGroupRoom(code) {
 // Единственный официальный способ продолжить свою bot-игру теперь —
 // "Играть с ботом" -> "Продолжить" (owner-synced flow через botSessions).
 function watchGroupRoom(code) {
+    if (!requireFirebaseAuth()) return;
     // v184 BOTH-OFFLINE: смотреть мёртвую партию нельзя. Кеш лобби здесь
     // всегда заполнен — кнопка существует только на отрисованном списке.
     const cached = lobbyRoomsByCode ? lobbyRoomsByCode[code] : null;
@@ -8903,6 +9064,7 @@ function watchGroupRoom(code) {
 }
 
 function watchGroupRoomAsSpectator(code) {
+    if (!canUseFirebase()) return;
     // Если я сам ждал соперника через "Играть онлайн" и решил пойти
     // посмотреть чужую партию вместо этого — убираем свою старую заявку,
     // чтобы она не висела в списке как будто я всё ещё жду.
@@ -8962,7 +9124,7 @@ function watchGroupRoomAsSpectator(code) {
         const room = snapshot.val();
         if (!room || !room.pieces) {
             if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-            if (myCurrentSpectatorRef) { myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
+            if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
             showScreen(menuScreen);
             showInfoModal(t("err_game_closed"), false);
             return;
@@ -9006,11 +9168,97 @@ function watchGroupRoomAsSpectator(code) {
     });
 }
 
+// ===== ВХОД ЧЕРЕЗ TELEGRAM =====
+//
+// Подписанный initData уходит на Worker, тот проверяет подпись токеном бота
+// и выдаёт Firebase Custom Token с uid ровно tg_<telegram id>. Клиент не
+// придумывает личность и не берёт её из initDataUnsafe.
+const AUTH_WORKER_URL = "https://russkie-shashki-auth.iliushazb.workers.dev";
+
+async function authenticateTelegramUser() {
+    const tg = window.Telegram && window.Telegram.WebApp;
+    const initData = (tg && typeof tg.initData === "string") ? tg.initData : "";
+    if (!initData) throw new Error("telegram_init_data_missing");
+
+    // Сессия живёт только в памяти: auth_date фиксируется при запуске
+    // Mini App, поэтому переживать перезагрузку ей незачем.
+    await auth.setPersistence(firebase.auth.Auth.Persistence.NONE);
+
+    const response = await fetch(AUTH_WORKER_URL + "/auth/telegram", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ initData: initData })
+    });
+    if (!response.ok) throw new Error("telegram_auth_failed");
+
+    const payload = await response.json();
+    if (!payload || payload.ok !== true ||
+        typeof payload.customToken !== "string" ||
+        typeof payload.uid !== "string" || !/^tg_\d+$/.test(payload.uid)) {
+        throw new Error("telegram_auth_bad_response");
+    }
+
+    const credential = await auth.signInWithCustomToken(payload.customToken);
+    // Сверяем, что Firebase выдал ИМЕННО ту личность, которую назвал Worker.
+    if (!credential || !credential.user || credential.user.uid !== payload.uid) {
+        try { await auth.signOut(); } catch (e) {}
+        throw new Error("telegram_auth_uid_mismatch");
+    }
+
+    return {
+        id: credential.user.uid,
+        name: (typeof payload.name === "string" && payload.name) ? payload.name : "Игрок"
+    };
+}
+
+// ПЕРЕВООРУЖЕНИЕ onDisconnect ПРИ ОБНОВЛЕНИИ ТОКЕНА.
+//
+// Правила v12 требуют auth для записи присутствия, а onDisconnect
+// исполняется сервером ПОЗЖЕ, когда клиента уже нет. Токен живёт час;
+// после обновления прежняя серверная операция может оказаться привязана к
+// истёкшим правам. Перевооружаем её тем же путём, что уже отлажен в v184
+// для реконнекта — нового механизма не заводим.
+function armPresenceReauthWatcher() {
+    if (!auth || typeof auth.onIdTokenChanged !== "function") return;
+    auth.onIdTokenChanged(function (user) {
+        if (!user || !/^tg_\d+$/.test(user.uid) || (myTelegramId && user.uid !== myTelegramId)) {
+            firebaseAuthReady = false; pendingFirebaseIdentity = null;
+            stopPresenceHeartbeat(); stopOwnerPresenceHeartbeat(); stopOwnerBotMoveRetryTimer();
+            return;
+        }
+        if (localOnlyBotGame) { firebaseAuthReady = false; return; }
+        if (firebaseFlowsStarted && myTelegramId === user.uid) firebaseAuthReady = true;
+        if (!canUseFirebase() || !isOnlineGame || !roomCode || isSpectator) return;
+        if (typeof revivePresenceAfterReconnect === "function") revivePresenceAfterReconnect();
+    });
+}
+
+async function bootstrapApp() {
+    // Интерфейс поднимается ВСЕГДА: меню, язык, локальная партия с ботом.
+    startApp();
+
+    try {
+        const me = await authenticateTelegramUser();
+        armPresenceReauthWatcher();
+        queueOrStartFirebaseFlows(me);
+    } catch (error) {
+        console.error("Telegram auth failed:", error);
+        try { await auth.signOut(); } catch (e) {}
+        firebaseAuthReady = false;
+        pendingFirebaseIdentity = null;
+        // Fail closed: онлайн недоступен, локальная игра остаётся.
+        showInfoModal(t("err_auth_required"), false);
+    }
+}
+
 // Запуск приложения
 if (window.Telegram && window.Telegram.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
-    setTimeout(startApp, 100); // Даём 100мс на инициализацию данных
+    setTimeout(bootstrapApp, 100); // Даём 100мс на инициализацию данных
 } else {
+    // Вне Telegram подписанного initData нет, значит нет и входа.
+    // Интерфейс и партия с ботом работают, Firebase — нет.
     startApp();
+    showInfoModal(t("err_auth_required"), false);
 }

@@ -300,7 +300,8 @@ console.log('\n=== G. ПОВЕДЕНЧЕСКИЙ: currentState БЕЗ status н�
 
     eval(grab('leaveAbandonedRoomToMenu'));
     eval(grab('revivePresenceAfterReconnect'));
-    eval(grab('handleVisibilityChange'));
+    global.canUseFirebase = function () { return true; };
+eval(grab('handleVisibilityChange'));
 
     handleVisibilityChange();   // возврат на экран
 

@@ -27,6 +27,12 @@
 // 1, 2, 4, 5, 6 обязаны падать на v170 и проходить на исправленной версии.
 const { SRC, extractFunc } = require('./helpers/loader');
 
+
+// v193 auth harness: these legacy behavioural suites exercise already-authenticated flows.
+global.firebaseAuthReady = true;
+global.localOnlyBotGame = false;
+global.canUseFirebase = function () { return true; };
+global.requireFirebaseAuth = function () { return true; };
 let passed = 0, failed = 0;
 function check(n, c, d) { console.log((c ? '  ✅ ' : '  ❌ ') + n + (!c && d ? ' — ' + d : '')); c ? passed++ : failed++; }
 
