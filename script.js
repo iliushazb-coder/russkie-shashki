@@ -128,468 +128,6 @@ connectedRef.on("value", function(snap) {
 
 // ===== ЭКОНОМИКА =====
 
-function normalizeEconomy(current) {
-    const result = {};
-
-    if (current) {
-        for (const key in current) {
-            result[key] = current[key];
-        }
-    }
-
-    result.name = myTelegramName || result.name || "Игрок";
-
-    result.balance =
-        typeof result.balance === "number"
-            ? Math.max(0, Math.floor(result.balance))
-            : 0;
-
-    result.lifetimeEarned =
-        typeof result.lifetimeEarned === "number"
-            ? Math.max(0, Math.floor(result.lifetimeEarned))
-            : 0;
-
-    result.lifetimeSpent =
-        typeof result.lifetimeSpent === "number"
-            ? Math.max(0, Math.floor(result.lifetimeSpent))
-            : 0;
-
-    result.lastDailyClaim =
-        typeof result.lastDailyClaim === "string"
-            ? result.lastDailyClaim
-            : "";
-
-    result.welcomeClaimed =
-        result.welcomeClaimed === true;
-
-    if (
-        !result.rewardedMatches ||
-        typeof result.rewardedMatches !== "object"
-    ) {
-        result.rewardedMatches = {};
-    }
-
-    return result;
-}
-
-
-// Получаем время максимально близкое к серверному времени Firebase.
-// .info/serverTimeOffset показывает разницу между временем Firebase
-// и локальными часами устройства.
-function getFirebaseServerNow() {
-    return database.ref(".info/serverTimeOffset")
-        .once("value")
-        .then(function (snapshot) {
-            const offset = Number(snapshot.val()) || 0;
-            return Date.now() + offset;
-        });
-}
-
-
-// Единый серверный день для ежедневного бонуса.
-// Используем UTC, чтобы правило было одинаковым для всех игроков.
-function getFirebaseServerDayKey() {
-    return getFirebaseServerNow().then(function (serverNow) {
-        return new Date(serverNow).toISOString().slice(0, 10);
-    });
-}
-
-
-// Пока визуал монет ещё не добавлен.
-// В Части 2 эта функция будет обновлять видимый счётчик.
-let coinBalanceAnimFrame = null;
-let coinBalanceDisplayedValue = 0; // То, что реально видно на экране прямо сейчас
-
-function updateCoinBalanceUI(balance) {
-    const newBalance = Math.max(0, Number(balance) || 0);
-    const el = document.getElementById("coin-balance-value");
-
-    currentCoinBalance = newBalance; // Канонический баланс — обновляем сразу
-
-    // Мои собственные монеты в statsCache (показ рядом с именем) не должны
-    // устаревать после rewardedMatches — обновляем в том же месте, без лишних чтений.
-    if (myTelegramId && statsCache[myTelegramId]) {
-        statsCache[myTelegramId].coins = newBalance;
-    }
-
-    if (!el) {
-        coinBalanceDisplayedValue = newBalance;
-        return;
-    }
-
-    // Отменяем предыдущую анимацию, если новое значение пришло раньше её окончания —
-    // но стартуем от того, что реально видно на экране в этот момент, а не от старой цели.
-    if (coinBalanceAnimFrame) {
-        cancelAnimationFrame(coinBalanceAnimFrame);
-        coinBalanceAnimFrame = null;
-    }
-
-    const startValue = coinBalanceDisplayedValue;
-    const endValue = newBalance;
-
-    const duration = 600;
-    const startTime = performance.now();
-
-    function step(now) {
-        const progress = Math.min(1, (now - startTime) / duration);
-        const eased = 1 - Math.pow(1 - progress, 3);
-        const displayValue = Math.round(startValue + (endValue - startValue) * eased);
-        coinBalanceDisplayedValue = displayValue;
-        el.textContent = displayValue.toLocaleString();
-
-        if (progress < 1) {
-            coinBalanceAnimFrame = requestAnimationFrame(step);
-        } else {
-            coinBalanceDisplayedValue = endValue;
-            coinBalanceAnimFrame = null;
-        }
-    }
-
-    coinBalanceAnimFrame = requestAnimationFrame(step);
-}
-
-
-// Простая очередь всплывающих окошек монет, чтобы, например,
-// стартовый и ежедневный бонусы при первом входе не наложились друг на друга.
-let coinPopupQueue = [];
-let coinPopupShowing = false;
-
-function showCoinPopup(amount) {
-    if (!amount) return;
-    coinPopupQueue.push(amount);
-    processCoinPopupQueue();
-}
-
-function processCoinPopupQueue() {
-    if (coinPopupShowing) return;
-    if (coinPopupQueue.length === 0) return;
-
-    const popup = document.getElementById("coin-popup");
-    const text = document.getElementById("coin-popup-text");
-    if (!popup || !text) {
-        coinPopupQueue = [];
-        return;
-    }
-
-    const amount = coinPopupQueue.shift();
-    coinPopupShowing = true;
-
-    const sign = amount > 0 ? "+" : "";
-    text.textContent = sign + amount + " 🪙";
-    popup.classList.remove("hidden");
-    popup.classList.add("coin-popup-show");
-
-    setTimeout(function () {
-        popup.classList.remove("coin-popup-show"); // Запускаем fade-out
-
-        setTimeout(function () {
-            popup.classList.add("hidden"); // Ставим hidden только после окончания transition
-            coinPopupShowing = false;
-            processCoinPopupQueue();
-        }, 250);
-    }, 1600);
-}
-
-
-// Стартовый подарок.
-// Firebase transaction гарантирует, что +500 выдаётся только один раз.
-function claimWelcomeCoins() {
-    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
-    // Локальная игра при этом продолжает работать.
-    if (!canUseFirebase()) return Promise.resolve();
-    if (!myTelegramId) return Promise.resolve(false);
-
-    const economyRef =
-        database.ref("economy/" + myTelegramId);
-
-    return economyRef.transaction(function (current) {
-        const economy = normalizeEconomy(current);
-
-        if (economy.welcomeClaimed) {
-            return;
-        }
-
-        economy.welcomeClaimed = true;
-        economy.balance += COIN_REWARDS.welcome;
-        economy.lifetimeEarned += COIN_REWARDS.welcome;
-        economy.name = myTelegramName;
-
-        return economy;
-    }).then(function (result) {
-        if (result.snapshot) {
-            const data = result.snapshot.val();
-
-            if (data) {
-                updateCoinBalanceUI(data.balance);
-            }
-        }
-
-        if (result.committed) {
-            showCoinPopup(COIN_REWARDS.welcome);
-        }
-
-        return result.committed;
-    }).catch(function (error) {
-        console.error("Welcome coins failed:", error);
-        return false;
-    });
-}
-
-
-// Ежедневный бонус.
-// Проверка даты и изменение баланса находятся
-// в одной transaction().
-function claimDailyCoins() {
-    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
-    // Локальная игра при этом продолжает работать.
-    if (!canUseFirebase()) return Promise.resolve();
-    if (!myTelegramId) return Promise.resolve(false);
-
-    return getFirebaseServerDayKey().then(function (todayKey) {
-        const economyRef =
-            database.ref("economy/" + myTelegramId);
-
-        return economyRef.transaction(function (current) {
-            const economy = normalizeEconomy(current);
-
-            if (economy.lastDailyClaim === todayKey) {
-                return;
-            }
-
-            economy.lastDailyClaim = todayKey;
-            economy.balance += COIN_REWARDS.daily;
-            economy.lifetimeEarned += COIN_REWARDS.daily;
-            economy.name = myTelegramName;
-
-            return economy;
-        }).then(function (result) {
-            if (result.snapshot) {
-                const data = result.snapshot.val();
-
-                if (data) {
-                    updateCoinBalanceUI(data.balance);
-                }
-            }
-
-            if (result.committed) {
-                showCoinPopup(COIN_REWARDS.daily);
-            }
-
-            return result.committed;
-        });
-    }).catch(function (error) {
-        console.error("Daily coins failed:", error);
-        return false;
-    });
-}
-
-
-// Загружаем экономику при запуске.
-// Сначала стартовый подарок, затем ежедневный,
-// чтобы две transaction не выполнялись одновременно.
-function initializeEconomy() {
-    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
-    // Локальная игра при этом продолжает работать.
-    if (!canUseFirebase()) return Promise.resolve();
-    if (!myTelegramId) return;
-
-    claimWelcomeCoins()
-        .then(function () {
-            return claimDailyCoins();
-        })
-        .then(function () {
-            return database.ref("economy/" + myTelegramId)
-                .once("value");
-        })
-        .then(function (snapshot) {
-            const economy = snapshot.val();
-
-            if (economy) {
-                updateCoinBalanceUI(economy.balance);
-            }
-        })
-        .catch(function (error) {
-            console.error("Economy initialization failed:", error);
-        });
-}
-
-
-// Уникальный идентификатор именно ПАРТИИ, а не комнаты.
-function getCurrentRewardMatchId() {
-    if (isBotGame) {
-        return currentBotMatchId;
-    }
-
-    if (
-        isOnlineGame &&
-        roomCode &&
-        currentState
-    ) {
-        // ЭТАП 2. Для РЕЙТИНГОВОЙ партии используем тот же стабильный
-        // идентификатор, что и Elo: elo_<roomCode>_<createdAt>_<matchNumber>.
-        // Он надёжнее старого, потому что содержит createdAt комнаты — повторно
-        // выданный через месяцы тот же roomCode не столкнётся со старой
-        // выплатой. getEloMatchContext() здесь только ЧИТАЕТСЯ, Elo-код не
-        // меняется, и ошибка экономики на него никак не влияет.
-        const eloCtx = getEloMatchContext();
-        if (eloCtx) return eloCtx.matchId;
-
-        // LEGACY-комната без Elo-контекста (партия началась до перехода либо
-        // соперник на старой версии) — прежний идентификатор. Пространства
-        // ключей не пересекаются ("online_..." против "elo_..."), поэтому
-        // партия в переходном окне не может быть оплачена дважды.
-        const matchNumber =
-            typeof currentState.matchNumber === "number"
-                ? currentState.matchNumber
-                : 0;
-
-        return "online_" + roomCode + "_" + matchNumber;
-    }
-
-    return null;
-}
-
-
-// Атомарная выплата результата одной партии.
-// rewardedMatches и баланс меняются В ОДНОЙ transaction().
-function awardCoinsForMatch(matchId, amount) {
-    // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
-    // Локальная игра при этом продолжает работать.
-    if (!canUseFirebase()) return Promise.resolve();
-    if (!myTelegramId || !matchId) {
-        return Promise.resolve({
-            rewarded: false,
-            balance: currentCoinBalance
-        });
-    }
-
-    const economyRef =
-        database.ref("economy/" + myTelegramId);
-
-    return economyRef.transaction(function (current) {
-        const economy = normalizeEconomy(current);
-
-        economy.rewardedMatches =
-            economy.rewardedMatches || {};
-
-        // Эта конкретная партия уже была оплачена.
-        if (economy.rewardedMatches[matchId] === true) {
-            return;
-        }
-
-        economy.rewardedMatches[matchId] = true;
-        economy.name = myTelegramName;
-
-        const oldBalance = economy.balance || 0;
-
-        // Баланс никогда не опускается ниже нуля.
-        economy.balance =
-            Math.max(0, oldBalance + amount);
-
-        // lifetimeEarned увеличивается только при получении монет.
-        // Поражения его не уменьшают.
-        if (amount > 0) {
-            economy.lifetimeEarned =
-                (economy.lifetimeEarned || 0) + amount;
-        }
-
-        return economy;
-    }).then(function (result) {
-        const economy =
-            result.snapshot
-                ? result.snapshot.val()
-                : null;
-
-        if (economy) {
-            updateCoinBalanceUI(economy.balance);
-        }
-
-        return {
-            rewarded: result.committed,
-            balance: economy
-                ? economy.balance
-                : currentCoinBalance
-        };
-    });
-}
-
-
-// Определяем награду по результату текущей партии.
-function getCurrentCoinReward() {
-    if (!currentState || !currentState.winner) {
-        return null;
-    }
-
-    if (isBotGame) {
-        // ЭТАП 2: игры против бота полностью вне экономики — ноль при любом
-        // результате и любой сложности. Возвращаем именно null (а не 0), чтобы
-        // recordCoinResultOnce() вообще не создавал запись награды: "reward ===
-        // null" уже проверяется там как условие выхода, поэтому в economy не
-        // появится ни лишнего rewardedMatches-ключа, ни лишнего запроса.
-        // Это же автоматически покрывает реванш с ботом.
-        return null;
-    }
-
-    if (isOnlineGame) {
-        // Тот же UID-принцип, что и у статистики: иначе при рассинхронизации
-        // цвета проигравший получал бы награду победителя.
-        const myResult = resolveMyOnlineResult(currentState);
-        if (myResult === null) return null; // я не участник — награды нет
-        if (myResult === "draw") return COIN_REWARDS.onlineDraw;
-        return (myResult === "win")
-            ? COIN_REWARDS.onlineWin
-            : COIN_REWARDS.onlineLoss;
-    }
-
-    return null;
-}
-
-
-// Вызывается после окончания партии.
-// Локальный флаг убирает лишние запросы,
-// Firebase rewardedMatches даёт настоящую защиту.
-function recordCoinResultOnce() {
-    if (isSpectator) return;
-    if (!currentState || !currentState.winner) return;
-    if (!myTelegramId) return;
-
-    // В онлайн-игре не начисляем монеты по локальному
-    // оптимистичному состоянию. Ждём подтверждение Firebase.
-    if (isOnlineGame && isLocalStateOptimistic) return;
-
-    const matchId = getCurrentRewardMatchId();
-    const reward = getCurrentCoinReward();
-
-    if (!matchId || reward === null) return;
-
-    if (coinRewardAttemptForMatch === matchId) {
-        return;
-    }
-
-    coinRewardAttemptForMatch = matchId;
-
-    awardCoinsForMatch(matchId, reward)
-        .then(function (result) {
-            if (result.rewarded) {
-                showCoinPopup(reward);
-
-                console.log(
-                    "Coins rewarded:",
-                    reward,
-                    "match:",
-                    matchId,
-                    "balance:",
-                    result.balance
-                );
-            }
-        })
-        .catch(function (error) {
-            // При настоящей сетевой ошибке разрешаем повторить
-            // запрос в этой же открытой сессии.
-            coinRewardAttemptForMatch = null;
-            console.error("Coin reward failed:", error);
-        });
-}
 
 
 // ===== ЗВУКИ =====
@@ -689,8 +227,17 @@ function playSoundForMoveType(type, wasKing) {
 //
 // Локальная часть игры при этом работает: доска, ходы, бот. Не сохраняется
 // только то, что живёт в Firebase — сессия партии с ботом, статистика,
-// монеты, лобби и приглашения.
+// лобби и приглашения.
 let firebaseAuthReady = false;
+// Фаза входа. Двоичного флага не хватало: пока вход ещё шёл,
+// requireFirebaseAuth() показывал терминальную ошибку «закройте и снова
+// откройте игру», хотя закрывать ничего было не нужно. Игрок нажимал
+// кнопку второй раз — и всё работало.
+//   "pending" — вход выполняется, действие надо ДОЖДАТЬСЯ
+//   "ready"   — вход состоялся
+//   "failed"  — вход действительно не удался, ошибка честная
+let authPhase = "pending";
+let authPromise = null;
 let localOnlyBotGame = false;
 let pendingFirebaseIdentity = null;
 let firebaseFlowsStarted = false;
@@ -702,8 +249,25 @@ function canUseFirebase() {
 }
 
 // Единая точка отказа для онлайновых разделов меню.
+//
+// Синхронная проверка осталась для мест, где ждать нельзя. Она НЕ
+// показывает ошибку, если вход ещё идёт, — иначе получалось ложное
+// сообщение при быстром нажатии сразу после запуска.
 function requireFirebaseAuth() {
     if (canUseFirebase()) return true;
+    if (authPhase !== "pending") showInfoModal(t("err_auth_required"), false);
+    return false;
+}
+
+// Асинхронные ворота для кнопок меню: если вход ещё идёт, дожидаемся его
+// и продолжаем действие сами. Никаких таймеров и никакого ослабления
+// проверки: canUseFirebase() остаётся единственным решающим условием.
+async function requireFirebaseAuthAsync() {
+    if (canUseFirebase()) return true;
+    if (authPhase === "pending" && authPromise) {
+        try { await authPromise; } catch (e) {}
+        if (canUseFirebase()) return true;
+    }
     showInfoModal(t("err_auth_required"), false);
     return false;
 }
@@ -796,6 +360,13 @@ const translations = {
         err_opponent_offline_2: " больше не находится в игре.",
         err_join_failed: "Не удалось подключиться к игре. Попробуйте ещё раз.",
         err_auth_required: "Онлайн доступен только после входа через Telegram. Закройте и снова откройте игру.",
+        rating_unrated: "Без рейтинга",
+        rating_confirming: "Подтверждаем рейтинг…",
+        rating_change_unconfirmed: "Изменение рейтинга не подтверждено",
+        rating_check_in_stats: "Проверьте актуальный рейтинг в статистике",
+        stats_your_rank: "Ваше место",
+        stats_rank_of: "из",
+        rating_settlement_failed: "Реванш пока недоступен: результат рейтинга не подтверждён.",
         err_room_taken: "Комната уже занята или не существует.",
         err_search_failed: "Не удалось начать поиск. Проверьте интернет-соединение.",
         err_game_closed: "Игра была завершена или закрыта.",
@@ -822,7 +393,6 @@ const translations = {
         stats_label_losses: "Поражений",
         stats_label_games: "Игр",
         stats_label_bylevel: "По уровням сложности",
-        stats_top_coins: "🪙 Топ по заработанным монетам",
         modal_offline_opp: "Соперник офлайн",
         modal_bot_difficulty: "Выберите сложность",
         modal_continue_or_new: "У вас уже есть партия с ботом",
@@ -924,6 +494,13 @@ const translations = {
         err_opponent_offline_2: " is no longer in the game.",
         err_join_failed: "Failed to join the game. Try again.",
         err_auth_required: "Online is available only after signing in via Telegram. Close and reopen the game.",
+        rating_unrated: "Unrated",
+        rating_confirming: "Confirming rating…",
+        rating_change_unconfirmed: "Rating change not confirmed",
+        rating_check_in_stats: "Check your current rating in statistics",
+        stats_your_rank: "Your rank",
+        stats_rank_of: "of",
+        rating_settlement_failed: "Rematch is temporarily unavailable: the rating result was not confirmed.",
         err_room_taken: "Room is already taken or doesn't exist.",
         err_search_failed: "Failed to start search. Check your internet connection.",
         err_game_closed: "The game was ended or closed.",
@@ -950,7 +527,6 @@ const translations = {
         stats_label_losses: "Losses",
         stats_label_games: "Games",
         stats_label_bylevel: "By difficulty",
-        stats_top_coins: "🪙 Top by coins earned",
         modal_offline_opp: "Opponent offline",
         modal_bot_difficulty: "Choose difficulty",
         modal_continue_or_new: "You already have a game with the bot",
@@ -1052,6 +628,13 @@ const translations = {
         err_opponent_offline_2: " non è più in gioco.",
         err_join_failed: "Impossibile unirsi alla partita. Riprova.",
         err_auth_required: "L'online è disponibile solo dopo l'accesso tramite Telegram. Chiudi e riapri il gioco.",
+        rating_unrated: "Senza punteggio",
+        rating_confirming: "Conferma del punteggio…",
+        rating_change_unconfirmed: "Variazione del punteggio non confermata",
+        rating_check_in_stats: "Controlla il punteggio attuale nelle statistiche",
+        stats_your_rank: "La tua posizione",
+        stats_rank_of: "su",
+        rating_settlement_failed: "La rivincita non è disponibile: il risultato del punteggio non è stato confermato.",
         err_room_taken: "La stanza è già occupata o non esiste.",
         err_search_failed: "Impossibile avviare la ricerca. Controlla la connessione.",
         err_game_closed: "La partita è stata terminata o chiusa.",
@@ -1078,7 +661,6 @@ const translations = {
         stats_label_losses: "Sconfitte",
         stats_label_games: "Partite",
         stats_label_bylevel: "Per difficoltà",
-        stats_top_coins: "🪙 Migliori per monete guadagnate",
         modal_offline_opp: "Avversario offline",
         modal_bot_difficulty: "Scegli la difficoltà",
         modal_continue_or_new: "Hai già una partita con il bot",
@@ -1167,6 +749,9 @@ const btnBackBotYes = document.getElementById("btn-back-bot-yes");
 const btnBackBotNo = document.getElementById("btn-back-bot-no");
 const endGameModal = document.getElementById("end-game-modal");
 const endGameSubtext = document.getElementById("end-game-subtext");
+const endGameRating = document.getElementById("end-game-rating");
+const statsYourRank = document.getElementById("stats-your-rank");
+const rematchWaitNote = document.getElementById("rematch-wait-note");
 const endGameText = document.getElementById("end-game-text");
 const btnNewGame = document.getElementById("btn-new-game");
 const btnCloseGame = document.getElementById("btn-close-game");
@@ -1226,34 +811,7 @@ const btnReactAngry = document.getElementById("btn-react-angry");
 const emojiBurstContainer = document.getElementById("emoji-burst-container");
 let lastReactionTs = 0;
 
-// ===== МОНЕТЫ / ЭКОНОМИКА =====
-
-const COIN_REWARDS = {
-    welcome: 500,
-    daily: 25,
-    // ЭТАП 2. Монеты и рейтинг — ДВЕ РАЗНЫЕ системы: ⭐ Elo это сила игрока,
-    // 🪙 монеты это внутренняя валюта, в сортировке рейтинга не участвуют.
-    // За поражение монеты больше НЕ отнимаются: штраф провоцировал бросать
-    // проигранную партию, а это вредило и сопернику, и presence-логике.
-    onlineWin: 20,
-    onlineDraw: 10,
-    onlineLoss: 5,
-    // ЭТАП 2. Партии против бота полностью выведены из экономики: ноль при
-    // любом результате и любой сложности. Константы оставлены (а не удалены),
-    // чтобы не трогать ссылки на них; фактически bot-ветка getCurrentCoinReward
-    // возвращает null и запись в economy не создаётся вообще.
-    // Уже начисленные за старые игры с ботом монеты НЕ пересчитываются.
-    botEasyWin: 0,
-    botEasyLoss: 0,
-    botMediumWin: 0,
-    botMediumLoss: 0,
-    botHardWin: 0,
-    botHardLoss: 0
-};
-
-let currentCoinBalance = 0;
-
-// ===== ONLINE ELO (Этап 1) =====
+// ===== ONLINE ELO =====
 // Рейтинг существует ТОЛЬКО для online-партий человек-против-человека.
 // Бот в Elo не участвует вообще (см. getEloMatchContext).
 // Старый игрок без поля rating считается имеющим ELO_START_RATING —
@@ -1276,8 +834,6 @@ let currentBotMatchId = null;
 // Локальная защита от повторного запроса выплаты
 // для одной и той же партии в текущей открытой сессии.
 // Настоящая защита от двойной выплаты будет находиться
-// в Firebase: economy/<id>/rewardedMatches.
-let coinRewardAttemptForMatch = null;
 
 let roomCode = null;
 let myPendingFriendRoomCode = null; // Отдельная, "неприкосновенная" переменная именно для ссылки-приглашения — защита от того, что общая roomCode может смениться где-то в фоне между созданием комнаты и нажатием "Отправить другу"
@@ -2139,32 +1695,127 @@ function renderCapturedIcons(container, count, iconClass) {
     }
 }
 
-let statsCache = {};
+// ===== СОСТОЯНИЕ РЕГИСТРАЦИИ РЕЙТИНГОВОЙ ПАРТИИ =====
+//
+// Room listener срабатывает на каждое изменение присутствия. Без явного
+// состояния клиент слал бы joinRatedMatch на каждый снимок.
+//
+// Ключ — ПОКОЛЕНИЕ комнаты: roomCode + createdAt + matchNumber. Смена
+// matchNumber при реванше сама обесценивает старое состояние, поэтому «Без рейтинга» от
+// прошлой партии не протекает в следующую и сбрасывать вручную нечего.
+//
+//   idle           регистрация не начиналась
+//   inFlight       запрос в пути, повторно не слать
+//   retryWait      временный сбой, ждём паузу
+//   success        матч зарегистрирован
+//   terminalFailed отказ по существу, повторять нечего
+// Пауза между попытками растёт и упирается в потолок. Числа попыток НЕТ:
+// пока то же поколение комнаты активно, регистрацию имеет смысл повторять.
+// Ограничиваем ЧАСТОТУ, а не количество — иначе четыре сетевых сбоя
+// подряд навсегда лишали бы живую партию рейтинга.
+const RATED_JOIN_BACKOFF_MS = [1000, 2000, 5000, 10000, 20000];
+const RATED_JOIN_BACKOFF_MAX_MS = 30000;
 
-function fetchAndCacheStatsIfNeeded(id) {
-    if (!id || statsCache[id] !== undefined) return;
-    statsCache[id] = null;
-    database.ref("stats/" + id).once("value").then(function (snapshot) {
-        const val = snapshot.val();
-        statsCache[id] = { wins: (val && val.wins) || 0, losses: (val && val.losses) || 0, coins: null };
-        renderPlayerPanels();
+// Отказы, после которых повторять бессмысленно: партия уже не подходит
+// для регистрации. Всё остальное — сеть, 5xx, таймаут — временное.
+// Сверено с кодами, которые реально бросает Worker v3. Классификация
+// строго по коду ошибки, а НЕ по HTTP-статусу: один и тот же 409 бывает
+// и смысловым отказом, и временной гонкой.
+//
+// Смысловые: партия для регистрации не подходит, повтор ничего не изменит.
+const RATED_JOIN_TERMINAL_ERRORS = [
+    "room_not_active", "stale_generation", "match_number_jump",
+    "not_first_match", "not_a_player", "room_not_ready", "room_not_found",
+    "card_mismatch", "card_conflict", "not_a_participant", "match_not_rated"
+];
 
-        // Баланс монет запрашиваем отдельно, из другого узла — не блокирует
-        // отображение wins/losses, если экономика ещё не подтянулась.
-        database.ref("economy/" + id + "/balance").once("value").then(function (coinSnap) {
-            if (statsCache[id]) {
-                statsCache[id].coins = coinSnap.val();
-                renderPlayerPanels();
-            }
-        }).catch(function () {});
-    }).catch(function () {
-        // При ошибке сети не обнуляем кэш, оставляем undefined для повторной попытки
-        statsCache[id] = undefined;
-        // Пробуем запросить ещё раз через 5 секунд
-        setTimeout(function() {
-            fetchAndCacheStatsIfNeeded(id);
-        }, 5000);
-    });
+// Временные: гонка или сбой инфраструктуры, повтор оправдан.
+// registration_conflict и stats_init_conflict — именно гонки: другой
+// вызов опередил, следующая попытка увидит согласованное состояние.
+const RATED_JOIN_TRANSIENT_ERRORS = [
+    "registration_conflict", "stats_init_conflict",
+    "db_read_failed", "db_write_failed",
+    "server_identity_failed", "server_signer_missing"
+];
+
+let ratedJoinState = {};   // "<roomCode>_<createdAt>_<matchNumber>" -> { phase, attempts }
+
+function ratedGenerationKey(code, matchNumber, createdAt) {
+    const n = (typeof matchNumber === "number") ? matchNumber : 0;
+    const stamp = (typeof createdAt === "number" && isFinite(createdAt)) ? createdAt : 0;
+    // roomCode в норме уникален, но после удаления код теоретически может
+    // выпасть снова в той же WebView-сессии. createdAt уже является частью
+    // канонического matchId, поэтому используем его и для client state key:
+    // локальный success/failed от старой комнаты не должен протечь в новую.
+    return code + "_" + stamp + "_" + n;
+}
+
+function expectedRatedMatchIdForState(state, code) {
+    if (!state || !code || typeof state.createdAt !== "number") return null;
+    return buildEloMatchId(code, state.createdAt, state.matchNumber);
+}
+
+// Серверная регистрация поколения считается видимой только когда в комнате
+// одновременно есть канонический pointer ЭТОГО matchNumber и полный snapshot.
+// Это позволяет восстановить локальный join-state после reload/второго устройства
+// и не принять stale ratedMatchId прошлого реванша за текущий.
+function registeredMatchIdForState(state, code) {
+    if (!state || !code) return null;
+    const rs = state.ratingsAtStart;
+    if (!rs || typeof rs.light !== "number" || typeof rs.dark !== "number") return null;
+    const expected = expectedRatedMatchIdForState(state, code);
+    if (!expected || state.ratedMatchId !== expected) return null;
+    return expected;
+}
+
+function currentRatedGenerationKey() {
+    if (!roomCode || !currentState) return null;
+    return ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+}
+
+function getRatedJoinPhase(key) {
+    if (!key) return "idle";
+    const st = ratedJoinState[key];
+    return st ? st.phase : "idle";
+}
+
+
+
+// ===== СЕГМЕНТ РЕЙТИНГА =====
+//
+// Отдельная функция, а НЕ часть statusForColor. Причина: statusForColor
+// имеет семь возвратов, и в трёх из них прежний префикс терялся — панель
+// схлопывалась в пустую строку. Отдельный сегмент исчезнуть не может: он
+// вычисляется один раз и не зависит от того, сколько веток будет
+// у статуса дальше.
+//
+// Приоритет строго такой:
+//   1. канонический ratedMatchId ЭТОГО поколения + полный snapshot -> ⭐<число>
+//   2. регистрация окончательно failed                              -> ⭐ Без рейтинга
+//   3. иначе                                                        -> ⭐…
+//
+// Bare ratingsAtStart недостаточен: cached v193 тоже умеет писать snapshot.
+// Если Worker опубликовал канонический pointer позже локального failed-флага,
+// pointer сильнее и рейтинг снова показывается корректно.
+function ratingSegmentForColor(color) {
+    if (!isOnlineGame || !currentState) return "";
+
+    // Bare ratingsAtStart недостаточен: cached v193 тоже умеет писать этот
+    // snapshot сам. Показываем стартовый Elo как рейтинг ЭТОЙ rated-партии
+    // только после канонического server pointer текущего поколения. Иначе
+    // legacy/частичный snapshot мог бы замаскировать terminalFailed и создать
+    // впечатление, что нерейтинговая партия всё же зарегистрирована.
+    const registered = registeredMatchIdForState(currentState, roomCode);
+    if (registered) {
+        const rs = currentState.ratingsAtStart;
+        const value = rs && typeof rs[color] === "number" ? rs[color] : null;
+        if (value !== null) return "⭐" + value;
+    }
+
+    if (getRatedJoinPhase(currentRatedGenerationKey()) === "terminalFailed") {
+        return "⭐ " + t("rating_unrated");
+    }
+    return "⭐…";
 }
 
 function statusForColor(color) {
@@ -2173,11 +1824,10 @@ function statusForColor(color) {
         return { text: "", cls: "" };
     }
 
-    const playerId = currentState.players && currentState.players[color] && currentState.players[color].id;
-    if (playerId) fetchAndCacheStatsIfNeeded(playerId);
-    const stats = playerId ? statsCache[playerId] : null;
-    const coinsPart = (stats && typeof stats.coins === "number") ? (" · 🪙" + stats.coins) : "";
-    const ratingPrefix = stats ? ("🏆" + stats.wins + " ❌" + stats.losses + coinsPart + " · ") : "";
+    // Победы и поражения из панели убраны: они остались в статистике.
+    // Рейтинг рисует
+    // отдельный сегмент, поэтому здесь префикса больше нет вовсе.
+    const ratingPrefix = "";
 
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
@@ -2286,8 +1936,17 @@ function renderPlayerPanels() {
     const topColor = flipped ? "light" : "dark";
     const bottomColor = flipped ? "dark" : "light";
 
-    playerTopName.textContent = (topColor === "light" ? "⚪ " : "⚫ ") + (topColor === "light" ? lightName : darkName);
-    playerBottomName.textContent = (bottomColor === "light" ? "⚪ " : "⚫ ") + (bottomColor === "light" ? lightName : darkName);
+    // Имя и рейтинг: «⚪ Татьяна · ⭐1108». Сегмент рейтинга добавляется
+    // здесь, а не в статусе, поэтому он не исчезает ни в одной ветке
+    // статуса присутствия.
+    const topRating = ratingSegmentForColor(topColor);
+    const bottomRating = ratingSegmentForColor(bottomColor);
+    playerTopName.textContent = (topColor === "light" ? "⚪ " : "⚫ ")
+        + (topColor === "light" ? lightName : darkName)
+        + (topRating ? " · " + topRating : "");
+    playerBottomName.textContent = (bottomColor === "light" ? "⚪ " : "⚫ ")
+        + (bottomColor === "light" ? lightName : darkName)
+        + (bottomRating ? " · " + bottomRating : "");
 
     if (topColor === "light") {
         renderCapturedIcons(playerTopCaptured, currentState.capturedDark, "dark-icon");
@@ -2349,8 +2008,13 @@ function checkOpponentAbsence() {
     if (!canTrustAbsenceForCleanup()) return;
 
     if (currentState.winner && currentState.rematchProposal) {
-        // Соперник пропал во время ожидания ответа на реванш. Партия УЖЕ
-        // закончена, второго результата тут быть не может — прежнее поведение.
+        // Соперник пропал во время ожидания ответа на реванш. Но finished-room
+        // всё ещё является единственным authoritative outcome для Worker.
+        // Не удаляем её, пока rated settlement не закреплён.
+        if (!isFinishedGenerationSafeToDestroy()) {
+            requestSettlement();
+            return;
+        }
         opponentAbsenceHandled = true;
         showInfoModal(t("rematch_no_response"), false);
         showScreen(menuScreen);
@@ -2360,7 +2024,7 @@ function checkOpponentAbsence() {
     }
 
     // v180: ТЕХНИЧЕСКОЕ ПОРАЖЕНИЕ вместо простого удаления комнаты. Раньше
-    // партия просто исчезала — без winner, без Elo, без статистики и монет
+    // партия просто исчезала — без winner, без Elo и без статистики
     // для обоих. Теперь подтверждённое отсутствие длиннее минуты завершает
     // партию как обычная победа и проходит через существующий pipeline.
     //
@@ -2418,12 +2082,12 @@ let technicalResultInFlight = false;
 //
 // Одной операцией комната получает привычные winner/winReason/status, поэтому
 // весь существующий pipeline (renderEndGameModal, recordGameResult,
-// recordEloMatchResult, recordCoinResultOnce, resolveMyOnlineResult, UID-
-// атрибуция, eloMatches, rewardedMatches, статистика, монеты, лобби, реванш,
+// расчёт партии на сервере, resolveMyOnlineResult, UID-
+// атрибуция, серверный settlement, статистика, лобби, реванш,
 // зрители) срабатывает сам. Второго пути результата не создаётся.
 //
 // Комната СОЗНАТЕЛЬНО не удаляется: она нужна, чтобы записались Elo,
-// статистика и монеты, и чтобы вернувшийся проигравший увидел результат.
+// статистика, и чтобы вернувшийся проигравший увидел результат.
 //
 // Возвращает true, только если попытка действительно отправлена. Все проверки
 // ниже — fail-fast: окончательный арбитраж делает Firebase .validate по
@@ -2553,6 +2217,8 @@ function cleanupAbandonedRoom() {
     }
     database.ref("rooms/" + codeToClean).remove();
     detachMyPresence();
+    isOnlineGame = false;
+    roomCode = null;
 }
 
 // ===== СИСТЕМА ПРИСУТСТВИЯ (ONLINE / OFFLINE) =====
@@ -3441,7 +3107,31 @@ function renderEndGameModal() {
                     (currentState.winReason === TECHNICAL_WIN_REASON) ? t("win_reason_disconnect") : "";
             }
         }
-        
+
+        // Изменение рейтинга. Показывается ТОЛЬКО когда сервер подтвердил,
+        // что начисление действительно применено. Иначе честно сообщаем,
+        // что подтверждения нет, и не выдумываем число.
+        if (endGameRating) {
+            // Рейтинг относится только к моей online-партии. Зритель или
+            // следующая bot-партия не должны унаследовать строку прошлого матча.
+            if (!isOnlineGame || isBotGame || isSpectator) {
+                endGameRating.textContent = "";
+            } else {
+                const d = lastSettlementDisplay;
+                if (d && d.confirmed) {
+                    const sign = d.delta > 0 ? "+" : "";
+                    endGameRating.textContent =
+                        "⭐" + d.before + " → " + d.after + "  (" + sign + d.delta + ")";
+                } else if (d) {
+                    const beforeLine = (typeof d.before === "number") ? ("⭐" + d.before + "\n") : "";
+                    endGameRating.textContent = beforeLine + t("rating_change_unconfirmed")
+                        + "\n" + t("rating_check_in_stats");
+                } else {
+                    endGameRating.textContent = "";
+                }
+            }
+        }
+
         endGameModal.classList.remove("hidden");
         
         // Настраиваем кнопки: зритель видит только "В меню", игрок видит обе
@@ -3474,9 +3164,8 @@ function renderEndGameModal() {
         // (маркер сбрасывается), а предложивший получает реванш через listener
         // "без startOnlineGame()" — у него оставался старый маркер.
         // matchNumber инкрементируется в performRematchReset на каждый реванш и
-        // УЖЕ используется как идентификатор партии для монет
-        // (getCurrentRewardMatchId: "online_" + roomCode + "_" + matchNumber),
-        // то есть это проверенный в проде идентификатор, а не новая выдумка.
+        // matchNumber уже является стабильным номером партии внутри комнаты
+        // и растёт на каждый реванш.
         const onlineMatchNumber = (typeof currentState.matchNumber === "number") ? currentState.matchNumber : 0;
         const marker = isBotGame
             ? (currentBotMatchId || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "")
@@ -3508,7 +3197,6 @@ function renderEndGameModal() {
             recordGameResult(marker);
         }
 
-        recordCoinResultOnce();
     } else {
         endGameModal.classList.add("hidden");
     }
@@ -3526,7 +3214,7 @@ let statsInFlightOnlineMarker = null;
 // online-партии, определённый по UID участника, а НЕ по цвету клиента.
 // Возвращает null, если результат определять нельзя (я не участник).
 //
-// ПОЧЕМУ ИМЕННО UID. Раньше и статистика, и монеты считались как
+// ПОЧЕМУ ИМЕННО UID. Раньше клиентская статистика считалась как
 // currentState.winner === myColor. Цвет клиента меняется при каждом реванше
 // (performRematchReset меняет стороны местами), и если локальный myColor хоть
 // по какой-то причине разошёлся с реальным составом комнаты — например у
@@ -3537,7 +3225,7 @@ let statsInFlightOnlineMarker = null;
 //
 // Elo этой уязвимости никогда не имел: квитанция eloMatches всегда писалась
 // по lightId/darkId из players. Здесь мы приводим к тому же принципу
-// оставшиеся два потребителя — stats и монеты.
+// серверная атрибуция теперь придерживается того же принципа.
 function resolveMyOnlineResult(state) {
     if (!state || !state.winner) return null;
     if (state.winner === "draw") return "draw";
@@ -3599,23 +3287,24 @@ function computeEloDeltas(lightRating, darkRating, result) {
 // дополнения: createdAt комнаты (пишется один раз при создании и не меняется
 // ни при reconnect, ни при реванше) и matchNumber (растёт на каждый реванш).
 // Комнаты, созданные до появления createdAt, дают 0 — такие партии всё равно
-// различаются по roomCode+matchNumber, как это уже работает у монет.
+// различаются по roomCode+matchNumber.
 function buildEloMatchId(code, createdAt, matchNumber) {
     const stamp = (typeof createdAt === "number" && isFinite(createdAt)) ? createdAt : 0;
     const num = (typeof matchNumber === "number" && isFinite(matchNumber)) ? matchNumber : 0;
     return "elo_" + code + "_" + stamp + "_" + num;
 }
 
-// Возвращает готовый контекст рейтинговой партии либо null, если партия
-// рейтинговой НЕ является. null здесь — это и есть переключатель на старый
-// (v171) путь записи wins/losses, поэтому условия строгие:
+// Возвращает готовый контекст серверно зарегистрированной рейтинговой
+// партии либо null. В C1 null НЕ включает старый online fallback: клиент
+// больше не пишет stats напрямую, а просто ждёт server pointer/snapshot.
+// Поэтому условия здесь строгие:
 //   - только online между двумя РАЗНЫМИ людьми (бот и зритель исключены);
 //   - я сам обязан быть одним из игроков;
-//   - в комнате обязан лежать ПОЛНЫЙ снимок ratingsAtStart обеих сторон.
-// Полный снимок появляется только если ОБА клиента работают на новом коде
-// (каждый пишет свою половину, см. ensureMyRatingSnapshot). Это же и есть
-// защита переходного периода: если соперник ещё на v171, снимок неполный,
-// оба клиента идут старым путём и никакого двойного учёта не возникает.
+//   - в комнате обязан лежать канонический ratedMatchId ТЕКУЩЕГО поколения
+//     и полный ratingsAtStart обеих сторон.
+// Worker публикует оба поля вместе при успешной регистрации. Один snapshot
+// без pointer не считается доказательством: cached v193 способен писать его
+// сам, поэтому C1 не должен принимать legacy-состояние за server-rated матч.
 function getEloMatchContext() {
     if (!isOnlineGame || isBotGame || isSpectator) return null;
     if (!roomCode || !myTelegramId) return null;
@@ -3628,8 +3317,12 @@ function getEloMatchContext() {
     if (!lightId || !darkId || lightId === darkId) return null;
     if (myTelegramId !== lightId && myTelegramId !== darkId) return null;
 
+    // Полного snapshot недостаточно: cached v193 тоже умеет его создать.
+    // C1 считает матч серверно зарегистрированным только при каноническом
+    // ratedMatchId текущего поколения + полном snapshot.
+    const registeredMatchId = registeredMatchIdForState(currentState, roomCode);
+    if (!registeredMatchId) return null;
     const snap = currentState.ratingsAtStart;
-    if (!snap || typeof snap.light !== "number" || typeof snap.dark !== "number") return null;
 
     const result = (currentState.winner === "draw") ? "draw" : currentState.winner;
     if (result !== "light" && result !== "dark" && result !== "draw") return null;
@@ -3639,7 +3332,7 @@ function getEloMatchContext() {
     const deltas = computeEloDeltas(lightRatingBefore, darkRatingBefore, result);
 
     return {
-        matchId: buildEloMatchId(roomCode, currentState.createdAt, currentState.matchNumber),
+        matchId: registeredMatchId,
         lightId: lightId,
         darkId: darkId,
         lightName: players.light.name || "Игрок",
@@ -3652,138 +3345,356 @@ function getEloMatchContext() {
     };
 }
 
-// Ленивая миграция старой записи stats. Идемпотентна: НИКОГДА не сбрасывает
-// существующие wins/losses/name/rating/draws, только дописывает отсутствующие.
-// Обязательна ДО receipt-update по двум причинам:
-//   1. increment по отсутствующему rating начал бы от 0, а legacy-default 1000;
-//   2. Rules требуют, чтобы у stats/<id> были wins+losses+name — иначе весь
-//      multi-location update (вместе с receipt) был бы отклонён.
-// Инициализируются ОБА игрока, а не только я: соперник мог ни разу не
-// открыть новую версию, и без его записи отклонился бы весь update.
-function ensureStatsInitialized(id, name) {
-    if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
-    return database.ref("stats/" + id).transaction(function (current) {
-        const result = current || {};
-        if (typeof result.wins !== "number") result.wins = 0;
-        if (typeof result.losses !== "number") result.losses = 0;
-        if (!result.name) result.name = name || "Игрок";
-        if (typeof result.rating !== "number") result.rating = ELO_START_RATING;
-        if (typeof result.draws !== "number") result.draws = 0;
-        return result;
+// ===== РАСЧЁТ ПАРТИИ НА СЕРВЕРЕ =====
+//
+// Клиент больше не пишет рейтинг и статистику сам. Он регистрирует матч
+// и просит сервер рассчитать результат. Канонический идентификатор
+// elo_<roomCode>_<createdAt>_<matchNumber> остаётся общим замком со
+// старыми клиентами: по нему сервер видит чужую квитанцию и не начисляет
+// второй раз.
+
+async function callWorker(path, payload) {
+    const user = auth && auth.currentUser;
+    if (!user) throw new Error("not_authenticated");
+    const idToken = await user.getIdToken();
+    const response = await fetch(AUTH_WORKER_URL + path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json",
+                   "Authorization": "Bearer " + idToken },
+        body: JSON.stringify(payload)
     });
+    let data = null;
+    try { data = await response.json(); } catch (e) {}
+    if (!response.ok || !data || data.ok !== true) {
+        const err = new Error((data && data.error) || ("http_" + response.status));
+        err.httpStatus = response.status;
+        throw err;
+    }
+    return data;
 }
 
-// Сколько попыток записи receipt уже сделано, по matchId.
-let eloWriteAttempts = {};
-let eloWriteInFlightMatchId = null;
+function workerErrorCode(error) {
+    return error && error.message ? String(error.message) : "unknown_error";
+}
 
-// ЕДИНСТВЕННАЯ точка записи результата рейтинговой партии.
-// Один атомарный multi-location update: receipt + рейтинги обоих +
-// wins/losses (или draws обоим). Rules пропускают receipt только один раз
-// (!data.exists()), а отказ ЛЮБОГО пути отменяет весь update целиком —
-// поэтому ситуация "receipt отклонён, а wins всё равно прибавились"
-// невозможна: это гарантия самого RTDB, а не наша проверка на клиенте.
-// increment (а не абсолютная запись rating) нужен для параллельных партий:
-// два матча одного игрока, стартовавшие с одного снимка, сложат свои дельты
-// вместо того чтобы затереть результат друг друга.
-function recordEloMatchResult(ctx, marker) {
-    if (!canUseFirebase()) { statsInFlightOnlineMarker = null; return; }
-    if (eloWriteInFlightMatchId === ctx.matchId) return;
-    const attempts = eloWriteAttempts[ctx.matchId] || 0;
-    if (attempts >= ELO_MAX_WRITE_ATTEMPTS) {
-        statsRecordedForRoom = marker;
-        statsInFlightOnlineMarker = null;
+function isRatedJoinTerminalError(error) {
+    return RATED_JOIN_TERMINAL_ERRORS.indexOf(workerErrorCode(error)) !== -1;
+}
+
+// /rated/settle имеет другой набор смысловых ошибок, чем /rated/join.
+// В частности match_not_finished — временное состояние: локальный listener
+// мог уже увидеть winner, а серверный read Worker ещё попасть в окно до
+// финального status=finished. Поэтому один общий error.terminal для обоих
+// маршрутов здесь опасен.
+const SETTLEMENT_TERMINAL_ERRORS = [
+    "room_not_found", "not_a_player", "stale_generation",
+    "match_not_registered", "match_not_rated", "not_a_participant",
+    "card_mismatch", "receipt_mismatch", "nothing_to_resume",
+    "legacy_receipt_room_missing"
+];
+
+function isSettlementTerminalError(error) {
+    return SETTLEMENT_TERMINAL_ERRORS.indexOf(workerErrorCode(error)) !== -1;
+}
+
+// Регистрация рейтинговой партии. Вызывается там же, где раньше стоял
+// прежний ensureMyRatingSnapshot: партия активна, вызывающий — игрок, цвета после
+// реванша уже пересчитаны.
+//
+// Состояние привязано к поколению, поэтому повторные срабатывания room
+// listener не порождают новых запросов, а «Без рейтинга» от прошлой
+// партии не протекает в реванш.
+function resetSettlementDisplay() { lastSettlementDisplay = null; }
+
+// Партия завершена: повторять регистрацию больше незачем.
+function roomOutcomeFinished(state) {
+    if (!state) return true;
+    return state.status === "finished" || !!state.winner;
+}
+
+function requestRatedJoin(room) {
+    if (!canUseFirebase() || !roomCode || !room) return;
+    if (isSpectator) return;
+
+    const key = ratedGenerationKey(roomCode, room.matchNumber, room.createdAt);
+    const st = ratedJoinState[key] || { phase: "idle", attempts: 0, matchId: null };
+    if (st.phase === "inFlight" || st.phase === "retryWait"
+        || st.phase === "success" || st.phase === "terminalFailed") return;
+
+    // Полный ratingsAtStart сам по себе НЕ доказывает регистрацию Worker:
+    // cached v193 тоже умеет записывать снимок. Авторитетный shortcut —
+    // только серверный ratedMatchId + обе стороны снимка.
+    const roomMatchId = registeredMatchIdForState(room, roomCode);
+    if (roomMatchId) {
+        ratedJoinState[key] = { phase: "success", attempts: st.attempts, matchId: roomMatchId };
         return;
     }
-    eloWriteAttempts[ctx.matchId] = attempts + 1;
-    eloWriteInFlightMatchId = ctx.matchId;
 
-    Promise.all([
-        ensureStatsInitialized(ctx.lightId, ctx.lightName),
-        ensureStatsInitialized(ctx.darkId, ctx.darkName)
-    ]).then(function () {
-        if (!canUseFirebase()) throw new Error("firebase_auth_required");
-        // Вызываем increment ЧЕРЕЗ объект SDK, а не сохранённой ссылкой:
-        // отвязанная функция зависела бы от деталей реализации firebase-compat.
-        const inc = function (delta) { return firebase.database.ServerValue.increment(delta); };
-        const updates = {};
-        updates["eloMatches/" + ctx.matchId] = {
-            lightId: ctx.lightId,
-            darkId: ctx.darkId,
-            result: ctx.result,
-            lightRatingBefore: ctx.lightRatingBefore,
-            darkRatingBefore: ctx.darkRatingBefore,
-            lightDelta: ctx.lightDelta,
-            darkDelta: ctx.darkDelta,
-            createdAt: firebase.database.ServerValue.TIMESTAMP
-        };
-        updates["stats/" + ctx.lightId + "/rating"] = inc(ctx.lightDelta);
-        updates["stats/" + ctx.darkId + "/rating"] = inc(ctx.darkDelta);
-        if (ctx.result === "draw") {
-            updates["stats/" + ctx.lightId + "/draws"] = inc(1);
-            updates["stats/" + ctx.darkId + "/draws"] = inc(1);
-        } else if (ctx.result === "light") {
-            updates["stats/" + ctx.lightId + "/wins"] = inc(1);
-            updates["stats/" + ctx.darkId + "/losses"] = inc(1);
-        } else {
-            updates["stats/" + ctx.darkId + "/wins"] = inc(1);
-            updates["stats/" + ctx.lightId + "/losses"] = inc(1);
+    st.phase = "inFlight";
+    ratedJoinState[key] = st;
+    const codeAtStart = roomCode;
+
+    callWorker("/rated/join", { roomCode: codeAtStart })
+        .then(function (data) {
+            ratedJoinState[key] = {
+                phase: "success",
+                attempts: st.attempts,
+                matchId: (data && typeof data.matchId === "string") ? data.matchId : roomMatchId
+            };
+            renderPlayerPanels();
+        })
+        .catch(function (error) {
+            const attempts = st.attempts + 1;
+            // «Без рейтинга» — ТОЛЬКО смысловой отказ. Временные сбои
+            // повторяются, пока то же поколение комнаты живо: счётчик
+            // попыток больше не переводит партию в terminalFailed.
+            if (isRatedJoinTerminalError(error)) {
+                ratedJoinState[key] = { phase: "terminalFailed", attempts: attempts, matchId: null };
+                renderPlayerPanels();
+                return;
+            }
+            ratedJoinState[key] = { phase: "retryWait", attempts: attempts, matchId: st.matchId || null };
+            const wait = (attempts - 1 < RATED_JOIN_BACKOFF_MS.length)
+                ? RATED_JOIN_BACKOFF_MS[attempts - 1]
+                : RATED_JOIN_BACKOFF_MAX_MS;
+            setTimeout(function () {
+                const st2 = ratedJoinState[key];
+                if (!st2 || st2.phase !== "retryWait") return;
+
+                const sameGeneration = roomCode === codeAtStart && currentState
+                    && ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) === key;
+                if (!sameGeneration) return;
+
+                // После конца партии Worker уже не имеет права публиковать
+                // ratedMatchId/ratingsAtStart. Если мы были именно в retryWait,
+                // регистрационное окно закрыто окончательно — не оставляем ⭐…
+                // висеть вечно.
+                if (roomOutcomeFinished(currentState)) {
+                    ratedJoinState[key] = {
+                        phase: "terminalFailed",
+                        attempts: attempts,
+                        matchId: st2.matchId || null
+                    };
+                    renderPlayerPanels();
+                    return;
+                }
+
+                ratedJoinState[key] = {
+                    phase: "idle",
+                    attempts: attempts,
+                    matchId: st2.matchId || null
+                };
+                requestRatedJoin(currentState);
+            }, wait);
+        });
+}
+
+// ЗАМОРОЖЕННЫЙ КОНТЕКСТ.
+//
+// Пока запрос летит, может начаться реванш: matchNumber увеличится,
+// стороны поменяются, ratingsAtStart обнулится. Считать before и after
+// по текущему состоянию нельзя — получится правдоподобное, но неверное
+// число. Поэтому контекст завершённого поколения замораживается в момент
+// ЗАПУСКА расчёта.
+function freezeSettlementContext() {
+    if (!currentState || !roomCode) return null;
+    const rs = currentState.ratingsAtStart || {};
+    const matchNumber = (typeof currentState.matchNumber === "number") ? currentState.matchNumber : 0;
+    const createdAt = (typeof currentState.createdAt === "number") ? currentState.createdAt : null;
+    const key = ratedGenerationKey(roomCode, matchNumber, createdAt);
+    const joinState = ratedJoinState[key] || null;
+
+    // ratedMatchId приходит из комнаты после server join. Для узкого окна,
+    // когда HTTP-ответ join уже пришёл, а room-listener ещё не принёс pointer,
+    // берём matchId из generation-scoped join state. Канонический fallback
+    // нужен для восстановления после удаления комнаты.
+    const expectedMatchId = (createdAt !== null)
+        ? buildEloMatchId(roomCode, createdAt, matchNumber) : null;
+    let ratedMatchId = (typeof currentState.ratedMatchId === "string"
+        && currentState.ratedMatchId === expectedMatchId)
+        ? currentState.ratedMatchId
+        : (joinState && typeof joinState.matchId === "string" ? joinState.matchId : null);
+    if (!ratedMatchId) ratedMatchId = expectedMatchId;
+
+    const players = currentState.players || {};
+    const lightId = players.light && players.light.id;
+    const darkId = players.dark && players.dark.id;
+    // Для отображения дельты цвет фиксируем по UID из самой комнаты, а не
+    // доверяем локальному myColor. Исторически myColor уже расходился после
+    // реваншей; серверный settlement от этого не страдал, но UI мог бы
+    // приписать игроку дельту соперника.
+    let frozenMyColor = null;
+    if (lightId === myTelegramId) frozenMyColor = "light";
+    else if (darkId === myTelegramId) frozenMyColor = "dark";
+    if (!frozenMyColor) return null;
+
+    return {
+        roomCode: roomCode,
+        matchNumber: matchNumber,
+        ratedMatchId: ratedMatchId,
+        createdAt: createdAt,
+        myUid: myTelegramId,
+        myColor: frozenMyColor,
+        playerIds: { light: lightId, dark: darkId },
+        ratingsAtStart: { light: rs.light, dark: rs.dark }
+    };
+}
+
+// Состояние расчёта, привязанное к поколению.
+//   idle / inFlight / retryWait / completed / terminalFailed
+//
+// completed означает именно УСПЕШНЫЙ ответ Worker (в том числе
+// ratingConfirmed:false для валидной legacy receipt). terminalFailed —
+// смысловой отказ, который повтором не исправить. Временные сбои никогда
+// сами по себе не разрешают разрушить finished-room: outcome нужен Worker.
+const SETTLE_BACKOFF_MS = [1000, 2000, 5000, 10000, 20000];
+const SETTLE_BACKOFF_MAX_MS = 30000;
+let settleState = {};          // ключ поколения -> { phase, attempts }
+let lastSettlementDisplay = null;
+
+function getSettlePhase(key) {
+    const st = settleState[key];
+    return st ? st.phase : "idle";
+}
+
+function isSettlementSettled(key) {
+    return getSettlePhase(key) === "completed";
+}
+
+function isSettlementTerminalFailed(key) {
+    return getSettlePhase(key) === "terminalFailed";
+}
+
+function finishOnlineResultMarkerForGeneration(key) {
+    // Settlement callbacks are asynchronous. A late response from match N
+    // must never consume the UI-marker of an already-finished match N+1.
+    // Only touch the global marker while the visible room is still the exact
+    // generation that this settlement belongs to.
+    if (!currentState || !roomCode) return;
+    const currentKey = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+    if (currentKey !== key) return;
+    if (statsInFlightOnlineMarker !== null) {
+        statsRecordedForRoom = statsInFlightOnlineMarker;
+        statsInFlightOnlineMarker = null;
+    }
+}
+
+// Единственная проверка перед ЛЮБОЙ destructive mutation завершённой
+// online-партии (rematch reset / room cleanup). Если поколение было
+// зарегистрировано Worker, стирать outcome можно только после completed
+// settlement. Терминальный settle-error НЕ считается разрешением на удаление.
+function isFinishedGenerationSafeToDestroy() {
+    if (!isOnlineGame || isSpectator || !currentState || !currentState.winner || !roomCode) return true;
+    const key = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+    if (getRatedJoinPhase(key) !== "success") {
+        const registered = registeredMatchIdForState(currentState, roomCode);
+        if (registered) {
+            ratedJoinState[key] = { phase: "success", attempts: 0, matchId: registered };
         }
-        return database.ref().update(updates);
-    }).then(function () {
-        statsRecordedForRoom = marker;
-        statsInFlightOnlineMarker = null;
-        eloWriteInFlightMatchId = null;
-    }).catch(function (error) {
-        // Штатный случай: соперник успел записать receipt первым — Rules
-        // отклонили нашу попытку целиком, результат партии УЖЕ учтён им.
-        // Настоящую сетевую ошибку отличить нельзя (см. ELO_MAX_WRITE_ATTEMPTS),
-        // поэтому просто отпускаем маркеры: следующий render повторит попытку,
-        // но не более ELO_MAX_WRITE_ATTEMPTS раз за партию.
-        console.log("Elo receipt write not applied:", error && error.message);
-        statsInFlightOnlineMarker = null;
-        eloWriteInFlightMatchId = null;
-    });
+    }
+    if (getRatedJoinPhase(key) !== "success") return true;
+    return isSettlementSettled(key);
 }
 
-// Записывает МОЮ половину снимка рейтингов в комнату. Свою половину пишет
-// каждый клиент сам — соперника угадывать нельзя, а дожидаться его рейтинга
-// на входе в комнату означало бы трогать invite-link/joinGroupRoom, которые
-// только что стабилизированы. Побочный (и намеренный) эффект: полный снимок
-// существует ТОЛЬКО когда обе стороны на новом коде — это и есть гейт
-// рейтинговой партии.
-// Пишем строго при активной партии без winner: после конца партии снимок
-// заморожен, поэтому оба клиента у финального состояния видят его одинаково.
-let ratingSnapshotWrittenFor = null;
+// Расчёт партии. Идемпотентен на сервере, но лишние вызовы не шлём.
+function requestSettlement() {
+    if (!canUseFirebase() || isSpectator) return;
+    const ctx = freezeSettlementContext();
+    if (!ctx || !ctx.ratedMatchId) return;
+    const key = ratedGenerationKey(ctx.roomCode, ctx.matchNumber, ctx.createdAt);
+    const phase = getSettlePhase(key);
+    if (phase === "inFlight" || phase === "retryWait") return;
+    if (phase === "completed" || phase === "terminalFailed") {
+        finishOnlineResultMarkerForGeneration(key);
+        return;
+    }
 
-function ensureMyRatingSnapshot(room) {
-    if (!canUseFirebase()) return;
-    if (!isOnlineGame || isBotGame || isSpectator) return;
-    if (!roomCode || !myTelegramId || !myColor) return;
-    if (!room || room.status !== "active" || room.winner) return;
-    if (!room.players || !room.players.light || !room.players.dark) return;
-    const mine = room.players[myColor];
-    if (!mine || mine.id !== myTelegramId) return;
-    if (room.ratingsAtStart && typeof room.ratingsAtStart[myColor] === "number") return;
+    // Локальный join-state может потеряться после reload или отстать от room-listener.
+    // Канонический pointer + полный snapshot в самой комнате — достаточное
+    // доказательство, что Worker уже зарегистрировал это поколение.
+    if (getRatedJoinPhase(key) !== "success") {
+        const registered = registeredMatchIdForState(currentState, roomCode);
+        if (!registered) return;
+        ratedJoinState[key] = { phase: "success", attempts: 0, matchId: registered };
+        ctx.ratedMatchId = registered;
+    }
 
-    const targetRoom = roomCode;
-    const targetColor = myColor;
-    const stamp = targetRoom + "_" + (room.matchNumber || 0) + "_" + targetColor;
-    if (ratingSnapshotWrittenFor === stamp) return; // запрос уже в полёте/выполнен
-    ratingSnapshotWrittenFor = stamp;
+    const st = settleState[key] || { phase: "idle", attempts: 0 };
+    st.phase = "inFlight";
+    settleState[key] = st;
 
-    ensureStatsInitialized(myTelegramId, myTelegramName).then(function (result) {
-        if (!canUseFirebase()) throw new Error("firebase_auth_required");
-        const val = (result && result.snapshot) ? result.snapshot.val() : null;
-        const myRating = normalizeEloRating(val && val.rating);
-        return database.ref("rooms/" + targetRoom + "/ratingsAtStart/" + targetColor).set(myRating);
-    }).catch(function () {
-        // Не смогли — снимаем метку, чтобы следующий апдейт комнаты повторил.
-        // Если так и не запишем, снимок останется неполным и партия просто
-        // не будет рейтинговой (старый путь) — данные не пострадают.
-        if (ratingSnapshotWrittenFor === stamp) ratingSnapshotWrittenFor = null;
-    });
+    callWorker("/rated/settle", {
+        roomCode: ctx.roomCode,
+        matchId: ctx.ratedMatchId
+    })
+        .then(function (data) {
+            settleState[key] = { phase: "completed", attempts: st.attempts };
+            // Помечаем именно текущий UI-marker как законченный ДО повторного
+            // renderEndGameModal(), иначе applySettlementResult() вызовет
+            // рендер, тот снова выставит in-flight marker, а requestSettlement
+            // уже молча выйдет по phase=completed.
+            finishOnlineResultMarkerForGeneration(key);
+            applySettlementResult(ctx, data);
+        })
+        .catch(function (error) {
+            const attempts = st.attempts + 1;
+
+            if (isSettlementTerminalError(error)) {
+                settleState[key] = { phase: "terminalFailed", attempts: attempts };
+                finishOnlineResultMarkerForGeneration(key);
+                applySettlementResult(ctx, null);
+                return;
+            }
+
+            settleState[key] = { phase: "retryWait", attempts: attempts };
+            statsInFlightOnlineMarker = null;
+            const wait = (attempts - 1 < SETTLE_BACKOFF_MS.length)
+                ? SETTLE_BACKOFF_MS[attempts - 1] : SETTLE_BACKOFF_MAX_MS;
+            setTimeout(function () {
+                const cur = settleState[key];
+                if (!cur || cur.phase !== "retryWait") return;
+
+                const sameGeneration = currentState && roomCode
+                    && ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) === key;
+                if (!sameGeneration) return;
+
+                settleState[key] = { phase: "idle", attempts: attempts };
+                requestSettlement();
+            }, wait);
+        });
 }
+
+
+// Отрисовка изменения рейтинга. Ответ прошлого поколения интерфейс новой
+// партии не трогает.
+function applySettlementResult(ctx, data) {
+    if (!currentState) return;
+    const currentKey = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+    if (currentKey !== ratedGenerationKey(ctx.roomCode, ctx.matchNumber, ctx.createdAt)) return;
+
+    // ratingConfirmed:false означает, что квитанцию писал не сервер. Под
+    // BRIDGE-A такую квитанцию мог создать кто угодно, и статистика могла
+    // не измениться вовсе. Выдавать это за подтверждённое изменение нельзя.
+    const before = ctx.ratingsAtStart[ctx.myColor];
+    if (!data || data.ratingConfirmed !== true || !data.deltas) {
+        lastSettlementDisplay = {
+            confirmed: false,
+            before: (typeof before === "number") ? before : null
+        };
+        renderEndGameModal();
+        return;
+    }
+    const delta = data.deltas[ctx.myColor];
+    if (typeof before !== "number" || typeof delta !== "number") {
+        lastSettlementDisplay = { confirmed: false };
+        renderEndGameModal();
+        return;
+    }
+    lastSettlementDisplay = { confirmed: true, before: before,
+                              after: before + delta, delta: delta };
+    renderEndGameModal();
+}
+
 
 function recordGameResult(onlineMarker) {
     if (isSpectator) return;
@@ -3793,7 +3704,7 @@ function recordGameResult(onlineMarker) {
     // состоянию: currentState.winner мог быть выставлен из ещё не
     // подтверждённого хода, а Firebase-транзакция способна его отклонить —
     // тогда в stats попал бы результат несуществующей партии. Такая же
-    // защита уже стоит у начисления монет (см. recordCoinResultOnce).
+    // защита стоит на стороне сервера: квитанция создаётся однократно.
     // In-flight маркер снимаем сами: запрос не отправлен, и следующий
     // render — уже по подтверждённому состоянию — должен попробовать снова.
     if (isOnlineGame && isLocalStateOptimistic) {
@@ -3811,9 +3722,16 @@ function recordGameResult(onlineMarker) {
     if (!isBotGame) {
         const eloCtx = getEloMatchContext();
         if (eloCtx) {
-            recordEloMatchResult(eloCtx, onlineMarker);
+            requestSettlement();
             return;
         }
+        // C1 online никогда не пишет stats напрямую. Если server pointer /
+        // ratings snapshot ещё не приехали (или регистрация не состоялась),
+        // освобождаем UI-marker и ждём следующего room snapshot. Это важно и
+        // для ничьей: ранний return на draw раньше оставлял marker навечно,
+        // поэтому поздний ratedMatchId уже не запускал settlement.
+        statsInFlightOnlineMarker = null;
+        return;
     }
 
     if (currentState.winner === "draw") return;
@@ -3837,9 +3755,6 @@ function recordGameResult(onlineMarker) {
         }
         didIWin = (myResult === "win");
     }
-
-    // Если игра с ботом — пишем в отдельную ветку statsBot
-    const statsPath = isBotGame ? "statsBot" : "stats";
 
     if (isBotGame) {
         // Medium/Hard считаются раздельно в byLevel, но верхнеуровневые
@@ -3871,25 +3786,6 @@ function recordGameResult(onlineMarker) {
         return;
     }
 
-    database.ref(statsPath + "/" + myTelegramId).transaction(function (current) {
-        const result = current || { wins: 0, losses: 0, name: myTelegramName };
-        result.name = myTelegramName;
-        if (didIWin) {
-            result.wins = (result.wins || 0) + 1;
-        } else {
-            result.losses = (result.losses || 0) + 1;
-        }
-        return result;
-    }).then(function () {
-        // Подтверждено Firebase — только теперь помечаем как записанное.
-        statsRecordedForRoom = onlineMarker;
-        statsInFlightOnlineMarker = null;
-    }).catch(function(error) {
-        console.error("Stats write failed:", error);
-        // НЕ помечаем записанным — освобождаем in-flight, чтобы следующий
-        // renderEndGameModal() смог повторить попытку в этой же сессии.
-        statsInFlightOnlineMarker = null;
-    });
 }
 
 function updateSelectionDom(oldSel, newSel) {
@@ -3980,12 +3876,14 @@ function forceResyncFromServer(silent) {
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
             matchNumber: room.matchNumber || 0,
+            ratedMatchId: (typeof room.ratedMatchId === "string") ? room.ratedMatchId : null,
             // ELO: снимок рейтингов на начало партии и стабильная метка
             // создания комнаты. Оба поля только ЧИТАЮТСЯ здесь — снимок
-            // пишет ensureMyRatingSnapshot, createdAt ставится один раз при
+            // публикует сервер при регистрации, createdAt ставится один раз при
             // создании комнаты и не меняется ни при reconnect, ни при реванше.
             ratingsAtStart: room.ratingsAtStart || null,
             createdAt: (typeof room.createdAt === "number") ? room.createdAt : null,
+            status: room.status || null,
             kingOnlyStreak: room.kingOnlyStreak || 0,
             noProgressStreak: room.noProgressStreak || 0,
             positionHistory: room.positionHistory || [],
@@ -4240,8 +4138,18 @@ function computeGameSignature(state) {
     const playersPart = JSON.stringify(state.players || null);
     const rematchPart = JSON.stringify(state.rematchProposal || null);
     const drawPart = JSON.stringify(state.drawProposal || null);
-    const turnStartedAtPart = state.turnStartedAt || 0; 
-    return state.moveCount + "_" + winnerPart + "_" + winReasonPart + "_" + playersPart + "_" + rematchPart + "_" + drawPart + "_" + turnStartedAtPart;
+    const turnStartedAtPart = state.turnStartedAt || 0;
+    // C1: регистрация рейтинговой партии меняет только ratedMatchId /
+    // ratingsAtStart. Если не включить их в подпись, room-listener сочтёт
+    // серверный snapshot "тем же состоянием", отбросит рейтинг и панель
+    // останется на ⭐… до первого хода.
+    const matchNumberPart = (typeof state.matchNumber === "number") ? state.matchNumber : 0;
+    const ratedMatchIdPart = state.ratedMatchId || "";
+    const ratingsAtStartPart = JSON.stringify(state.ratingsAtStart || null);
+    const statusPart = state.status || "";
+    return state.moveCount + "_" + matchNumberPart + "_" + winnerPart + "_" + winReasonPart
+        + "_" + playersPart + "_" + rematchPart + "_" + drawPart + "_" + turnStartedAtPart
+        + "_" + ratedMatchIdPart + "_" + ratingsAtStartPart + "_" + statusPart;
 }
 
 function startOnlineGame() {
@@ -4255,8 +4163,8 @@ function startOnlineGame() {
     endGameShownForRoom = null;
     statsRecordedForRoom = null;
     statsInFlightOnlineMarker = null; // симметрично сбрасываем и in-flight
-    coinRewardAttemptForMatch = null;
-    statsCache = {}; // Новая партия/реванш — статистика и монеты обоих игроков могли устареть
+    resetSettlementDisplay();
+    if (rematchWaitNote) rematchWaitNote.textContent = "";
     myWaitingRoomNoOpponent = false; // (v171) партия началась — фоновое waiting-исключение heartbeat больше не действует
     opponentAbsenceHandled = false;
     lastRenderedSignature = null;
@@ -4333,12 +4241,14 @@ function startOnlineGame() {
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
             matchNumber: room.matchNumber || 0,
+            ratedMatchId: (typeof room.ratedMatchId === "string") ? room.ratedMatchId : null,
             // ELO: снимок рейтингов на начало партии и стабильная метка
             // создания комнаты. Оба поля только ЧИТАЮТСЯ здесь — снимок
-            // пишет ensureMyRatingSnapshot, createdAt ставится один раз при
+            // публикует сервер при регистрации, createdAt ставится один раз при
             // создании комнаты и не меняется ни при reconnect, ни при реванше.
             ratingsAtStart: room.ratingsAtStart || null,
             createdAt: (typeof room.createdAt === "number") ? room.createdAt : null,
+            status: room.status || null,
             kingOnlyStreak: room.kingOnlyStreak || 0,
             noProgressStreak: room.noProgressStreak || 0,
             positionHistory: room.positionHistory || [],
@@ -4393,6 +4303,14 @@ function startOnlineGame() {
             const piecesBeforeThisUpdate = currentState ? currentState.pieces : null;
 
             if (currentState && currentState.winner && !newState.winner && newState.moveCount === 0) {
+                resetSettlementDisplay();
+                if (rematchWaitNote) rematchWaitNote.textContent = "";
+                // Предложивший реванш получает N+1 через listener без
+                // startOnlineGame(). Не переносим UI-маркеры результата N в
+                // новое поколение; generation-scoped settleState продолжает
+                // жить отдельно и поздний ответ N не сможет тронуть N+1.
+                statsRecordedForRoom = null;
+                statsInFlightOnlineMarker = null;
                 if (newState.players && newState.players.light && newState.players.light.id === myTelegramId) {
                     myColor = "light";
                 } else if (newState.players && newState.players.dark && newState.players.dark.id === myTelegramId) {
@@ -4400,7 +4318,6 @@ function startOnlineGame() {
                 }
                 flipped = (myColor === "dark");
                 boardBuilt = false;
-                statsCache = {}; // Реванш без startOnlineGame() — кэш иначе останется старым
                 // ВАЖНО: при реванше цвета меняются местами. Нужно заново
                 // настроить "пульс присутствия" на новый цвет — иначе он
                 // продолжит стучать в старую (уже не свою) ячейку presence,
@@ -4440,7 +4357,7 @@ function startOnlineGame() {
         // renderEndGameModal), иначе его половина снимка никогда бы не
         // появилась. Здесь же myColor уже пересчитан после смены сторон.
         // Функция сама идемпотентна и молча выходит, если писать не нужно.
-        ensureMyRatingSnapshot(room);
+        requestRatedJoin(room);
     });
 }
 
@@ -5456,7 +5373,6 @@ function startOfflineGame() {
 
     // Новая партия должна иметь право сделать новую попытку выплаты.
     // Защита от реального двойного начисления всё равно находится в Firebase.
-    coinRewardAttemptForMatch = null;
     
     // Чередование цвета: читаем из памяти, меняем на противоположный
     let lastBotColor = localStorage.getItem("shashki_last_bot_color");
@@ -5736,8 +5652,8 @@ function createOnlineRoom() {
     });
 }
 
-btnPlayOnline.addEventListener("click", function () {
-    if (!requireFirebaseAuth()) return;
+btnPlayOnline.addEventListener("click", async function () {
+    if (!(await requireFirebaseAuthAsync())) return;
     isBotGame = false;
     showGroupLobby();
 });
@@ -5746,8 +5662,8 @@ btnCancelMatchmaking.addEventListener("click", function () {
     cancelOnlineSearch();
 });
 
-btnPlayFriend.addEventListener("click", function () {
-    if (!requireFirebaseAuth()) return;
+btnPlayFriend.addEventListener("click", async function () {
+    if (!(await requireFirebaseAuthAsync())) return;
     isBotGame = false;
     showScreen(timeControlScreen);
 });
@@ -6139,10 +6055,9 @@ if (btnDrawCancel) {
 // ===== НОВАЯ ИГРА / ЗАКРЫТЬ =====
 
 btnCloseGame.addEventListener("click", function () {
-    endGameModal.classList.add("hidden");
-    
-    // Если мы зритель — просто отписываемся от комнаты и выходим в меню
+    // Если мы зритель — просто отписываемся от комнаты и выходим в меню.
     if (isSpectator) {
+        endGameModal.classList.add("hidden");
         if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
         if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
         showScreen(menuScreen);
@@ -6150,9 +6065,46 @@ btnCloseGame.addEventListener("click", function () {
         return;
     }
 
+    // ONLINE finished-room нельзя удалять, пока Worker ещё читает outcome.
+    // Это та же гонка, что у быстрого реванша: cleanupFinishedRoom() стирает
+    // единственный авторитетный результат партии.
+    if (isOnlineGame && currentState && currentState.winner && roomCode) {
+        const codeAtClick = roomCode;
+        const generationAtClick = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+
+        waitForSettlementBeforeRoomMutation().then(function (outcome) {
+            endGameModal.classList.add("hidden");
+            markMyselfLeftExplicitly();
+
+            const stillSameFinished = outcome === "safe"
+                && roomCode === codeAtClick
+                && currentState
+                && ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) === generationAtClick
+                && !!currentState.winner;
+
+            if (stillSameFinished) {
+                cleanupFinishedRoom();
+            } else {
+                // changed/blocked: локально закрыться можно, но НЕЛЬЗЯ стирать
+                // новую партию или finished outcome, который сервер не закрепил.
+                detachMyPresence();
+                isOnlineGame = false;
+                roomCode = null;
+            }
+
+            if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
+        }).catch(function (error) {
+            console.error("Close after settlement failed:", error);
+            showInfoModal(t("err_join_failed"), false);
+        });
+        return;
+    }
+
+    endGameModal.classList.add("hidden");
     markMyselfLeftExplicitly();
+
     if (isOnlineGame) {
-        cleanupFinishedRoom(); // Это удалит комнату, и соперник/зритель автоматически увидят закрытие
+        cleanupFinishedRoom();
     }
     if (isBotGame) {
         if (ownerSessionAttached) {
@@ -6174,8 +6126,12 @@ btnCloseGame.addEventListener("click", function () {
 });
 
 function cleanupFinishedRoom() {
-    if (!canUseFirebase()) { detachMyPresence(); return; }
-    if (!roomCode) return;
+    if (!canUseFirebase()) { detachMyPresence(); return false; }
+    if (!roomCode) return false;
+    if (!isFinishedGenerationSafeToDestroy()) {
+        requestSettlement();
+        return false;
+    }
     const codeToClean = roomCode;
     if (myTelegramId) {
         database.ref("users/" + myTelegramId + "/rooms/" + codeToClean).remove();
@@ -6186,12 +6142,40 @@ function cleanupFinishedRoom() {
     }
     database.ref("rooms/" + codeToClean).remove();
     detachMyPresence();
+    // Инвалидируем поколение СРАЗУ после постановки remove в очередь. Иначе
+    // параллельный callback старой кнопки «Реванш» мог после удаления снова
+    // записать rematchProposal и воскресить комнату огрызком.
+    isOnlineGame = false;
+    roomCode = null;
+    return true;
 }
 
 btnNewGame.addEventListener("click", function () {
     if (isOnlineGame) {
         if (!requireFirebaseAuth()) return;
-        database.ref("rooms/" + roomCode + "/rematchProposal").set({ by: myColor, name: myTelegramName });
+        const codeAtClick = roomCode;
+        const generationAtClick = currentState
+            ? ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) : null;
+
+        // В mixed C1↔v193 старый соперник не умеет ждать settlement перед
+        // accept. Поэтому C1 не публикует САМО предложение реванша, пока
+        // результат старой rated-партии не закреплён сервером.
+        waitForSettlementBeforeRoomMutation().then(function (outcome) {
+            if (outcome === "blocked") {
+                showInfoModal(t("rating_settlement_failed"), false);
+                return;
+            }
+            if (outcome !== "safe") return;
+            const stillSameFinished = roomCode === codeAtClick && currentState
+                && ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) === generationAtClick
+                && !!currentState.winner;
+            if (!stillSameFinished) return;
+            return database.ref("rooms/" + roomCode + "/rematchProposal")
+                .set({ by: myColor, name: myTelegramName });
+        }).catch(function (error) {
+            console.error("Rematch proposal failed:", error);
+            showInfoModal(t("err_rematch_failed"), false);
+        });
     } else if (isBotGame && ownerSessionAttached) {
         endGameModal.classList.add("hidden");
         const oldMatchId = currentBotMatchId;
@@ -6223,8 +6207,23 @@ btnNewGame.addEventListener("click", function () {
     }
 });
 
-function performRematchReset() {
+function performRematchReset(expectedGenerationKey) {
     if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
+    // Defense-in-depth against double accept / stale async callbacks. If another
+    // device (or an earlier click on this device) already started N+1, this
+    // callback must join that generation, never manufacture N+2 from an active
+    // board. The expected key is captured before waiting for settlement.
+    if (!currentState || !currentState.winner || !roomCode) {
+        return Promise.reject(new Error("rematch_generation_changed"));
+    }
+    const actualGenerationKey = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+    if (expectedGenerationKey && actualGenerationKey !== expectedGenerationKey) {
+        return Promise.reject(new Error("rematch_generation_changed"));
+    }
+    if (!isFinishedGenerationSafeToDestroy()) {
+        requestSettlement();
+        return Promise.reject(new Error("settlement_pending"));
+    }
     // Используем .update() вместо .transaction().
     // Это избегает циклов retry, которые конфликтуют с App Check Enforce.
     // Мы берем цвета игроков из локального состояния (они 100% точные).
@@ -6268,7 +6267,7 @@ function performRematchReset() {
 
     // ELO: реванш — это НОВАЯ партия (matchNumber выше, стороны меняются),
     // поэтому снимок рейтингов обнуляется. Обе стороны запишут свои
-    // актуальные рейтинги заново через ensureMyRatingSnapshot, и матч
+    // актуальные рейтинги заново при регистрации на сервере, и матч
     // получит новый matchId. Никогда не переиспользуем старый снимок.
     updates["ratingsAtStart"] = null;
     
@@ -6311,12 +6310,125 @@ function checkRematchProposal() {
     }
 }
 
+// ЗАЩИТА ОТ ГОНКИ РАСЧЁТА И БЫСТРОГО РЕВАНША.
+//
+// Worker при расчёте читает ТЕКУЩУЮ комнату. performRematchReset стирает
+// исход прошлой партии: winner обнуляется, matchNumber растёт, стороны
+// меняются, ratingsAtStart исчезает. Если игрок примет реванш раньше,
+// чем сервер успеет прочитать завершённую комнату, авторитетный исход
+// прошлого поколения пропадёт — и партия останется без начисления.
+//
+// Замороженный контекст на клиенте от этого НЕ спасает: он защищает
+// только отрисовку ответа, а не то, что увидит сервер.
+//
+// Поэтому реванш откладывается до подтверждённого ответа расчёта.
+// ratingConfirmed:false — тоже успешный ответ: сервер квитанцию увидел
+// и проверил, просто дельту не подтверждает.
+function waitForSettlementBeforeRoomMutation() {
+    if (!isOnlineGame || isSpectator || !currentState || !roomCode) {
+        return Promise.resolve("safe");
+    }
+
+    const key = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
+
+    // Recovery after reload/other device: if the room already carries the
+    // canonical server pointer, reconstruct local success before deciding.
+    if (getRatedJoinPhase(key) !== "success") {
+        const registered = registeredMatchIdForState(currentState, roomCode);
+        if (registered) {
+            ratedJoinState[key] = { phase: "success", attempts: 0, matchId: registered };
+        }
+    }
+
+    // Нерейтинговая партия не имеет server outcome, который надо сохранять.
+    if (getRatedJoinPhase(key) !== "success") return Promise.resolve("safe");
+    if (isSettlementSettled(key)) return Promise.resolve("safe");
+
+    // Смысловой отказ settlement НЕ даёт разрешения стереть outcome.
+    // Закрыть приложение пользователь может локально, но реванш/cleanup
+    // не должны превращать неподтверждённый rated-result в потерянный навсегда.
+    if (isSettlementTerminalFailed(key)) return Promise.resolve("blocked");
+
+    requestSettlement();
+    if (rematchWaitNote) rematchWaitNote.textContent = t("rating_confirming");
+
+    return new Promise(function (resolve) {
+        const tick = setInterval(function () {
+            const stillSame = currentState && roomCode
+                && ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) === key;
+
+            if (!stillSame) {
+                clearInterval(tick);
+                if (rematchWaitNote) rematchWaitNote.textContent = "";
+                resolve("changed");
+                return;
+            }
+
+            if (isSettlementSettled(key)) {
+                clearInterval(tick);
+                if (rematchWaitNote) rematchWaitNote.textContent = "";
+                resolve("safe");
+                return;
+            }
+
+            if (isSettlementTerminalFailed(key)) {
+                clearInterval(tick);
+                if (rematchWaitNote) rematchWaitNote.textContent = "";
+                resolve("blocked");
+                return;
+            }
+
+            // Для transient failure НЕТ тайм-аута, который молча уничтожает
+            // authoritative outcome. requestSettlement сам держит backoff.
+            if (getSettlePhase(key) === "idle") requestSettlement();
+        }, 400);
+    });
+}
+
+function waitForSettlementBeforeRematch() {
+    return waitForSettlementBeforeRoomMutation();
+}
+
 btnRematchAccept.addEventListener("click", function () {
     rematchRequestModal.classList.add("hidden");
-    performRematchReset().then(function () {
-        database.ref("rooms/" + roomCode + "/players").once("value").then(function (snap) {
+    const generationAtAccept = (currentState && roomCode)
+        ? ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) : null;
+
+    waitForSettlementBeforeRematch().then(function (outcome) {
+        if (outcome === "blocked") {
+            showInfoModal(t("rating_settlement_failed"), false);
+            return "blocked";
+        }
+        if (outcome === "changed") return "changed";
+
+        // Между resolve("safe") и этим callback другое устройство/другой
+        // клик уже мог начать реванш. Проверяем поколение ЕЩЁ РАЗ до reset.
+        const stillOurFinishedGeneration = generationAtAccept && currentState && roomCode
+            && !!currentState.winner
+            && ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) === generationAtAccept;
+        if (!stillOurFinishedGeneration) return "changed";
+
+        return performRematchReset(generationAtAccept)
+            .then(function () { return "reset"; })
+            .catch(function (error) {
+                // Если другой callback опередил нас и уже начал N+1, это не
+                // ошибка реванша: ниже просто войдём в фактическое поколение.
+                if (error && error.message === "rematch_generation_changed") return "changed";
+                throw error;
+            });
+    }).then(function (outcome) {
+        if (outcome === "blocked" || !roomCode) return;
+        // После нашего reset либо после reset другого устройства читаем
+        // фактические стороны и только затем входим в новую партию.
+        return database.ref("rooms/" + roomCode + "/players").once("value").then(function (snap) {
             const players = snap.val() || {};
-            myColor = (players.light && players.light.id === myTelegramId) ? "light" : "dark";
+            if (players.light && players.light.id === myTelegramId) {
+                myColor = "light";
+            } else if (players.dark && players.dark.id === myTelegramId) {
+                myColor = "dark";
+            } else {
+                throw new Error("rematch_not_a_player");
+            }
             endGameModal.classList.add("hidden");
             showScreen(gameScreen);
             startOnlineGame();
@@ -7027,7 +7139,7 @@ function renderOnlineStatsRow(rank, name, wins, losses, draws, rating) {
 // повторное открытие модалки всегда начинается со свёрнутого состояния.
 
 // Компактная строка для рейтинга "С ботом": место, имя, победы, поражения,
-// монеты, игры — визуально на одном уровне с Online-строкой. Если у записи
+// игры — визуально на одном уровне с Online-строкой. Если у записи
 // есть byLevel (Medium/Hard появились после введения уровней сложности —
 // у старых партий его нет, и это нормально), строка кликабельна и по
 // нажатию раскрывает компактную панель разбивки. Easy никогда не пишет
@@ -7041,7 +7153,7 @@ function renderBotStatsRow(rank, name, wins, losses, byLevel) {
     infoSpan.className = "stats-info-block stats-info-bot";
     const total = wins + losses;
     // ЭТАП 2: 🪙 здесь больше НЕ показываем. Раньше в этой строке стоял общий
-    // economy.balance, который выглядел как "монеты, заработанные против бота",
+    // Старую колонку внутренней валюты здесь больше не показываем,
     // хотя таковым не был — цифра вводила в заблуждение. Общий баланс остаётся
     // там, где он и означает общий баланс: в капсуле интерфейса и в игровой
     // панели рядом с именем игрока.
@@ -7111,43 +7223,7 @@ function openBotDetailsModal(name, wins, losses, byLevel) {
 }
 
 // Отдельная строка для рейтинга "Заработано" — переиспользует те же
-// CSS-классы обрезки имени, но показывает только rank/имя/монеты.
-function renderCoinRankRow(rank, name, coins) {
-    const row = document.createElement("div");
-    row.className = "stats-row";
-
-    const rankSpan = document.createElement("span");
-    rankSpan.className = "stats-name-block";
-    const rankNumber = document.createElement("span");
-    rankNumber.className = "stats-rank";
-    rankNumber.textContent = rank + ".";
-    rankSpan.appendChild(rankNumber);
-
-    const maxNameLength = 14;
-    const displayName = (typeof name === "string" && name.length > maxNameLength)
-        ? name.substring(0, maxNameLength) + "…"
-        : name;
-
-    if (typeof name === 'string' && name.startsWith('@')) {
-        const link = document.createElement("a");
-        link.href = "https://t.me/" + name.substring(1);
-        link.textContent = displayName;
-        link.target = "_blank";
-        link.rel = "noopener noreferrer";
-        link.className = "stats-user-link";
-        rankSpan.appendChild(link);
-    } else {
-        rankSpan.appendChild(document.createTextNode(displayName));
-    }
-
-    const infoSpan = document.createElement("span");
-    infoSpan.className = "stats-info-block";
-    infoSpan.textContent = "🪙" + (coins || 0);
-
-    row.appendChild(rankSpan);
-    row.appendChild(infoSpan);
-    return row;
-}
+// CSS-классы обрезки имени, но показывает только rank/имя/результаты.
 
 // Общая сортировка для обоих рейтингов (Online и Bot):
 // 1) больше побед выше; 2) при равенстве — меньше поражений выше;
@@ -7173,6 +7249,7 @@ function compareLeaderboardEntries(a, b) {
 
 function openStatsModal() {
     statsLeaderboard.innerHTML = "";
+    if (statsYourRank) statsYourRank.textContent = "";
 
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
@@ -7194,8 +7271,7 @@ function openStatsModal() {
     // построению, а порядок всё равно задаёт compareLeaderboardEntries.
     //
     // Чтение целиком разрешено правилами: у stats ".read": true без
-    // ограничения на запрос — в отличие от economy, где чтение допускается
-    // только запросом топ-10. Индекс rating остаётся и работает для других
+    // ограничения на запрос. Индекс rating остаётся и работает для других
     // запросов, здесь он просто не нужен.
     //
     // ЦЕНА, называю честно: объём чтения растёт вместе с числом игроков.
@@ -7242,6 +7318,19 @@ function openStatsModal() {
         top.forEach(function (entry, index) {
             statsLeaderboard.appendChild(renderOnlineStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.draws, entry.rating));
         });
+
+        // МЕСТО ИГРОКА. Считается из этого же массива — ни одного
+        // дополнительного чтения. В главное меню место не выносим: туда
+        // пришлось бы читать всю ветку при каждом открытии.
+        if (statsYourRank) {
+            let myIndex = -1;
+            for (let i = 0; i < entries.length; i++) {
+                if (entries[i].id === myTelegramId) { myIndex = i; break; }
+            }
+            statsYourRank.textContent = (myIndex >= 0)
+                ? (t("stats_your_rank") + ": №" + (myIndex + 1) + " " + t("stats_rank_of") + " " + entries.length)
+                : "";
+        }
     }).catch(function () {
         statsLeaderboard.textContent = t("stats_load_error");
     });
@@ -7274,7 +7363,6 @@ function openStatsModal() {
             // ВСЕ игроки, без обрезания. Нумерация и медали — как в онлайне.
             const top = entries;
 
-            // ЭТАП 2: чтения economy/<id>/balance здесь больше нет. Раньше на
             // каждое открытие статистики уходило до 10 дополнительных запросов
             // ради колонки 🪙, которую мы убрали как вводящую в заблуждение.
             top.forEach(function (entry, index) {
@@ -8326,7 +8414,6 @@ function startFirebaseFlows(me) {
     if (!auth.currentUser || auth.currentUser.uid !== me.id) return false;
     if (localOnlyBotGame) { pendingFirebaseIdentity = me; firebaseAuthReady = false; return false; }
     myTelegramId = me.id; myTelegramName = me.name; firebaseAuthReady = true; firebaseFlowsStarted = true; pendingFirebaseIdentity = null;
-    initializeEconomy();
     const greetingNameSpan = document.getElementById("user-greeting-name");
     if (greetingNameSpan) { let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName; greetingNameSpan.textContent = displayName; }
     const joinedViaLink = checkForInviteLink();
@@ -9137,6 +9224,11 @@ function watchGroupRoomAsSpectator(code) {
             capturedDark: room.capturedDark || 0,
             capturedLight: room.capturedLight || 0,
             moveCount: room.moveCount || 0,
+            matchNumber: room.matchNumber || 0,
+            ratedMatchId: (typeof room.ratedMatchId === "string") ? room.ratedMatchId : null,
+            ratingsAtStart: room.ratingsAtStart || null,
+            createdAt: (typeof room.createdAt === "number") ? room.createdAt : null,
+            status: room.status || null,
             lastMove: room.lastMove || null,
             moveType: room.moveType || null,
             lastMovePath: room.lastMovePath || null,
@@ -9233,20 +9325,33 @@ function armPresenceReauthWatcher() {
     });
 }
 
+// ЖИЗНЕННЫЙ ЦИКЛ ВХОДА.
+//
+// Промис создаётся СРАЗУ, ещё до задержки в 100 мс, и включает её в себя.
+// Иначе игрок успевает нажать кнопку раньше, чем промис появится, и
+// дожидаться будет нечего — именно этим прошлая правка и была бесполезна.
 async function bootstrapApp() {
-    // Интерфейс поднимается ВСЕГДА: меню, язык, локальная партия с ботом.
     startApp();
 
-    try {
+    authPhase = "pending";
+    authPromise = (async function () {
+        // Те же 100 мс, что были: Telegram успевает разложить initData.
+        await new Promise(function (resolve) { setTimeout(resolve, 100); });
         const me = await authenticateTelegramUser();
         armPresenceReauthWatcher();
         queueOrStartFirebaseFlows(me);
+        return me;
+    })();
+
+    try {
+        await authPromise;
+        authPhase = "ready";
     } catch (error) {
         console.error("Telegram auth failed:", error);
         try { await auth.signOut(); } catch (e) {}
         firebaseAuthReady = false;
         pendingFirebaseIdentity = null;
-        // Fail closed: онлайн недоступен, локальная игра остаётся.
+        authPhase = "failed";
         showInfoModal(t("err_auth_required"), false);
     }
 }
@@ -9255,10 +9360,11 @@ async function bootstrapApp() {
 if (window.Telegram && window.Telegram.WebApp) {
     Telegram.WebApp.ready();
     Telegram.WebApp.expand();
-    setTimeout(bootstrapApp, 100); // Даём 100мс на инициализацию данных
+    bootstrapApp(); // задержка перенесена ВНУТРЬ authPromise
 } else {
     // Вне Telegram подписанного initData нет, значит нет и входа.
     // Интерфейс и партия с ботом работают, Firebase — нет.
     startApp();
+    authPhase = "failed";
     showInfoModal(t("err_auth_required"), false);
 }

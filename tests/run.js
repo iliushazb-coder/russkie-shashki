@@ -28,8 +28,6 @@ const FILES = [
   ['F. INVITE-LINK JOIN',    'invite-join.test.js'],
   ['G. ROOM LIFECYCLE CLEANUP', 'room-cleanup.test.js'],
   ['H. PRESENCE LIFECYCLE (A+B+C+C-1, v171)', 'presence-lifecycle.test.js'],
-  ['I. ONLINE ELO RATING (Этап 1)', 'elo-rating.test.js'],
-  ['J. COINS / ECONOMY (Этап 2)', 'coins-economy.test.js'],
   ['K. LEADERBOARD UI 50/50 + BOT DETAILS', 'leaderboard-ui.test.js'],
   ['M. REMATCH RESULT ATTRIBUTION', 'rematch-attribution.test.js'],
   ['N. ONLINE MOVE SYNC', 'move-sync.test.js'],
@@ -44,6 +42,8 @@ const FILES = [
   ['W. INVITE JOIN RACE — атомарный захват места', 'invite-race.test.js'],
   ['X. FIREBASE AUTH GATE v193', 'auth-gate-v193.test.js'],
   ['Y. ВОРОТА: ЗАКРЕПЛЕНИЕ ГАРАНТИЙ', 'auth-gate-regression.test.js'],
+  ['Z. C1: РЕЙТИНГ ВМЕСТО МОНЕТ', 'c1-rating-ui.test.js'],
+  ['Z2. C1: ШЕСТЬ БЛОКЕРОВ', 'c1-blockers.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

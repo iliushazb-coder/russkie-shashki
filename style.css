@@ -1291,54 +1291,28 @@ h1 {
         opacity: 0; 
     }
 }
-/* ===== МОНЕТЫ: капсула баланса и всплывающее окошко ===== */
-
-.coin-balance-capsule {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    margin: 4px auto 10px;
-    padding: 6px 16px;
-    width: fit-content;
-    background: linear-gradient(180deg, rgba(255,210,130,0.18), rgba(255,210,130,0.08));
-    border: 1px solid rgba(255,210,130,0.4);
-    border-radius: 20px;
-    color: #fff3d6;
-    font-size: 15px;
-    font-weight: 600;
-    letter-spacing: 0.3px;
+/* Изменение рейтинга в окне итога партии. */
+.end-game-rating {
+    margin-top: 6px;
+    font-size: clamp(12px, 3.2vw, 15px);
+    opacity: 0.9;
+    white-space: pre-line;
 }
 
-.coin-popup {
-    position: fixed;
-    top: 18%;
-    left: 50%;
-    transform: translate(-50%, -10px);
-    background: rgba(30, 22, 12, 0.92);
-    border: 1px solid rgba(255,210,130,0.5);
-    border-radius: 16px;
-    padding: 10px 22px;
-    color: #ffd27a;
-    font-size: 20px;
-    font-weight: 700;
-    z-index: 500;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s ease, transform 0.25s ease;
+/* Место игрока в окне статистики. */
+.stats-your-rank {
+    margin: 4px 0 8px;
+    font-size: clamp(12px, 3.2vw, 14px);
+    opacity: 0.85;
 }
 
-.coin-popup.hidden {
+/* Короткий статус между итогом партии и безопасным реваншем. */
+.rematch-wait-note {
+    margin: 4px 0 8px;
+    min-height: 1.2em;
+    font-size: clamp(11px, 3vw, 14px);
+    opacity: 0.82;
+}
+.rematch-wait-note:empty {
     display: none;
-}
-
-.coin-popup.coin-popup-show {
-    opacity: 1;
-    transform: translate(-50%, 0);
-    animation: coinPopupPulse 0.35s ease;
-}
-
-@keyframes coinPopupPulse {
-    0% { transform: translate(-50%, 8px) scale(0.9); opacity: 0; }
-    60% { transform: translate(-50%, -2px) scale(1.04); opacity: 1; }
-    100% { transform: translate(-50%, 0) scale(1); opacity: 1; }
 }

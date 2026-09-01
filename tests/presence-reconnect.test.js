@@ -972,10 +972,10 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('24.3 существующая UID-атрибуция не тронута',
         /function resolveMyOnlineResult\(state\) \{/.test(SRC) &&
         /const winnerId = \(state\.winner === "light"\) \? lightId : darkId;/.test(SRC));
-    check('24.4 Elo-квитанция по-прежнему единственная точка записи рейтинга',
-        (SRC.match(/updates\["eloMatches\/" \+ ctx\.matchId\]/g) || []).length === 1);
-    check('24.5 дедуп монет не тронут',
-        /rewardedMatches/.test(SRC) && /coinRewardAttemptForMatch === matchId/.test(SRC));
+    check('24.4 рейтинг пишет ТОЛЬКО сервер',
+        /requestSettlement\(\)/.test(SRC) && !/updates\["eloMatches\//.test(SRC));
+    check('24.5 монет в клиенте нет',
+        !/getCurrentCoinReward|recordCoinResultOnce|economy\//.test(SRC));
     check('24.6 вернувшийся проигравший идёт через тот же resolveMyOnlineResult',
         /const myResult = resolveMyOnlineResult\(currentState\);/.test(SRC));
     check('24.7 у технической победы есть объяснение во всех трёх языках',

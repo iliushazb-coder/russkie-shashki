@@ -1,4 +1,11 @@
 const fs = require('fs');
+
+// v194: панель показывает рейтинг отдельным сегментом, а окно итога —
+// изменение рейтинга. Харнессу нужны эти элементы.
+global.ratingSegmentForColor = function () { return ''; };
+global.endGameRating = { textContent: '' };
+global.statsYourRank = { textContent: '' };
+global.lastSettlementDisplay = null;
 const scriptCode = fs.readFileSync(process.env.TARGET_SCRIPT || require('path').join(__dirname,'..','script.js'), 'utf8');
 function extractFunc(name) {
     const re = new RegExp('function ' + name + '\\([^)]*\\) \\{', 'g');

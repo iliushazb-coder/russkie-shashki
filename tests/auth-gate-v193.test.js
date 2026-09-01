@@ -127,10 +127,11 @@ global.document={getElementById:()=>null};
 eval(grab('startFirebaseFlows')); eval(grab('queueOrStartFirebaseFlows')); eval(grab('activatePendingFirebaseFlows'));
 global.localOnlyBotGame=true; global.firebaseAuthReady=false; auth.currentUser={uid:'tg_77'};
 check('12. verified identity is deferred during local-only', queueOrStartFirebaseFlows({id:'tg_77',name:'N'})===false && pendingFirebaseIdentity.id==='tg_77');
-check('13. deferred auth does not start economy/lobby', economy===0 && active===0 && firebaseAuthReady===false);
+// v194: экономики больше нет, остаётся лобби.
+check('13. deferred auth does not start lobby', active===0 && firebaseAuthReady===false);
 global.localOnlyBotGame=false;
 check('14. exiting local-only activates pending identity', activatePendingFirebaseFlows()===true);
-check('15. deferred flows start once after exit', economy===1 && active===1 && myTelegramId==='tg_77' && firebaseAuthReady===true);
+check('15. deferred flows start once after exit', active===1 && myTelegramId==='tg_77' && firebaseAuthReady===true);
 
 console.log('\n=== TOKEN WATCHER FAIL-CLOSED ===');
 let stopped=0, revived=0;

@@ -27,6 +27,18 @@
 // 1, 2, 4, 5, 6 обязаны падать на v170 и проходить на исправленной версии.
 const { SRC, extractFunc } = require('./helpers/loader');
 
+// v194-R3: панель показывает рейтинг отдельным сегментом, окно итога —
+// изменение рейтинга, а окно статистики — место игрока. Харнессу нужны
+// эти элементы и функции.
+if (!global.statsYourRank) global.statsYourRank = { textContent: '' };
+if (!global.endGameRating) global.endGameRating = { textContent: '' };
+if (!global.rematchWaitNote) global.rematchWaitNote = { textContent: '' };
+if (!global.lastSettlementDisplay) global.lastSettlementDisplay = null;
+if (!global.resetSettlementDisplay) global.resetSettlementDisplay = function () {};
+if (!global.ratingSegmentForColor) global.ratingSegmentForColor = function () { return ''; };
+if (!global.requestSettlement) global.requestSettlement = function () {};
+if (!global.requestRatedJoin) global.requestRatedJoin = function () {};
+
 
 // v193 auth harness: these legacy behavioural suites exercise already-authenticated flows.
 global.firebaseAuthReady = true;

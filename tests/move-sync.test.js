@@ -481,8 +481,8 @@ function chainRoom() {
         /const winnerId = \(state\.winner === "light"\) \? lightId : darkId;/.test(SRC));
     check('50. online-статистика по-прежнему считает результат по UID',
         /didIWin = \(myResult === "win"\);/.test(SRC));
-    check('51. online-монеты по-прежнему считают результат по UID',
-        /const myResult = resolveMyOnlineResult\(currentState\);\s*\n\s*if \(myResult === null\) return null;/.test(SRC));
+    check('51. клиент не считает монеты вовсе',
+        !/getCurrentCoinReward|recordCoinResultOnce|economy\//.test(SRC));
     check('52. bot-ветка статистики не тронута ни UID-фиксом, ни sync-патчем',
         /if \(isBotGame\) \{\s*\n\s*didIWin = currentState\.winner === myColor;/.test(SRC));
     check('53. восстановление обновляет players, из которых берётся UID', (function () {
@@ -493,10 +493,8 @@ function chainRoom() {
         const m = /function resolveMyOnlineResult[\s\S]*?\n}/.exec(SRC);
         return m && !/pendingMoveStartedAt|syncRecovery|isFirebaseConnected/.test(m[0]);
     })());
-    check('55. Elo-квитанция не зависит от sync-состояния', (function () {
-        const m = /function recordEloMatchResult[\s\S]*?\n}/.exec(SRC);
-        return m && !/pendingMoveStartedAt|syncRecovery|isFirebaseConnected/.test(m[0]);
-    })());
+    check('55. запрос расчёта не зависит от sync-состояния',
+        /requestSettlement\(\)/.test(SRC) && !/updates\["eloMatches\//.test(SRC));
     check('56. движок ходов и правила шашек не тронуты',
         /if \(turn !== actingColor\) return null;/.test(SRC) &&
         /mustContinueFrom\.row !== fromRow/.test(SRC));

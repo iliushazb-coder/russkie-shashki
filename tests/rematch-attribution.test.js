@@ -61,10 +61,10 @@ try {
     eval(extractFunc('buildEloMatchId'));
     eval(extractFunc('getEloMatchContext'));
     eval(extractFunc('resolveMyOnlineResult'));
+    // v194-R3: recordGameResult опирается на серверную регистрацию.
+    eval(extractFunc('registeredMatchIdForState'));
     eval(extractFunc('recordGameResult'));
-    global.COIN_REWARDS = {};
-    /const COIN_REWARDS = \{([\s\S]*?)\n\};/.exec(SRC)[1].replace(/(\w+):\s*(-?\d+)/g, function (_, k, v) { global.COIN_REWARDS[k] = Number(v); return ''; });
-    eval(extractFunc('getCurrentCoinReward'));
+    // v194: монет больше нет, COIN_REWARDS удалён вместе с подсистемой.
 
     // Настоящий блок пересчёта myColor после реванша — вырезаем из слушателя
     // комнаты (он живёт внутри startOnlineGame и отдельной функцией не является).
@@ -136,102 +136,46 @@ function L(uid) { return (DB.stats[uid] && DB.stats[uid].losses) || 0; }
     await recordAs(tanya, game1End, 'ROOM_T_0_30');
     await recordAs(zhuk, game1End, 'ROOM_T_0_30');
 
-    check('1. партия 1: Татьяна получила победу', W(TANYA) === 4, 'wins=' + W(TANYA));
-    check('2. партия 1: Жуковская получила поражение', L(ZHUK) === 1, 'losses=' + L(ZHUK));
+    // v194: клиент больше НЕ пишет статистику онлайн-партий — её пишет
+// сервер по данным своей карточки матча. Поэтому проверять «кому
+// начислилась победа» на клиенте больше нечего. Вместо этого фиксируем
+// главное: клиент запрашивает расчёт и НЕ пишет сам, а атрибуция
+// по-прежнему определяется UID, а не устаревшим myColor.
+check('1. онлайн-путь НЕ пишет статистику с клиента',
+    !/database\.ref\(statsPath \+ "\/" \+ myTelegramId\)[\s\S]{0,200}isBotGame/.test(SRC)
+    && /if \(!isBotGame\) \{[\s\S]{0,120}return;/.test(SRC));
+check('2. клиент запрашивает расчёт у сервера',
+    /requestSettlement\(\)/.test(SRC) && /\/rated\/settle/.test(SRC));
+check('3. атрибуция берётся из UID, а не из myColor',
+    /const myResult = resolveMyOnlineResult\(currentState\);/.test(SRC));
+check('4. реванш меняет стороны, и это учтено сменой поколения',
+    /ratedGenerationKey/.test(SRC) && /matchNumber/.test(SRC));
+check('5. расчёт привязан к поколению завершённой партии',
+    /freezeSettlementContext/.test(SRC));
+check('6. устаревший ответ не относится к новой партии',
+    /currentKey !== ratedGenerationKey/.test(SRC));
+check('7. реванш ждёт подтверждения расчёта',
+    /waitForSettlementBeforeRematch/.test(SRC));
+check('8. сброс выполняется ТОЛЬКО после ожидания расчёта', (function () {
+    // R3 усилил: сброс идёт внутри .then(), плюс поколение сверяется
+    // ПОВТОРНО перед самим reset — защита от двойного нажатия.
+    const wait = SRC.indexOf('waitForSettlementBeforeRematch().then(');
+    const reset = SRC.indexOf('return performRematchReset(generationAtAccept)');
+    const recheck = SRC.indexOf('stillOurFinishedGeneration');
+    return wait !== -1 && reset !== -1 && recheck !== -1
+        && wait < recheck && recheck < reset;
+})());
+check('9. клиент не пишет eloMatches', !/updates\["eloMatches\//.test(SRC));
 
-    // --- РЕВАНШ: цвета меняются ---
-    const game2Players = { light: { id: ZHUK, name: 'Zhukovskaya' }, dark: { id: TANYA, name: 'Tatiana' } };
-    const rematchState = {
-        winner: null, moveCount: 0, matchNumber: 1, createdAt: 1700000000000,
-        players: game2Players, ratingsAtStart: null
-    };
-
-    // Оба клиента получают сброс через слушатель комнаты и обязаны
-    // пересчитать свой цвет НАСТОЯЩИМ кодом из script.js.
-    [tanya, zhuk].forEach(function (c) {
-        const ctx = {
-            currentState: c.currentState, myTelegramId: c.uid, myColor: c.myColor,
-            flipped: false, boardBuilt: true, statsCache: {}, setupPresence: function () {}
-        };
-        c.myColor = applyRematchColorSwap(rematchState, ctx);
-        c.currentState = rematchState;
-    });
-
-    check('3. после реванша Татьяна пересчитала себя в dark', tanya.myColor === 'dark', tanya.myColor);
-    check('4. после реванша Жуковская пересчитала себя в light', zhuk.myColor === 'light', zhuk.myColor);
-
-    // --- ПАРТИЯ 2: побеждает Татьяна, теперь она dark ---
-    const game2End = {
-        winner: 'dark', moveCount: 28, matchNumber: 1, createdAt: 1700000000000,
-        players: game2Players, ratingsAtStart: null
-    };
-    await recordAs(tanya, game2End, 'ROOM_T_1_28');
-    await recordAs(zhuk, game2End, 'ROOM_T_1_28');
-
-    console.log('   Татьяна:     🏆' + W(TANYA) + ' ❌' + L(TANYA));
-    console.log('   Жуковская:   🏆' + W(ZHUK) + ' ❌' + L(ZHUK));
-
-    check('5. ИТОГ: у Татьяны 5 побед и 3 поражения (две победы подряд)',
-        W(TANYA) === 5 && L(TANYA) === 3, '🏆' + W(TANYA) + ' ❌' + L(TANYA));
-    check('6. ИТОГ: у Жуковской 0 побед и 2 поражения',
-        W(ZHUK) === 0 && L(ZHUK) === 2, '🏆' + W(ZHUK) + ' ❌' + L(ZHUK));
-    check('7. НЕ воспроизводится реальный баг «1:1»',
-        !(W(TANYA) === 4 && L(TANYA) === 4 && W(ZHUK) === 1 && L(ZHUK) === 1),
-        'воспроизведено ровно то, что было в проде');
-
-    // =================================================================
-    console.log('ЗЕРКАЛЬНЫЙ СЦЕНАРИЙ: побеждает тот, кто был dark, затем light');
-    // =================================================================
-    DB = { stats: {}, rooms: {} };
-    DB.stats[TANYA] = { wins: 0, losses: 0, name: 'Tatiana' };
-    DB.stats[ZHUK] = { wins: 0, losses: 0, name: 'Zhukovskaya' };
-    const a = makeClient(TANYA, 'Tatiana', 'dark');
-    const b = makeClient(ZHUK, 'Zhukovskaya', 'light');
-    const p1 = { light: { id: ZHUK, name: 'Z' }, dark: { id: TANYA, name: 'T' } };
-    const g1 = { winner: 'dark', moveCount: 20, matchNumber: 0, createdAt: 1, players: p1, ratingsAtStart: null };
-    a.currentState = g1; b.currentState = g1;
-    await recordAs(a, g1, 'M_0_20');
-    await recordAs(b, g1, 'M_0_20');
-    const p2 = { light: { id: TANYA, name: 'T' }, dark: { id: ZHUK, name: 'Z' } };
-    const reset2 = { winner: null, moveCount: 0, matchNumber: 1, createdAt: 1, players: p2, ratingsAtStart: null };
-    [a, b].forEach(function (c) {
-        const ctx = { currentState: c.currentState, myTelegramId: c.uid, myColor: c.myColor, flipped: false, boardBuilt: true, statsCache: {}, setupPresence: function () {} };
-        c.myColor = applyRematchColorSwap(reset2, ctx);
-        c.currentState = reset2;
-    });
-    const g2 = { winner: 'light', moveCount: 22, matchNumber: 1, createdAt: 1, players: p2, ratingsAtStart: null };
-    await recordAs(a, g2, 'M_1_22');
-    await recordAs(b, g2, 'M_1_22');
-    check('8. зеркальный случай: победитель получил обе победы',
-        W(TANYA) === 2 && L(TANYA) === 0 && W(ZHUK) === 0 && L(ZHUK) === 2,
-        'T ' + W(TANYA) + '/' + L(TANYA) + ' Z ' + W(ZHUK) + '/' + L(ZHUK));
-
-    // =================================================================
-    console.log('ЧТО БУДЕТ, ЕСЛИ myColor УСТАРЕЛ (клиент без пересчёта цвета)');
-    // =================================================================
-    DB = { stats: {}, rooms: {} };
-    DB.stats[TANYA] = { wins: 3, losses: 3, name: 'Tatiana' };
-    DB.stats[ZHUK] = { wins: 0, losses: 0, name: 'Zhukovskaya' };
-    const staleT = makeClient(TANYA, 'Tatiana', 'light'); // НЕ пересчитал цвет
-    const staleZ = makeClient(ZHUK, 'Zhukovskaya', 'dark'); // НЕ пересчитал цвет
-    await recordAs(staleT, game2End, 'ROOM_T_1_28');
-    await recordAs(staleZ, game2End, 'ROOM_T_1_28');
-    // ДО фикса здесь получалось перевёрнутое T 3/4, Z 1/0 — ровно то, что
-    // видели пользователи. После перехода на UID результат верен даже тогда,
-    // когда локальный цвет у ОБЕИХ сторон устарел.
-    check('9. устаревший myColor больше НЕ переворачивает результат партии',
-        W(TANYA) === 4 && L(TANYA) === 3 && W(ZHUK) === 0 && L(ZHUK) === 1,
-        'T ' + W(TANYA) + '/' + L(TANYA) + ' Z ' + W(ZHUK) + '/' + L(ZHUK));
-
-    // =================================================================
-    console.log('УСТОЙЧИВОСТЬ ЗАПИСИ РЕЗУЛЬТАТА');
-    // =================================================================
-    check('10. online-путь статистики определяет победителя через UID-резолвер',
+check('10. online-путь статистики определяет победителя через UID-резолвер',
         /const myResult = resolveMyOnlineResult\(currentState\);/.test(SRC) &&
         /didIWin = \(myResult === "win"\);/.test(SRC));
-    check('11. Elo-путь (receipt) определяет победителя по UID из players — он от myColor НЕ зависит',
-        /lightId: lightId,\s*\n\s*darkId: darkId,/.test(SRC) &&
-        /updates\["stats\/" \+ ctx\.lightId \+ "\/wins"\] = inc\(1\)/.test(SRC));
+    // v194: клиент больше не пишет квитанцию — расчёт выполняет Worker.
+    // Проверяем, что атрибуция ушла на сервер, а клиент лишь просит расчёт.
+    check('11. клиент НЕ строит Elo-квитанцию сам',
+        !/updates\["eloMatches\//.test(SRC));
+    check('11b. клиент запрашивает расчёт у сервера',
+        /requestSettlement\(\)/.test(SRC) && /\/rated\/settle/.test(SRC));
 
     // =================================================================
     console.log('UID-АТРИБУЦИЯ: ЗАЩИТА ОТ ПЕРЕВЁРНУТОГО РЕЗУЛЬТАТА');
@@ -275,26 +219,18 @@ function L(uid) { return (DB.stats[uid] && DB.stats[uid].losses) || 0; }
     ctxFor(TANYA, 'light', rematchTanyaWins); // myColor остался от партии 1
     check('19. УСТАРЕВШИЙ myColor НЕ переворачивает статистику',
         resolveMyOnlineResult(rematchTanyaWins) === 'win');
-    check('20. УСТАРЕВШИЙ myColor НЕ переворачивает награду в монетах',
-        getCurrentCoinReward() === global.COIN_REWARDS.onlineWin,
-        String(getCurrentCoinReward()));
     ctxFor(ZHUK, 'dark', rematchTanyaWins); // тоже устаревший
     check('21. у соперницы с устаревшим цветом тоже верно: поражение',
         resolveMyOnlineResult(rematchTanyaWins) === 'loss');
-    check('22. и награда за поражение, а не за победу',
-        getCurrentCoinReward() === global.COIN_REWARDS.onlineLoss);
 
     // Ничья не зависит от цвета вовсе
     const drawState = { winner: 'draw', moveCount: 40, matchNumber: 0, createdAt: 1, players: pAB, ratingsAtStart: null };
     ctxFor(TANYA, 'dark', drawState);
-    check('23. ничья: результат draw и награда за ничью обоим',
-        resolveMyOnlineResult(drawState) === 'draw' && getCurrentCoinReward() === global.COIN_REWARDS.onlineDraw);
 
     // Я не участник комнаты
     ctxFor('tg_stranger', 'light', lightWins);
     check('24. UID не найден среди игроков -> результат не определяется',
         resolveMyOnlineResult(lightWins) === null);
-    check('25. и монеты такому клиенту не начисляются', getCurrentCoinReward() === null);
     DB.stats['tg_stranger'] = undefined;
     const strangerClient = makeClient('tg_stranger', 'Stranger', 'light');
     await recordAs(strangerClient, lightWins, 'X_0_10');
@@ -314,18 +250,17 @@ function L(uid) { return (DB.stats[uid] && DB.stats[uid].losses) || 0; }
     // Бот не затронут
     check('29. bot-ветка статистики по-прежнему считает по myColor',
         /if \(isBotGame\) \{\s*\n\s*didIWin = currentState\.winner === myColor;/.test(SRC));
-    check('30. bot-ветка монет по-прежнему возвращает null (Этап 2)',
-        /if \(isBotGame\) \{[\s\S]{0,600}?return null;/.test(SRC));
+    check('30. монет в клиенте нет вовсе',
+        !/getCurrentCoinReward|recordCoinResultOnce|economy\//.test(SRC));
     global.isBotGame = true; global.isOnlineGame = false;
     global.currentState = { winner: 'light', moveCount: 10, players: null };
     global.myColor = 'light';
-    check('31. в bot-партии UID-логика не применяется и награды нет',
-        getCurrentCoinReward() === null);
 
     // Elo не менялся
-    check('32. Elo-путь не изменён: победитель по-прежнему из lightId/darkId',
-        /updates\["stats\/" \+ ctx\.lightId \+ "\/wins"\] = inc\(1\)/.test(SRC) &&
-        /updates\["stats\/" \+ ctx\.darkId \+ "\/wins"\] = inc\(1\)/.test(SRC));
+    // v194: клиент больше не пишет stats — атрибуция ушла на сервер,
+    // где победитель определяется по участникам серверной карточки матча.
+    check('32. клиент НЕ пишет stats напрямую',
+        !/updates\["stats\//.test(SRC));
     check('33. getEloMatchContext не использует myColor для определения победителя',
         !/myColor/.test(/function getEloMatchContext[\s\S]*?\n}/.exec(SRC)[0]));
 

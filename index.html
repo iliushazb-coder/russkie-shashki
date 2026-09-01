@@ -13,15 +13,12 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
-    <link rel="stylesheet" href="style.css?v=14">
+    <link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
     <h1 data-i18n="h1_title">Русские Шашки 🎮</h1>
 
     <div id="menu-screen">
-        <div id="coin-balance-capsule" class="coin-balance-capsule">
-            🪙 <span id="coin-balance-value">0</span>
-        </div>
         <button id="btn-play-online" class="menu-button" data-i18n="btn_play_online">👥 Кто играет?</button>
         <button id="btn-play-friend" class="menu-button" data-i18n="btn_play_friend">👥 Играть с другом</button>
         <button id="btn-play-bot" class="menu-button" data-i18n="btn_play_bot">🤖 Играть с ботом</button>
@@ -109,10 +106,6 @@
 
     <div id="emoji-burst-container" class="emoji-burst-container"></div>
 
-    <div id="coin-popup" class="coin-popup hidden">
-        <span id="coin-popup-text"></span>
-    </div>
-
     <div id="resign-confirm-modal" class="hidden modal-overlay">
         <div class="modal-box">
             <p data-i18n="confirm_resign">Вы уверены, что хотите сдаться?</p>
@@ -137,6 +130,8 @@
         <div class="modal-box">
             <p id="end-game-text" class="end-game-text"></p>
             <p id="end-game-subtext" class="end-game-subtext"></p>
+            <p id="end-game-rating" class="end-game-rating"></p>
+            <p id="rematch-wait-note" class="rematch-wait-note"></p>
             <div class="modal-buttons">
                 <button id="btn-new-game" class="menu-button" data-i18n="btn_rematch">Реванш</button>
                 <button id="btn-close-game" class="menu-button" data-i18n="btn_close">Закрыть</button>
@@ -186,6 +181,7 @@
 
             <div class="stats-modal-body">
                 <div id="stats-view-online">
+                    <p id="stats-your-rank" class="stats-your-rank"></p>
                     <div id="stats-leaderboard" class="stats-leaderboard"></div>
                 </div>
 
@@ -269,6 +265,6 @@
 
     <div id="credit-footer">Разработчик: <a href="https://t.me/yliusha" target="_blank" rel="noopener noreferrer">Telegram @yliusha</a></div>
 
-    <script src="script.js?v=193"></script>
+    <script src="script.js?v=194"></script>
 </body>
 </html>
