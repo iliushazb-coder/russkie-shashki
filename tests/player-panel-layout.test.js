@@ -1,8 +1,9 @@
 // ==========================================================================
-// BUG 2: ширина игровых панелей и порядок сокращения.
+// ПАНЕЛЬ ИГРОКА: ФИКСИРОВАННАЯ СЕТКА И СТОПКА ВЗЯТЫХ ШАШЕК.
 //
-// Проверяется и разметка, и расчёт ширины: панель обязана равняться доске,
-// а сокращаться разрешено ТОЛЬКО имени.
+// Главное требование: вертикали одинаковы у верхней и нижней панели и не
+// зависят ни от длины имени, ни от рейтинга, ни от статуса, ни от числа
+// съеденных шашек. Поэтому проверяется именно СЕТКА, а не поток.
 // ==========================================================================
 const fs = require('fs');
 const path = require('path');
@@ -15,121 +16,171 @@ function check(n, c, i) {
     if (c) { passed++; console.log('  ✅ ' + n); }
     else { failed++; console.log('  ❌ ' + n + (i ? '  — ' + i : '')); }
 }
-// Возвращает тело правила по селектору.
+// Экранируем ВСЕ спецсимволы регулярки: селекторы содержат + и :nth-last-child(n+5),
+// и без этого правило просто не находилось, хотя в CSS оно есть.
 function rule(sel) {
-    const re = new RegExp('(^|\\n)' + sel.replace(/[.#*]/g, '\\$&') + '\\s*\\{([^}]*)\\}');
-    const m = re.exec(CSS);
+    const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = new RegExp('(^|\\n)' + esc + '\\s*\\{([^}]*)\\}').exec(CSS);
     return m ? m[2] : null;
 }
 function has(sel, prop, value) {
     const b = rule(sel);
     if (!b) return false;
-    const re = new RegExp(prop + '\\s*:\\s*' + (value || '[^;]+'));
-    return re.test(b);
+    return new RegExp(prop + '\\s*:\\s*' + (value || '[^;]+')).test(b);
 }
 
-console.log('=== 1. ШИРИНА ПАНЕЛИ ПРИВЯЗАНА К ДОСКЕ ===');
-check('1.1 переменная ширины доски объявлена', /--board-total\s*:/.test(CSS));
-check('1.2 считается из тех же переменных, что и доска', (function () {
-    const m = /--board-total\s*:\s*([^;]+);/.exec(CSS);
-    return m && /--coord-size/.test(m[1]) && /--cell-size/.test(m[1]);
-})(), 'иначе панель разойдётся с доской');
-check('1.3 учтены padding и рамка обёртки', (function () {
-    const m = /--board-total\s*:\s*([^;]+);/.exec(CSS);
-    // 12px padding * 2 + 2px рамка * 2 = 28px
-    return m && /28px/.test(m[1]);
+console.log('=== 1. ПАНЕЛЬ — СЕТКА, А НЕ ПОТОК ===');
+check('1.1 display: grid', has('.player-panel', 'display', 'grid'),
+    'при flex короткое имя утаскивало рейтинг влево');
+check('1.2 четыре колонки объявлены', (function () {
+    const b = rule('.player-panel');
+    if (!b) return false;
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(b);
+    if (!m) return false;
+    // имя | рейтинг | статус | стопка
+    return /minmax\([^)]*1fr\)/.test(m[1]) && (m[1].match(/ch/g) || []).length >= 3;
 })());
-check('1.4 панель занимает всю доступную ширину', has('.player-panel', 'width', '100%'));
-check('1.5 но не шире доски', has('.player-panel', 'max-width', 'var\\(--board-total\\)'));
-check('1.6 панель центрирована', has('.player-panel', 'align-self', 'center'));
-check('1.7 обе панели используют ОДИН класс', (function () {
-    const top = /id="player-top"[^>]*class="[^"]*player-panel/.test(HTML)
-        || /class="player-panel"[^>]*id="player-top"/.test(HTML);
-    const bot = /id="player-bottom"[^>]*class="[^"]*player-panel/.test(HTML)
-        || /class="player-panel"[^>]*id="player-bottom"/.test(HTML);
-    return top && bot;
-})(), 'иначе одинаковость не гарантирована');
+check('1.3 колонка рейтинга вмещает ⭐99999', (function () {
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
+    if (!m) return false;
+    // Колонка рейтинга — вторая по счёту. Первое вхождение ch теперь
+    // принадлежит нижней границе имени, поэтому берём именно вторую.
+    const all = m[1].match(/(\d+(?:\.\d+)?)ch/g) || [];
+    return all.length >= 2 && parseFloat(all[1]) >= 7;
+})(), 'иначе рейтинг 10000+ сломает вёрстку');
+check('1.4 ширина по-прежнему по доске', (function () {
+    const b = rule('.player-panel') || '';
+    return b.indexOf('max-width: var(--board-total)') !== -1;
+})());
+check('1.5 обе панели используют один класс',
+    /id="player-top"/.test(HTML) && /id="player-bottom"/.test(HTML)
+    && (HTML.match(/class="player-panel"/g) || []).length === 2);
 
-console.log('\n=== 2. СОКРАЩАЕТСЯ ТОЛЬКО ИМЯ ===');
-check('2.1 у имени есть многоточие', has('.player-name-text', 'text-overflow', 'ellipsis'));
-check('2.2 и запрет переноса', has('.player-name-text', 'white-space', 'nowrap'));
-check('2.3 и min-width: 0', has('.player-name-text', 'min-width', '0'),
-    'без него ellipsis не сработает во flex');
-check('2.4 имя ограничено долей ширины, а не пикселями', (function () {
-    const b = rule('.player-name-text');
-    return b && /max-width\s*:\s*\d+%/.test(b);
-})());
-check('2.5 РЕЙТИНГ не сжимается', has('.player-rating', 'flex', '0 0 auto'));
-check('2.6 и не переносится', has('.player-rating', 'white-space', 'nowrap'));
-check('2.7 у рейтинга НЕТ многоточия', !/text-overflow/.test(rule('.player-rating') || ''));
-check('2.8 СТАТУС не сжимается', has('.player-status', 'flex', '0 0 auto'));
-check('2.9 и не переносится', has('.player-status', 'white-space', 'nowrap'));
-check('2.10 у статуса НЕТ многоточия', !/text-overflow/.test(rule('.player-status') || ''));
-check('2.11 контейнер имени имеет min-width: 0', has('.player-name', 'min-width', '0'));
-
-console.log('\n=== 3. РАЗДЕЛЕНИЕ ИМЕНИ И РЕЙТИНГА ===');
-check('3.1 рейтинг больше НЕ склеен с именем одной строкой',
-    !/playerTopName\.textContent\s*=\s*\(/.test(SRC),
-    'иначе многоточие съело бы Elo');
-check('3.2 есть отдельная функция отрисовки', /function renderPlayerNameCell\(/.test(SRC));
-check('3.3 используется для обеих панелей', (function () {
-    return /renderPlayerNameCell\(playerTopName/.test(SRC)
-        && /renderPlayerNameCell\(playerBottomName/.test(SRC);
-})());
-check('3.4 имя вставляется через textContent, НЕ innerHTML', (function () {
-    const m = /function renderPlayerNameCell\([\s\S]*?\n\}/.exec(SRC);
-    return m && /textContent/.test(m[0]) && !/innerHTML/.test(m[0]);
-})(), 'имя приходит из Telegram — это внешние данные');
-check('3.5 узлы переиспользуются, а не пересоздаются каждый ход', (function () {
-    const m = /function renderPlayerNameCell\([\s\S]*?\n\}/.exec(SRC);
-    return m && /querySelector\("\.player-name-text"\)/.test(m[0]);
+console.log('\n=== 2. ЧЕТЫРЕ ЯЧЕЙКИ В РАЗМЕТКЕ ===');
+['top', 'bottom'].forEach(function (side) {
+    check('2.x ' + side + ': имя, рейтинг, статус, шашки', (function () {
+        return new RegExp('id="player-' + side + '-name"').test(HTML)
+            && new RegExp('id="player-' + side + '-rating"').test(HTML)
+            && new RegExp('id="player-' + side + '-status"').test(HTML)
+            && new RegExp('id="player-' + side + '-captured"').test(HTML);
+    })());
+});
+check('2.y порядок ячеек одинаков у обеих панелей', (function () {
+    const order = s => ['name', 'rating', 'status', 'captured']
+        .map(k => HTML.indexOf('id="player-' + s + '-' + k + '"'));
+    const t = order('top'), b = order('bottom');
+    const asc = a => a.every((v, i) => i === 0 || (v > a[i - 1] && v !== -1));
+    return asc(t) && asc(b);
 })());
 
-console.log('\n=== 4. СЪЕДЕННЫЕ ШАШКИ НЕ ЛОМАЮТ СТРОКУ ===');
-check('4.1 ширина адаптивная, а не фиксированные пиксели', (function () {
-    const b = rule('.captured-icons');
-    return b && /max-width\s*:\s*min\(/.test(b);
-})(), 'на экране 320px жёсткие 130px выдавили бы статус');
-check('4.2 могут сжиматься', has('.captured-icons', 'flex', '0 1 auto'));
-check('4.3 перенос строк сохранён', has('.captured-icons', 'flex-wrap', 'wrap'));
-check('4.4 не выходят за край', has('.captured-icons', 'overflow', 'hidden'));
+console.log('\n=== 3. ЧТО СОКРАЩАЕТСЯ ===');
+check('3.1 имя сокращается многоточием', has('.player-name', 'text-overflow', 'ellipsis'));
+check('3.2 и не переносится', has('.player-name', 'white-space', 'nowrap'));
+check('3.3 min-width: 0 у имени', has('.player-name', 'min-width', '0'),
+    'без него колонка не сожмётся и многоточия не будет');
+check('3.4 статус тоже может сократиться', has('.player-status', 'text-overflow', 'ellipsis'));
+check('3.5 РЕЙТИНГ не сокращается', !/text-overflow/.test(rule('.player-rating') || ''));
+check('3.6 и не переносится', has('.player-rating', 'white-space', 'nowrap'));
 
-console.log('\n=== 5. МЕСТО В РЕЙТИНГЕ В ПАНЕЛЬ НЕ ПОПАЛО ===');
-check('5.1 в отрисовке панели нет номера места', (function () {
-    const m = /function renderPlayerNameCell\([\s\S]*?\n\}/.exec(SRC);
-    return m && !/stats_your_rank|№/.test(m[0]);
+console.log('\n=== 4. СТОПКА ВЗЯТЫХ ШАШЕК ===');
+check('4.1 переноса строк нет', has('.captured-icons', 'flex-wrap', 'nowrap'),
+    'перенос делал панели разной высоты');
+check('4.2 шашки накладываются', (function () {
+    const b = rule('.captured-icons .captured-icon + .captured-icon');
+    return b && /margin-left\s*:\s*-\d+px/.test(b);
 })());
-check('5.2 место осталось только в статистике', (function () {
-    return (SRC.match(/t\("stats_your_rank"\)/g) || []).length === 1;
+check('4.3 наложение заметное, но шашки различимы', (function () {
+    const b = rule('.captured-icons .captured-icon + .captured-icon') || '';
+    const m = /margin-left\s*:\s*-(\d+)px/.exec(b);
+    if (!m) return false;
+    const overlap = parseInt(m[1], 10);
+    // иконка 15px: сдвиг от 8 до 12 оставляет видимой полоску
+    return overlap >= 8 && overlap <= 12;
 })());
-check('5.3 в разметке панели нет элемента места',
-    !/id="player-(top|bottom)-rank"/.test(HTML));
+check('4.7 значок с числом есть', /\.captured-count\s*\{/.test(CSS));
+check('4.8 значок над стопкой', has('.captured-count', 'position', 'absolute'));
+check('4.9 стопка — точка отсчёта для значка', has('.captured-icons', 'position', 'relative'));
 
-console.log('\n=== 6. НИЧЕГО ЛИШНЕГО НЕ ЗАТРОНУТО ===');
-check('6.1 доска не тронута', (function () {
-    const b = rule('#board');
-    return b && /grid-template-columns\s*:\s*repeat\(8, var\(--cell-size\)\)/.test(b);
-})());
-check('6.2 обёртка доски не тронута', (function () {
-    const b = rule('#board-wrapper');
-    return b && /padding\s*:\s*12px/.test(b);
-})());
-check('6.3 разметка панелей прежняя', (function () {
-    return /id="player-top-name"/.test(HTML) && /id="player-top-status"/.test(HTML)
-        && /id="player-top-captured"/.test(HTML);
-})(), 'лишних узлов в index.html не добавлялось');
+console.log('\n=== 5. ОТРИСОВКА СТОПКИ ===');
+{
+    const fn = /function renderCapturedStack\([\s\S]*?\n\}/.exec(SRC);
+    check('5.1 функция есть', !!fn);
+    const body = fn ? fn[0] : '';
+    check('5.2 число шашек в стопке ограничено', /CAPTURED_STACK_MAX/.test(body));
+    check('5.3 значок показывает ПОЛНОЕ число, а не показанное',
+        /badge\.textContent = String\(total\)/.test(body),
+        'иначе при 12 съеденных значок соврёт');
+    check('5.4 при нуле стопка пустая', /if \(total === 0\) return;/.test(body));
+    check('5.5 цвет шашки сохраняется', /iconClass/.test(body));
+    check('5.6 используется для обеих панелей',
+        /renderCapturedStack\(playerTopCaptured/.test(SRC)
+        && /renderCapturedStack\(playerBottomCaptured/.test(SRC));
+    check('5.7 старая функция удалена', !/function renderCapturedIcons\(/.test(SRC));
+}
 
-console.log('\n=== 7. CACHE-BUST ===');
-// Меняются и style.css, и script.js. Без подъёма версий в ссылках
-// Telegram WebView и CDN продолжат отдавать старые файлы, и правка
-// у части игроков просто не применится.
-check('7.1 стили подняты до v=16', /style\.css\?v=16/.test(HTML));
-check('7.2 скрипт поднят до v=195', /script\.js\?v=195/.test(HTML));
-check('7.3 старых ссылок не осталось',
-    !/style\.css\?v=15\b/.test(HTML) && !/script\.js\?v=194\b/.test(HTML));
-check('7.4 версии не совпадают со старыми нигде в файле',
-    (HTML.match(/style\.css\?v=/g) || []).length === 1 &&
-    (HTML.match(/script\.js\?v=/g) || []).length === 1);
+console.log('\n=== 6. ИМЯ И РЕЙТИНГ — РАЗНЫЕ ЯЧЕЙКИ ===');
+{
+    const fn = /function renderPlayerNameCell\([\s\S]*?\n\}/.exec(SRC);
+    const body = fn ? fn[0] : '';
+    check('6.1 рейтинг пишется в свою ячейку', (function () {
+        // Проверяем именно ЗАПИСЬ, а не упоминание параметра: без неё
+        // ячейка рейтинга осталась бы пустой навсегда.
+        return /ratingCell\.textContent\s*=/.test(body);
+    })(), 'в одной ячейке многоточие съело бы рейтинг');
+    check('6.1b и вызывается с этой ячейкой',
+        /renderPlayerNameCell\([\s\S]{0,160}playerTopRating\)/.test(SRC)
+        && /renderPlayerNameCell\([\s\S]{0,160}playerBottomRating\)/.test(SRC));
+    check('6.2 только textContent, без innerHTML',
+        /textContent/.test(body) && !/innerHTML/.test(body));
+    check('6.3 вложенных span больше нет', !/player-name-text/.test(SRC));
+}
+
+console.log('\n=== 7. СТАТУС ===');
+check('7.1 отсчёт сокращён до «Оффлайн Nс»',
+    !/status_left"\) \+ " " \+ remaining/.test(SRC)
+    && /t\("status_offline"\) \+ " " \+ remaining/.test(SRC));
+check('7.2 у отсчёта отдельный класс', /cls: "status-countdown"/.test(SRC));
+check('7.3 и отдельный цвет', /\.player-status\.status-countdown\s*\{/.test(CSS));
+check('7.4 прежние состояния сохранены',
+    /status-online/.test(CSS) && /status-neutral/.test(CSS) && /status-left/.test(CSS));
+
+console.log('\n=== 7b. НИЧЕГО НЕ СХЛОПЫВАЕТСЯ И НЕ РАСПУХАЕТ ===');
+check('7b.1 у имени есть нижняя граница', (function () {
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
+    return m && /minmax\(\s*[1-9][\d.]*ch/.test(m[1]);
+})(), 'minmax(0, 1fr) мог сжать имя до нуля на узком экране');
+// Ширину теперь держит КОЛОНКА, а не потолок содержимого — подробные
+// проверки в captured-stack-dom.test.js.
+check('7b.2 колонка стопки постоянной ширины', (function () {
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
+    return m && /var\(--stack-width\)/.test(m[1]);
+})());
+check('7b.3 иконки не сжимаются', has('.captured-icon', 'flex-shrink', '0'));
+
+console.log('\n=== 7c. ЗАТУХАНИЕ ПАНЕЛИ ПРИ УХОДЕ СОПЕРНИКА ===');
+check('7c.1 отсчёт тоже гасит панель', (function () {
+    const fn = /function applyStatusToElement\([\s\S]*?\n\}/.exec(SRC);
+    return fn && /status-countdown/.test(fn[0]);
+})(), 'после разделения классов затухание пропало бы');
+check('7c.2 прежний случай сохранён', (function () {
+    const fn = /function applyStatusToElement\([\s\S]*?\n\}/.exec(SRC);
+    return fn && /status-left/.test(fn[0]);
+})());
+check('7c.3 в остальных состояниях панель не гаснет', (function () {
+    const fn = /function applyStatusToElement\([\s\S]*?\n\}/.exec(SRC);
+    return fn && /classList\.remove\("player-faded"\)/.test(fn[0]);
+})());
+check('7c.4 мёртвый ratingPrefix удалён', !/ratingPrefix/.test(SRC),
+    'после переноса рейтинга в свою ячейку он всегда был пустой строкой');
+
+console.log('\n=== 8. МЕСТО В РЕЙТИНГЕ И CACHE-BUST ===');
+check('8.1 места в панели нет', !/id="player-(top|bottom)-rank"/.test(HTML));
+check('8.2 место только в статистике',
+    (SRC.match(/t\("stats_your_rank"\)/g) || []).length === 1);
+check('8.3 скрипт поднят', /script\.js\?v=196/.test(HTML));
+check('8.4 стили подняты', /style\.css\?v=17/.test(HTML));
+check('8.5 старых ссылок нет',
+    !/script\.js\?v=195/.test(HTML) && !/style\.css\?v=16/.test(HTML));
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed > 0 ? 1 : 0);

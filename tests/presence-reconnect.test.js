@@ -1029,8 +1029,12 @@ function stateWithOpponentSilentFor(absenceSec, online) {
 
     // до истечения минуты ничего не поменялось
     reset(); global.currentState = absent(30);
+    // v196: текст сокращён до «Оффлайн 30с» — скобки и слово «осталось»
+    // не помещались в свою колонку сетки. Сам отсчёт не изменился.
     check('25.10 обратный отсчёт до 60с не затронут',
-        /status_offline \(status_left 30sec\)/.test(statusForColor('dark').text), statusForColor('dark').text);
+        /status_offline 30sec/.test(statusForColor('dark').text), statusForColor('dark').text);
+    check('25.10b класс отсчёта отдельный',
+        statusForColor('dark').cls === 'status-countdown', statusForColor('dark').cls);
     reset(); global.currentState = absent(75);
     check('25.11 момент появления промежуточного текста прежний (>60с)',
         statusForColor('dark').text === 'status_confirming_result');

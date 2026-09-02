@@ -749,6 +749,8 @@ const btnBackBotYes = document.getElementById("btn-back-bot-yes");
 const btnBackBotNo = document.getElementById("btn-back-bot-no");
 const endGameModal = document.getElementById("end-game-modal");
 const endGameSubtext = document.getElementById("end-game-subtext");
+const playerTopRating = document.getElementById("player-top-rating");
+const playerBottomRating = document.getElementById("player-bottom-rating");
 const endGameRating = document.getElementById("end-game-rating");
 const statsYourRank = document.getElementById("stats-your-rank");
 const rematchWaitNote = document.getElementById("rematch-wait-note");
@@ -1686,14 +1688,6 @@ function getLabels() {
     return { letters: ["h", "g", "f", "e", "d", "c", "b", "a"], numbers: [1, 2, 3, 4, 5, 6, 7, 8] };
 }
 
-function renderCapturedIcons(container, count, iconClass) {
-    container.innerHTML = "";
-    for (let i = 0; i < count; i++) {
-        const icon = document.createElement("div");
-        icon.classList.add("captured-icon", iconClass);
-        container.appendChild(icon);
-    }
-}
 
 // ===== СОСТОЯНИЕ РЕГИСТРАЦИИ РЕЙТИНГОВОЙ ПАРТИИ =====
 //
@@ -1820,21 +1814,48 @@ function ratingSegmentForColor(color) {
 
 // Собирает содержимое панели из двух частей. Узлы переиспользуются, если
 // уже созданы, — перерисовка идёт на каждый ход, лишние аллокации ни к чему.
-function renderPlayerNameCell(cell, marker, name, rating) {
-    if (!cell) return;
-    let nameEl = cell.querySelector(".player-name-text");
-    let ratingEl = cell.querySelector(".player-rating");
-    if (!nameEl || !ratingEl) {
-        cell.textContent = "";
-        nameEl = document.createElement("span");
-        nameEl.className = "player-name-text";
-        ratingEl = document.createElement("span");
-        ratingEl.className = "player-rating";
-        cell.appendChild(nameEl);
-        cell.appendChild(ratingEl);
+// Имя и рейтинг лежат в РАЗНЫХ ячейках сетки, поэтому длина одного не
+// сдвигает другой. Только textContent: имя приходит из Telegram.
+function renderPlayerNameCell(cell, marker, name, rating, ratingCell) {
+    if (cell) cell.textContent = marker + name;
+    if (ratingCell) ratingCell.textContent = rating ? rating : "";
+}
+
+// Стопка взятых шашек. Показываем не больше шести — дальше стопка
+// перестаёт читаться, а точное число всё равно говорит значок.
+const CAPTURED_STACK_MAX = 6;
+
+// Глубина стопки: передняя шашка чёткая, дальние уходят назад.
+// Дальше четвёртой не бледнеем, иначе стопка выглядит грязной.
+const CAPTURED_DEPTH_OPACITY = [1, 0.82, 0.66, 0.52, 0.45];
+
+function capturedDepthOpacity(fromFront) {
+    const i = Math.min(fromFront, CAPTURED_DEPTH_OPACITY.length - 1);
+    return CAPTURED_DEPTH_OPACITY[i];
+}
+
+function renderCapturedStack(container, count, iconClass) {
+    if (!container) return;
+    container.textContent = "";
+    const total = (typeof count === "number" && count > 0) ? count : 0;
+    if (total === 0) return;
+    const shown = Math.min(total, CAPTURED_STACK_MAX);
+    for (let i = 0; i < shown; i++) {
+        const icon = document.createElement("div");
+        icon.classList.add("captured-icon", iconClass);
+        // Глубина считается ОТ ПЕРЕДНЕЙ шашки, то есть от последней
+        // добавленной. Позиционным селекторам это доверить нельзя:
+        // значок с числом добавляется после иконок и стал бы для CSS
+        // последним ребёнком, сдвинув всю последовательность.
+        const fromFront = shown - 1 - i;
+        icon.style.setProperty("--depth-opacity", String(capturedDepthOpacity(fromFront)));
+        icon.style.setProperty("--depth-order", String(i + 1));
+        container.appendChild(icon);
     }
-    nameEl.textContent = marker + name;
-    ratingEl.textContent = rating ? rating : "";
+    const badge = document.createElement("span");
+    badge.className = "captured-count";
+    badge.textContent = String(total);
+    container.appendChild(badge);
 }
 
 function statusForColor(color) {
@@ -1846,11 +1867,10 @@ function statusForColor(color) {
     // Победы и поражения из панели убраны: они остались в статистике.
     // Рейтинг рисует
     // отдельный сегмент, поэтому здесь префикса больше нет вовсе.
-    const ratingPrefix = "";
 
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
-        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+        return { text: t("status_connecting"), cls: "status-neutral" };
     }
 
     // Пока связи нет У МЕНЯ САМОГО, судить о сопернике нельзя: его lastSeen в
@@ -1858,7 +1878,7 @@ function statusForColor(color) {
     // получать данные. Показываем нейтральное «Соединение…» — этот статус
     // сознательно НЕ равен "status-left", поэтому отсчёт отсутствия не идёт.
     if (!isFirebaseConnected) {
-        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+        return { text: t("status_connecting"), cls: "status-neutral" };
     }
 
     // Пока серверное время ещё не получено, offset честно равен нулю, и
@@ -1866,7 +1886,7 @@ function statusForColor(color) {
     // (удаление комнаты и так требует serverTimeOffsetReady), но может дать
     // ложный «Оффлайн» в первые мгновения. Показываем нейтральное состояние.
     if (!serverTimeOffsetReady) {
-        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+        return { text: t("status_connecting"), cls: "status-neutral" };
     }
 
     // POST-RECONNECT FRESHNESS (v178). Соединение может быть уже восстановлено
@@ -1876,7 +1896,7 @@ function statusForColor(color) {
     // Пока доказательство свежести не получено — нейтральный статус, который
     // сознательно не равен "ушёл" и потому не запускает отсчёт отсутствия.
     if (!roomSnapshotSeenSinceConnect) {
-        return { text: ratingPrefix + t("status_connecting"), cls: "status-neutral" };
+        return { text: t("status_connecting"), cls: "status-neutral" };
     }
 
     // ВАЖНО: lastSeen — СЕРВЕРНЫЙ timestamp, поэтому сравнивать его с голым
@@ -1913,16 +1933,23 @@ function statusForColor(color) {
         // Считаем оставшееся время до конца "минуты форы"
         let remaining = Math.ceil((RECONNECT_GRACE_MS - elapsed) / 1000);
         if (remaining < 0) remaining = 0;
-        return { text: ratingPrefix + t("status_offline") + " (" + t("status_left") + " " + remaining + t("sec") + ")", cls: "status-left" };
+        // «Оффлайн (осталось 45с)» не помещалось в свою колонку и резалось.
+        // Смысл тот же, скобки и «осталось» ничего не добавляли.
+        // Отдельный класс: отсчёт до технического поражения должен быть
+        // заметен боковым зрением, а не читаться.
+        return { text: t("status_offline") + " " + remaining + t("sec"), cls: "status-countdown" };
     }
-    return { text: ratingPrefix + t("status_in_game"), cls: "status-online" };
+    return { text: t("status_in_game"), cls: "status-online" };
 }
 
 function applyStatusToElement(el, panelEl, statusInfo) {
     el.className = "player-status";
     if (statusInfo.cls) el.classList.add(statusInfo.cls);
     el.textContent = statusInfo.text;
-    if (statusInfo.cls === "status-left") {
+    // Панель бледнеет, когда соперника нет за доской. До v196 отсчёт
+    // возвращал класс status-left и попадал сюда; после разделения классов
+    // затухание пропало бы — соперник ушёл, а панель выглядит как обычно.
+    if (statusInfo.cls === "status-left" || statusInfo.cls === "status-countdown") {
         panelEl.classList.add("player-faded");
     } else {
         panelEl.classList.remove("player-faded");
@@ -1969,18 +1996,18 @@ function renderPlayerPanels() {
     renderPlayerNameCell(playerTopName,
         (topColor === "light" ? "⚪ " : "⚫ "),
         (topColor === "light" ? lightName : darkName),
-        topRating);
+        topRating, playerTopRating);
     renderPlayerNameCell(playerBottomName,
         (bottomColor === "light" ? "⚪ " : "⚫ "),
         (bottomColor === "light" ? lightName : darkName),
-        bottomRating);
+        bottomRating, playerBottomRating);
 
     if (topColor === "light") {
-        renderCapturedIcons(playerTopCaptured, currentState.capturedDark, "dark-icon");
-        renderCapturedIcons(playerBottomCaptured, currentState.capturedLight, "light-icon");
+        renderCapturedStack(playerTopCaptured, currentState.capturedDark, "dark-icon");
+        renderCapturedStack(playerBottomCaptured, currentState.capturedLight, "light-icon");
     } else {
-        renderCapturedIcons(playerTopCaptured, currentState.capturedLight, "light-icon");
-        renderCapturedIcons(playerBottomCaptured, currentState.capturedDark, "dark-icon");
+        renderCapturedStack(playerTopCaptured, currentState.capturedLight, "light-icon");
+        renderCapturedStack(playerBottomCaptured, currentState.capturedDark, "dark-icon");
     }
 
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
