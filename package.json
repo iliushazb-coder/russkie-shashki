@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "test": "node tests/run.js",
-    "check": "node --check script.js"
+    "check": "node --check script.js",
+    "test:browser": "node tests/panel-browser-layout.test.js"
   },
   "keywords": [
     "draughts",

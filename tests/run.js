@@ -46,7 +46,6 @@ const FILES = [
   ['Z2. C1: ШЕСТЬ БЛОКЕРОВ', 'c1-blockers.test.js'],
   ['W. ПАНЕЛИ ИГРОКОВ: ШИРИНА И СОКРАЩЕНИЕ', 'player-panel-layout.test.js'],
   ['V. СТОПКА ВЗЯТЫХ ШАШЕК: DOM', 'captured-stack-dom.test.js'],
-  ['U. ПАНЕЛЬ: РАСКЛАДКА В БРАУЗЕРЕ', 'panel-browser-layout.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.
