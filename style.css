@@ -31,8 +31,10 @@
        15px с наложением 11px даёт 15 + 5*4 = 35px, плюс 9px поля под
        значок справа. Колонка держит эту ширину ВСЕГДА — и при нуле
        взятых, и при двенадцати. Иначе остаток для имени менялся бы, а
-       вместе с ним ехали бы вертикали рейтинга и статуса. */
-    --stack-width: 44px;
+       вместе с ним ехали бы вертикали рейтинга и статуса.
+       35px стопка + 3px отступ + 15px значок = 53px, берём 56 с запасом
+       на округление ширины цифр. */
+    --stack-width: 56px;
 }
 
 * {
@@ -244,10 +246,10 @@ h1 {
     align-items: center;
     gap: 5px;
     /* Статус: своя колонка. Помещается «Оффлайн 45с»; более длинные
-       варианты получают многоточие, но соседей не двигают. */
+       варианты получают многоточие, но соседей не двигают.
+       overflow здесь НЕ ставим: он срезал свечение точки, и кружок
+       выглядел подрезанным. Обрезает текст вложенный элемент. */
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
     transition: opacity 0.6s ease, transform 0.6s ease;
 }
@@ -258,11 +260,19 @@ h1 {
 
 .player-status::before {
     content: "";
-    display: inline-block;
+    display: block;
     width: 8px;
     height: 8px;
     border-radius: 50%;
     flex-shrink: 0;
+}
+
+/* Многоточие живёт здесь, а не на контейнере: иначе оно срезает точку. */
+.player-status-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .player-status.status-online {
@@ -318,8 +328,8 @@ h1 {
    от количества. Переноса нет вовсе. */
 .captured-icons {
     display: flex;
+    align-items: center;
     position: relative;
-    padding-right: 8px;
     flex-wrap: nowrap;
     /* Ширину держит колонка сетки, а не содержимое. Потолок оставлен как
        страховка на случай, если предел стопки когда-нибудь поднимут. */
@@ -342,11 +352,12 @@ h1 {
     z-index: var(--depth-order, 1);
 }
 
-/* Число: точное количество, даже когда в стопке показаны не все. */
+/* Число: точное количество, даже когда в стопке показаны не все.
+   Раньше значок висел абсолютом над строкой и выглядел подпрыгнувшим.
+   Теперь это обычный элемент ряда: стоит после стопки, по её центру. */
 .captured-count {
-    position: absolute;
-    top: -6px;
-    right: 0;
+    align-self: center;
+    margin-left: 3px;
     min-width: 15px;
     height: 15px;
     padding: 0 3px;
@@ -357,6 +368,7 @@ h1 {
     font-weight: 700;
     line-height: 15px;
     text-align: center;
+    flex-shrink: 0;
     z-index: 6;
 }
 
@@ -365,17 +377,28 @@ h1 {
     height: 15px;
     border-radius: 50%;
     flex-shrink: 0;
-    box-shadow: inset -2px -2px 3px rgba(0,0,0,0.5), inset 2px 2px 3px rgba(255,255,255,0.3), 0 0 4px rgba(255,190,100,0.3);
 }
 
+/* Те же градиенты и рамки, что у настоящих шашек на доске: раньше мини
+   были золотисто-обведённые и на доску не походили. Тени уменьшены
+   пропорционально размеру — 15px против 50px, иначе они бы залили
+   иконку целиком. */
 .captured-icon.dark-icon {
-    background: radial-gradient(circle at 32% 26%, #4a4a52, #101014 72%);
-    border: 1px solid #b3925a;
+    background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
+    border: 1px solid #a0a0a8;
+    box-shadow:
+        inset -2px -2px 3px rgba(0,0,0,0.7),
+        inset 1px 1px 3px rgba(190,190,205,0.35),
+        0 1px 3px rgba(0,0,0,0.6);
 }
 
 .captured-icon.light-icon {
-    background: radial-gradient(circle at 32% 26%, #fffdf8, #e8e0d0 72%);
-    border: 1px solid #d4b978;
+    background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
+    border: 1px solid #1a1a1a;
+    box-shadow:
+        inset -2px -2px 3px rgba(100,70,30,0.4),
+        inset 1px 1px 3px rgba(255,250,230,0.4),
+        0 1px 3px rgba(0,0,0,0.45);
 }
 
 #turn-timer {

@@ -78,7 +78,23 @@ check('3.1 имя сокращается многоточием', has('.player-n
 check('3.2 и не переносится', has('.player-name', 'white-space', 'nowrap'));
 check('3.3 min-width: 0 у имени', has('.player-name', 'min-width', '0'),
     'без него колонка не сожмётся и многоточия не будет');
-check('3.4 статус тоже может сократиться', has('.player-status', 'text-overflow', 'ellipsis'));
+// Многоточие переехало на вложенный элемент: на контейнере overflow
+// срезал свечение точки, и кружок выглядел подрезанным.
+check('3.4 текст статуса может сократиться',
+    has('.player-status-text', 'text-overflow', 'ellipsis'));
+check('3.4b контейнер статуса НЕ обрезает содержимое', (function () {
+    const b = rule('.player-status') || '';
+    return !/overflow\s*:\s*hidden/.test(b);
+})(), 'иначе точка статуса клипается');
+check('3.4c точка не сжимается', has('.player-status::before', 'flex-shrink', '0'));
+check('3.4d текст пишется ТОЛЬКО во вложенный элемент', (function () {
+    const fn = /function applyStatusToElement\([\s\S]*?\n\}/.exec(SRC);
+    if (!fn) return false;
+    // el.textContent = "" допустим при создании узла, но присваивать
+    // туда сам текст нельзя: это стёрло бы вложенный span
+    return /textEl\.textContent = statusInfo\.text/.test(fn[0])
+        && !/el\.textContent = statusInfo\.text/.test(fn[0]);
+})(), 'иначе вложенный элемент стирается на каждом ходу');
 check('3.5 РЕЙТИНГ не сокращается', !/text-overflow/.test(rule('.player-rating') || ''));
 check('3.6 и не переносится', has('.player-rating', 'white-space', 'nowrap'));
 
@@ -98,7 +114,15 @@ check('4.3 наложение заметное, но шашки различим
     return overlap >= 8 && overlap <= 12;
 })());
 check('4.7 значок с числом есть', /\.captured-count\s*\{/.test(CSS));
-check('4.8 значок над стопкой', has('.captured-count', 'position', 'absolute'));
+// Значок больше не висит абсолютом над строкой — он выглядел
+// подпрыгнувшим. Теперь обычный элемент ряда, по центру стопки.
+check('4.8 значок стоит в ряду, а не над ним', (function () {
+    const b = rule('.captured-count') || '';
+    return !/position\s*:\s*absolute/.test(b) && /align-self\s*:\s*center/.test(b);
+})());
+check('4.8b значок не сжимается', has('.captured-count', 'flex-shrink', '0'));
+check('4.8c стопка выравнивает содержимое по центру',
+    has('.captured-icons', 'align-items', 'center'));
 check('4.9 стопка — точка отсчёта для значка', has('.captured-icons', 'position', 'relative'));
 
 console.log('\n=== 5. ОТРИСОВКА СТОПКИ ===');
@@ -173,12 +197,34 @@ check('7c.3 в остальных состояниях панель не гас�
 check('7c.4 мёртвый ratingPrefix удалён', !/ratingPrefix/.test(SRC),
     'после переноса рейтинга в свою ячейку он всегда был пустой строкой');
 
+console.log('\n=== 7d. МИНИ-ШАШКИ ПОХОЖИ НА ДОСКУ ===');
+// Раньше мини-шашки были золотисто-обведённые и на доску не походили.
+// Сравниваем с настоящими фигурами: градиент и цвет рамки должны
+// совпадать, иначе панель снова разъедется с доской по стилю.
+['dark', 'light'].forEach(function (side) {
+    const mini = rule('.captured-icon.' + side + '-icon') || '';
+    const real = rule('.piece-' + side) || '';
+    check('7d.x ' + side + ': градиент как у шашки на доске', (function () {
+        const g = /background:\s*radial-gradient\(([^;]+)\);/;
+        const a = g.exec(mini), b = g.exec(real);
+        return a && b && a[1].trim() === b[1].trim();
+    })());
+    check('7d.y ' + side + ': цвет рамки как у шашки на доске', (function () {
+        const c = /border:\s*\d+px solid (#[0-9a-fA-F]+)/;
+        const a = c.exec(mini), b = c.exec(real);
+        return a && b && a[1].toLowerCase() === b[1].toLowerCase();
+    })());
+    check('7d.z ' + side + ': объём сохранён', /inset/.test(mini));
+});
+check('7d.w золотистой обводки больше нет',
+    !/\.captured-icon\.(dark|light)-icon\s*\{[^}]*#b3925a|#d4b978/.test(CSS));
+
 console.log('\n=== 8. МЕСТО В РЕЙТИНГЕ И CACHE-BUST ===');
 check('8.1 места в панели нет', !/id="player-(top|bottom)-rank"/.test(HTML));
 check('8.2 место только в статистике',
     (SRC.match(/t\("stats_your_rank"\)/g) || []).length === 1);
-check('8.3 скрипт поднят', /script\.js\?v=196/.test(HTML));
-check('8.4 стили подняты', /style\.css\?v=17/.test(HTML));
+check('8.3 скрипт поднят', /script\.js\?v=197/.test(HTML));
+check('8.4 стили подняты', /style\.css\?v=18/.test(HTML));
 check('8.5 старых ссылок нет',
     !/script\.js\?v=195/.test(HTML) && !/style\.css\?v=16/.test(HTML));
 

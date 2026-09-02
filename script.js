@@ -1945,7 +1945,17 @@ function statusForColor(color) {
 function applyStatusToElement(el, panelEl, statusInfo) {
     el.className = "player-status";
     if (statusInfo.cls) el.classList.add(statusInfo.cls);
-    el.textContent = statusInfo.text;
+    // Текст лежит во вложенном элементе, а не прямо в контейнере: обрезать
+    // многоточием нужно только его. Когда обрезал контейнер, вместе с
+    // текстом срезалось свечение точки, и кружок выглядел подрезанным.
+    let textEl = el.querySelector(".player-status-text");
+    if (!textEl) {
+        el.textContent = "";
+        textEl = document.createElement("span");
+        textEl.className = "player-status-text";
+        el.appendChild(textEl);
+    }
+    textEl.textContent = statusInfo.text;
     // Панель бледнеет, когда соперника нет за доской. До v196 отсчёт
     // возвращал класс status-left и попадал сюда; после разделения классов
     // затухание пропало бы — соперник ушёл, а панель выглядит как обычно.

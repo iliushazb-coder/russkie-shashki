@@ -125,15 +125,24 @@ console.log('\n=== 4. ШИРИНА КОЛОНКИ ПОСТОЯННА ===');
     check('4.2 последняя колонка — переменная фиксированной ширины',
         !!cols && /var\(--stack-width\)\s*$/.test(cols[1].trim()), cols ? cols[1] : '');
     check('4.3 переменная объявлена в px', /--stack-width\s*:\s*\d+px/.test(CSS));
-    check('4.4 её хватает на полную стопку', (function () {
+    check('4.4 её хватает на полную стопку И значок', (function () {
         const m = /--stack-width\s*:\s*(\d+)px/.exec(CSS);
         const ov = /\.captured-icon \+ \.captured-icon\s*\{[^}]*margin-left\s*:\s*-(\d+)px/.exec(CSS);
         const sz = /\.captured-icon\s*\{[^}]*width\s*:\s*(\d+)px/.exec(CSS);
-        if (!m || !ov || !sz) return false;
-        // шесть иконок: первая целиком, остальные по (размер - наложение)
-        const need = parseInt(sz[1], 10) + 5 * (parseInt(sz[1], 10) - parseInt(ov[1], 10));
+        const badge = /\.captured-count\s*\{([^}]*)\}/.exec(CSS);
+        if (!m || !ov || !sz || !badge) return false;
+        const size = parseInt(sz[1], 10);
+        const stack = size + 5 * (size - parseInt(ov[1], 10));
+        // значок теперь стоит В РЯДУ после стопки, значит колонка обязана
+        // вместить и его: иначе он обрежется или сдвинет шашки
+        const bw = /min-width\s*:\s*(\d+)px/.exec(badge[1]);
+        const bm = /margin-left\s*:\s*(\d+)px/.exec(badge[1]);
+        // padding в min-width уже входит: box-sizing: border-box задан
+        // глобально. Складываем стопку, отступ и ширину значка.
+        const need = stack + (bm ? parseInt(bm[1], 10) : 0)
+            + (bw ? parseInt(bw[1], 10) : 0);
         return parseInt(m[1], 10) >= need;
-    })(), 'иначе шестая шашка обрежется');
+    })(), 'иначе шестая шашка или значок обрежется');
     check('4.5 ширина стопки не зависит от содержимого', (function () {
         // ни одного правила, где ширина стопки задавалась бы содержимым
         const b = /\.captured-icons\s*\{([^}]*)\}/.exec(CSS);
