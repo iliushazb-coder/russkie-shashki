@@ -1818,6 +1818,25 @@ function ratingSegmentForColor(color) {
     return "⭐…";
 }
 
+// Собирает содержимое панели из двух частей. Узлы переиспользуются, если
+// уже созданы, — перерисовка идёт на каждый ход, лишние аллокации ни к чему.
+function renderPlayerNameCell(cell, marker, name, rating) {
+    if (!cell) return;
+    let nameEl = cell.querySelector(".player-name-text");
+    let ratingEl = cell.querySelector(".player-rating");
+    if (!nameEl || !ratingEl) {
+        cell.textContent = "";
+        nameEl = document.createElement("span");
+        nameEl.className = "player-name-text";
+        ratingEl = document.createElement("span");
+        ratingEl.className = "player-rating";
+        cell.appendChild(nameEl);
+        cell.appendChild(ratingEl);
+    }
+    nameEl.textContent = marker + name;
+    ratingEl.textContent = rating ? rating : "";
+}
+
 function statusForColor(color) {
     if (!currentState) return { text: "", cls: "" };
     if (!isOnlineGame) {
@@ -1941,12 +1960,20 @@ function renderPlayerPanels() {
     // статуса присутствия.
     const topRating = ratingSegmentForColor(topColor);
     const bottomRating = ratingSegmentForColor(bottomColor);
-    playerTopName.textContent = (topColor === "light" ? "⚪ " : "⚫ ")
-        + (topColor === "light" ? lightName : darkName)
-        + (topRating ? " · " + topRating : "");
-    playerBottomName.textContent = (bottomColor === "light" ? "⚪ " : "⚫ ")
-        + (bottomColor === "light" ? lightName : darkName)
-        + (bottomRating ? " · " + bottomRating : "");
+    // Имя и рейтинг кладутся в РАЗНЫЕ элементы: сокращать многоточием
+    // разрешено только имя, рейтинг обрезаться не должен никогда. Раньше
+    // это была одна строка, и ellipsis съел бы вместе с именем и Elo.
+    //
+    // Только textContent, без innerHTML: имя приходит из Telegram, то есть
+    // это внешние данные.
+    renderPlayerNameCell(playerTopName,
+        (topColor === "light" ? "⚪ " : "⚫ "),
+        (topColor === "light" ? lightName : darkName),
+        topRating);
+    renderPlayerNameCell(playerBottomName,
+        (bottomColor === "light" ? "⚪ " : "⚫ "),
+        (bottomColor === "light" ? lightName : darkName),
+        bottomRating);
 
     if (topColor === "light") {
         renderCapturedIcons(playerTopCaptured, currentState.capturedDark, "dark-icon");

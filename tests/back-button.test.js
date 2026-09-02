@@ -2,6 +2,11 @@ const fs = require('fs');
 
 // v194: панель показывает рейтинг отдельным сегментом, а окно итога —
 // изменение рейтинга. Харнессу нужны эти элементы.
+// v195: имя и рейтинг рисуются отдельной функцией.
+global.renderPlayerNameCell = function (cell, marker, name, rating) {
+    if (!cell) return;
+    cell.textContent = marker + name + (rating ? ' ' + rating : '');
+};
 global.ratingSegmentForColor = function () { return ''; };
 global.endGameRating = { textContent: '' };
 global.statsYourRank = { textContent: '' };
