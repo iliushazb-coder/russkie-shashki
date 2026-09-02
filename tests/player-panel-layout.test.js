@@ -32,22 +32,6 @@ function has(sel, prop, value) {
 console.log('=== 1. ПАНЕЛЬ — СЕТКА, А НЕ ПОТОК ===');
 check('1.1 display: grid', has('.player-panel', 'display', 'grid'),
     'при flex короткое имя утаскивало рейтинг влево');
-check('1.2 четыре колонки объявлены', (function () {
-    const b = rule('.player-panel');
-    if (!b) return false;
-    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(b);
-    if (!m) return false;
-    // имя | рейтинг | статус | стопка
-    return /minmax\([^)]*1fr\)/.test(m[1]) && (m[1].match(/ch/g) || []).length >= 3;
-})());
-check('1.3 колонка рейтинга вмещает ⭐99999', (function () {
-    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
-    if (!m) return false;
-    // Колонка рейтинга — вторая по счёту. Первое вхождение ch теперь
-    // принадлежит нижней границе имени, поэтому берём именно вторую.
-    const all = m[1].match(/(\d+(?:\.\d+)?)ch/g) || [];
-    return all.length >= 2 && parseFloat(all[1]) >= 7;
-})(), 'иначе рейтинг 10000+ сломает вёрстку');
 check('1.4 ширина по-прежнему по доске', (function () {
     const b = rule('.player-panel') || '';
     return b.indexOf('max-width: var(--board-total)') !== -1;
@@ -74,8 +58,24 @@ check('2.y порядок ячеек одинаков у обеих панеле
 })());
 
 console.log('\n=== 3. ЧТО СОКРАЩАЕТСЯ ===');
-check('3.1 имя сокращается многоточием', has('.player-name', 'text-overflow', 'ellipsis'));
-check('3.2 и не переносится', has('.player-name', 'white-space', 'nowrap'));
+// Многоточие переехало на .player-name-label: кружок цвета стал
+// отдельным элементом и сокращаться не должен.
+check('3.1 имя сокращается многоточием', has('.player-name-label', 'text-overflow', 'ellipsis'));
+check('3.1b кружок цвета отдельным элементом', /\.player-color-dot\s*\{/.test(CSS));
+check('3.1c кружок не сжимается', has('.player-color-dot', 'flex-shrink', '0'));
+check('3.1e эмодзи в тексте имени не осталось', (function () {
+    const fn = /function renderPlayerNameCell\([\s\S]*?\n\}/.exec(SRC);
+    if (!fn) return false;
+    // «⚪ » и «⚫ » съедали треть колонки на узком экране
+    return !/[⚪⚫]/.test(fn[0]) && /label\.textContent = name;/.test(fn[0]);
+})(), 'кружок должен быть элементом, а не знаками');
+check('3.1f цвет передаётся кружку, а не тексту', (function () {
+    const fn = /function renderPlayerNameCell\([\s\S]*?\n\}/.exec(SRC);
+    return fn && /dot\.className[\s\S]{0,80}light-dot/.test(fn[0]);
+})());
+check('3.1d у кружка два цвета',
+    /\.player-color-dot\.light-dot\s*\{/.test(CSS) && /\.player-color-dot\.dark-dot\s*\{/.test(CSS));
+check('3.2 и не переносится', has('.player-name-label', 'white-space', 'nowrap'));
 check('3.3 min-width: 0 у имени', has('.player-name', 'min-width', '0'),
     'без него колонка не сожмётся и многоточия не будет');
 // Многоточие переехало на вложенный элемент: на контейнере overflow
@@ -169,12 +169,6 @@ check('7.4 прежние состояния сохранены',
     /status-online/.test(CSS) && /status-neutral/.test(CSS) && /status-left/.test(CSS));
 
 console.log('\n=== 7b. НИЧЕГО НЕ СХЛОПЫВАЕТСЯ И НЕ РАСПУХАЕТ ===');
-check('7b.1 у имени есть нижняя граница', (function () {
-    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
-    return m && /minmax\(\s*[1-9][\d.]*ch/.test(m[1]);
-})(), 'minmax(0, 1fr) мог сжать имя до нуля на узком экране');
-// Ширину теперь держит КОЛОНКА, а не потолок содержимого — подробные
-// проверки в captured-stack-dom.test.js.
 check('7b.2 колонка стопки постоянной ширины', (function () {
     const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
     return m && /var\(--stack-width\)/.test(m[1]);
@@ -197,6 +191,48 @@ check('7c.3 в остальных состояниях панель не гас�
 check('7c.4 мёртвый ratingPrefix удалён', !/ratingPrefix/.test(SRC),
     'после переноса рейтинга в свою ячейку он всегда был пустой строкой');
 
+console.log('\n=== 7e. КОЛОНКИ ЗАДАНЫ СОДЕРЖИМЫМ ===');
+// Ширины больше не считаются в ch: эта единица в grid-template-columns
+// берётся от шрифта панели, а не дочерних элементов, и давала
+// переполнение. Фактические размеры проверяет panel-browser-layout.
+// auto подстраивался под содержимое КАЖДОЙ панели, поэтому у соперников
+// с разными рейтингами вертикали расходились. Колонки снова фиксированы,
+// но в em от ЯВНО заданного шрифта панели, а не в ch.
+check('7e.1 колонки рейтинга и статуса фиксированы', (function () {
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
+    return m && /var\(--rating-width\)\s+var\(--status-width\)/.test(m[1]);
+})());
+check('7e.2 auto в колонках не осталось', (function () {
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
+    return m && !/\bauto\b/.test(m[1]);
+})(), 'auto зависит от содержимого и разводит панели');
+check('7e.2b ширины заданы в em', (function () {
+    const b = rule('.player-panel') || '';
+    return /--rating-width:\s*[\d.]+em/.test(b) && /--status-width:\s*[\d.]+em/.test(b);
+})());
+check('7e.2c панели задан явный шрифт для этих em', (function () {
+    const b = rule('.player-panel') || '';
+    return /font-size:\s*clamp\(/.test(b);
+})(), 'без него em считался бы от 16px и колонки не масштабировались');
+check('7e.3 имя забирает остаток', (function () {
+    const m = /grid-template-columns\s*:\s*([^;]+);/.exec(rule('.player-panel') || '');
+    return m && /^minmax\(0, *1fr\)/.test(m[1].trim());
+})());
+
+console.log('\n=== 7f. СТОПКА РАСТЁТ ВЛЕВО ОТ ЦИФРЫ ===');
+check('7f.1 содержимое прижато вправо',
+    has('.captured-icons', 'justify-content', 'flex-end'),
+    'иначе цифра поедет при изменении числа шашек');
+check('7f.2 значок стоит последним в ряду', (function () {
+    const fn = /function renderCapturedStack\([\s\S]*?\n\}/.exec(SRC);
+    if (!fn) return false;
+    // значок добавляется ПОСЛЕ цикла с иконками
+    return fn[0].indexOf('appendChild(badge)') > fn[0].indexOf('appendChild(icon)');
+})());
+check('7f.3 порядок узлов не переворачивался',
+    !/flex-direction\s*:\s*row-reverse/.test(rule('.captured-icons') || ''),
+    'переворот сломал бы отсчёт глубины');
+
 console.log('\n=== 7d. МИНИ-ШАШКИ ПОХОЖИ НА ДОСКУ ===');
 // Раньше мини-шашки были золотисто-обведённые и на доску не походили.
 // Сравниваем с настоящими фигурами: градиент и цвет рамки должны
@@ -216,15 +252,51 @@ console.log('\n=== 7d. МИНИ-ШАШКИ ПОХОЖИ НА ДОСКУ ===');
     })());
     check('7d.z ' + side + ': объём сохранён', /inset/.test(mini));
 });
+check('7d.v есть блик, как у фигуры на доске', (function () {
+    const mini = rule('.captured-icon::before') || '';
+    const real = rule('.piece::before') || '';
+    const g = /top:\s*(\d+)%[\s\S]*?left:\s*(\d+)%[\s\S]*?width:\s*(\d+)%/;
+    const a = g.exec(mini), b = g.exec(real);
+    return a && b && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+})(), 'та же геометрия блика, что у настоящей шашки');
+check('7d.u есть кольца', (function () {
+    const b = rule('.captured-icon::after') || '';
+    return (b.match(/radial-gradient/g) || []).length >= 2;
+})());
+check('7d.t иконке задан position для блика и колец',
+    has('.captured-icon', 'position', 'relative'));
 check('7d.w золотистой обводки больше нет',
     !/\.captured-icon\.(dark|light)-icon\s*\{[^}]*#b3925a|#d4b978/.test(CSS));
+
+console.log('\n=== 7g. ЧУЖИЕ ЭКРАНЫ НЕ ЗАТРОНУТЫ ===');
+// Промежутки панели правились заменой по всему файлу и дважды задели
+// посторонние правила. Фиксируем их значения поимённо.
+{
+    const vals = {};
+    const re = /([^{}]+)\{([^}]*)\}/g; let m;
+    while ((m = re.exec(CSS))) {
+        const sel = m[1].trim().split('\n').pop().trim();
+        const g = /gap:\s*(\d+)px/.exec(m[2]);
+        if (g) vals[sel] = parseInt(g[1], 10);
+    }
+    check('7g.1 промежуток панели уменьшен', vals['.player-panel'] === 4);
+    [['#active-rooms-section', 8], ['#active-rooms-list', 8],
+     ['.room-item-row', 8], ['.stats-tabs', 6]].forEach(function (p) {
+        check('7g.x ' + p[0] + ' не тронут', vals[p[0]] === p[1],
+            'ожидалось ' + p[1] + 'px, стало ' + vals[p[0]] + 'px');
+    });
+    check('7g.2 поля панели уменьшены', (function () {
+        const b = rule('.player-panel') || '';
+        return /padding:\s*6px 10px/.test(b);
+    })());
+}
 
 console.log('\n=== 8. МЕСТО В РЕЙТИНГЕ И CACHE-BUST ===');
 check('8.1 места в панели нет', !/id="player-(top|bottom)-rank"/.test(HTML));
 check('8.2 место только в статистике',
     (SRC.match(/t\("stats_your_rank"\)/g) || []).length === 1);
-check('8.3 скрипт поднят', /script\.js\?v=197/.test(HTML));
-check('8.4 стили подняты', /style\.css\?v=18/.test(HTML));
+check('8.3 скрипт поднят', /script\.js\?v=198/.test(HTML));
+check('8.4 стили подняты', /style\.css\?v=19/.test(HTML));
 check('8.5 старых ссылок нет',
     !/script\.js\?v=195/.test(HTML) && !/style\.css\?v=16/.test(HTML));
 

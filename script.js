@@ -1817,7 +1817,24 @@ function ratingSegmentForColor(color) {
 // Имя и рейтинг лежат в РАЗНЫХ ячейках сетки, поэтому длина одного не
 // сдвигает другой. Только textContent: имя приходит из Telegram.
 function renderPlayerNameCell(cell, marker, name, rating, ratingCell) {
-    if (cell) cell.textContent = marker + name;
+    if (cell) {
+        // Кружок цвета — отдельный элемент, а не два знака в тексте: как
+        // эмодзи он съедал треть колонки на узком экране, и от имени
+        // оставалось три буквы. Многоточие теперь только на имени.
+        let dot = cell.querySelector(".player-color-dot");
+        let label = cell.querySelector(".player-name-label");
+        if (!dot || !label) {
+            cell.textContent = "";
+            dot = document.createElement("span");
+            dot.className = "player-color-dot";
+            label = document.createElement("span");
+            label.className = "player-name-label";
+            cell.appendChild(dot);
+            cell.appendChild(label);
+        }
+        dot.className = "player-color-dot " + (marker === "light" ? "light-dot" : "dark-dot");
+        label.textContent = name;
+    }
     if (ratingCell) ratingCell.textContent = rating ? rating : "";
 }
 
@@ -2004,11 +2021,11 @@ function renderPlayerPanels() {
     // Только textContent, без innerHTML: имя приходит из Telegram, то есть
     // это внешние данные.
     renderPlayerNameCell(playerTopName,
-        (topColor === "light" ? "⚪ " : "⚫ "),
+        topColor,
         (topColor === "light" ? lightName : darkName),
         topRating, playerTopRating);
     renderPlayerNameCell(playerBottomName,
-        (bottomColor === "light" ? "⚪ " : "⚫ "),
+        bottomColor,
         (bottomColor === "light" ? lightName : darkName),
         bottomRating, playerBottomRating);
 
