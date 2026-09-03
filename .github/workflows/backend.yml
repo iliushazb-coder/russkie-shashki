@@ -1,0 +1,46 @@
+name: backend
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install backend test dependencies
+        run: npm ci
+
+      - name: Worker syntax
+        run: node --check worker/index.mjs
+
+      - name: Worker unit tests
+        run: node --test tests/worker/worker-unit.test.mjs
+
+      - name: Settlement behavior tests
+        run: node tests/settlement-behavior.test.js
+
+      - name: Firebase Rules Emulator tests
+        run: npm run test:rules
