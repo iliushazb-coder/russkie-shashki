@@ -45,6 +45,8 @@ const FILES = [
   ['Z. C1: РЕЙТИНГ ВМЕСТО МОНЕТ', 'c1-rating-ui.test.js'],
   ['Z2. C1: ШЕСТЬ БЛОКЕРОВ', 'c1-blockers.test.js'],
   ['Z3. C1: ПОВЕДЕНИЕ SETTLEMENT', 'settlement-behavior.test.js'],
+  ['Z4. C1 R3: REVIEW REGRESSION', 'c1-r3-review.test.js'],
+  ['Z5. C1 R3: FINAL REGRESSION', 'c1-r3-final.test.js'],
   ['W. ПАНЕЛИ ИГРОКОВ: ШИРИНА И СОКРАЩЕНИЕ', 'player-panel-layout.test.js'],
   ['V. СТОПКА ВЗЯТЫХ ШАШЕК: DOM', 'captured-stack-dom.test.js'],
 ];
