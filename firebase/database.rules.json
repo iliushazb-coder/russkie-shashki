@@ -208,9 +208,9 @@
       }
     },
     "botSessions": {
-      ".read": true,
       "$uid": {
-        ".write": true,
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid && newData.exists()",
         ".validate": "!newData.exists() || (newData.hasChildren(['status','matchId','revision','botDifficulty','botColor','myColor','spectateRoomCode','createdAt','updatedAt','state']) && newData.child('botColor').val() !== newData.child('myColor').val())",
         "status": {
           ".validate": "newData.isString() && (newData.val()==='active' || newData.val()==='finished')"

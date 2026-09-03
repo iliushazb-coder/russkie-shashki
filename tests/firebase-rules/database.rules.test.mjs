@@ -533,34 +533,71 @@ test("users: BRIDGE-A allows cross-user deletion", async () => {
   await assertSucceeds(remove(ref(databaseFor("alice"), "users/bob/activeMatch")));
 });
 
-test("botSessions: public read is allowed", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "botSessions/alice")));
+test("botSessions: owner can read own node", async () => {
+  await seed("botSessions/alice", botSession());
+  await assertSucceeds(get(ref(databaseFor("alice"), "botSessions/alice")));
 });
 
-test("botSessions: BRIDGE-A allows cross-user create", async () => {
+test("botSessions: authenticated cross-user read is denied", async () => {
+  await seed("botSessions/bob", botSession());
+  await assertFails(get(ref(databaseFor("alice"), "botSessions/bob")));
+});
+
+test("botSessions: unauthenticated read is denied", async () => {
+  await seed("botSessions/alice", botSession());
+  await assertFails(get(ref(databaseFor(), "botSessions/alice")));
+});
+
+test("botSessions: owner can create own node", async () => {
   await assertSucceeds(set(
+    ref(databaseFor("alice"), "botSessions/alice"),
+    botSession()
+  ));
+});
+
+test("botSessions: owner can update own node", async () => {
+  await seed("botSessions/alice", botSession());
+  await assertSucceeds(update(ref(databaseFor("alice"), "botSessions/alice"), {
+    revision: 1,
+    updatedAt: 1_700_000_000_001
+  }));
+});
+
+test("botSessions: authenticated cross-user write is denied", async () => {
+  await assertFails(set(
     ref(databaseFor("alice"), "botSessions/bob"),
     botSession()
   ));
 });
 
-test("botSessions: equal player and bot colors are denied", async () => {
+test("botSessions: unauthenticated write is denied", async () => {
+  await assertFails(set(ref(databaseFor(), "botSessions/alice"), botSession()));
+});
+
+test("botSessions: equal player and bot colors are denied for owner", async () => {
   await assertFails(set(
     ref(databaseFor("alice"), "botSessions/alice"),
     botSession({ botColor: "light", myColor: "light" })
   ));
 });
 
-test("botSessions: unknown fields are denied", async () => {
+test("botSessions: unknown fields are denied for owner", async () => {
   await assertFails(set(
     ref(databaseFor("alice"), "botSessions/alice"),
     botSession({ admin: true })
   ));
 });
 
-test("botSessions: BRIDGE-A allows cross-user deletion", async () => {
-  await seed("botSessions/bob", botSession());
-  await assertSucceeds(remove(ref(databaseFor("alice"), "botSessions/bob")));
+test("botSessions: malformed state is denied for owner", async () => {
+  await assertFails(set(
+    ref(databaseFor("alice"), "botSessions/alice"),
+    botSession({ state: { turn: "light" } })
+  ));
+});
+
+test("botSessions: owner deletion is denied", async () => {
+  await seed("botSessions/alice", botSession());
+  await assertFails(remove(ref(databaseFor("alice"), "botSessions/alice")));
 });
 
 test("economy: a user node is publicly readable", async () => {
