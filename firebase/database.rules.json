@@ -69,7 +69,7 @@
     "statsBot": {
       ".read": true,
       "$uid": {
-        ".write": "newData.exists() && newData.hasChildren(['wins', 'losses', 'name'])",
+        ".write": "auth != null && auth.uid === $uid && newData.exists() && newData.hasChildren(['wins', 'losses', 'name'])",
         "wins": {
           ".validate": "newData.isNumber() && newData.val() >= 0"
         },

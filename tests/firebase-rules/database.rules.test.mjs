@@ -181,28 +181,42 @@ test("stats: deletion is denied", async () => {
   await assertFails(remove(ref(databaseFor(), "stats/alice")));
 });
 
-test("statsBot: public read is allowed", async () => {
+test("statsBot: public leaderboard read is allowed", async () => {
+  await seed("statsBot/alice", statsBot());
   await assertSucceeds(get(ref(databaseFor(), "statsBot")));
 });
 
-test("statsBot: BRIDGE-A allows an unauthenticated cross-user write", async () => {
-  await assertSucceeds(set(ref(databaseFor(), "statsBot/bob"), statsBot()));
+test("statsBot: owner can create own node", async () => {
+  await assertSucceeds(set(ref(databaseFor("alice"), "statsBot/alice"), statsBot()));
 });
 
-test("statsBot: invalid counters are denied", async () => {
-  await assertFails(set(ref(databaseFor(), "statsBot/alice"), statsBot({ wins: -1 })));
+test("statsBot: owner can update own node", async () => {
+  await seed("statsBot/alice", statsBot());
+  await assertSucceeds(update(ref(databaseFor("alice"), "statsBot/alice"), { wins: 3 }));
 });
 
-test("statsBot: malformed recent match ids are denied", async () => {
+test("statsBot: authenticated cross-user write is denied", async () => {
+  await assertFails(set(ref(databaseFor("alice"), "statsBot/bob"), statsBot()));
+});
+
+test("statsBot: unauthenticated write is denied", async () => {
+  await assertFails(set(ref(databaseFor(), "statsBot/alice"), statsBot()));
+});
+
+test("statsBot: invalid counters are denied for owner", async () => {
+  await assertFails(set(ref(databaseFor("alice"), "statsBot/alice"), statsBot({ wins: -1 })));
+});
+
+test("statsBot: malformed recent match ids are denied for owner", async () => {
   await assertFails(set(
-    ref(databaseFor(), "statsBot/alice"),
+    ref(databaseFor("alice"), "statsBot/alice"),
     statsBot({ recentMatchIds: { 10: "outside-allowed-index" } })
   ));
 });
 
-test("statsBot: deletion is denied", async () => {
+test("statsBot: owner deletion is denied", async () => {
   await seed("statsBot/alice", statsBot());
-  await assertFails(remove(ref(databaseFor(), "statsBot/alice")));
+  await assertFails(remove(ref(databaseFor("alice"), "statsBot/alice")));
 });
 
 test("eloMatches: public read is denied", async () => {
