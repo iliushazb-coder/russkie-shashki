@@ -55,13 +55,11 @@ let loadError = null;
 let applyRematchColorSwap = null;
 try {
     global.ELO_START_RATING = Number(/const ELO_START_RATING = (\d+);/.exec(SRC)[1]);
-    global.ELO_K = Number(/const ELO_K = (\d+);/.exec(SRC)[1]);
     eval(extractFunc('normalizeEloRating'));
-    eval(extractFunc('computeEloDeltas'));
     eval(extractFunc('buildEloMatchId'));
-    eval(extractFunc('getEloMatchContext'));
+    eval(extractFunc('isRatedMatchReadyForSettlement'));
     eval(extractFunc('resolveMyOnlineResult'));
-    // v194-R3: recordGameResult опирается на серверную регистрацию.
+    // №10: recordGameResult проверяет только факт серверной регистрации.
     eval(extractFunc('registeredMatchIdForState'));
     eval(extractFunc('recordGameResult'));
     // v194: монет больше нет, COIN_REWARDS удалён вместе с подсистемой.
@@ -261,8 +259,8 @@ check('10. online-путь статистики определяет побед�
     // где победитель определяется по участникам серверной карточки матча.
     check('32. клиент НЕ пишет stats напрямую',
         !/updates\["stats\//.test(SRC));
-    check('33. getEloMatchContext не использует myColor для определения победителя',
-        !/myColor/.test(/function getEloMatchContext[\s\S]*?\n}/.exec(SRC)[0]));
+    check('33. isRatedMatchReadyForSettlement не использует myColor для определения победителя',
+        !/myColor/.test(/function isRatedMatchReadyForSettlement[\s\S]*?\n}/.exec(SRC)[0]));
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     process.exit(failed > 0 ? 1 : 0);

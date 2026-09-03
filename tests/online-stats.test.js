@@ -57,7 +57,7 @@ global.firebaseAuthReady = true;
 global.roomCode = 'R';
 global.auth = { currentUser: { uid: 'tg_101' } };
 global.requestSettlement = function () {};
-global.getEloMatchContext = () => null;
+global.isRatedMatchReadyForSettlement = () => false;
 global.TECHNICAL_WIN_REASON = 'disconnect';
 global.resolveMyOnlineResult = () => 'win';
 

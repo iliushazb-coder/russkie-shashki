@@ -815,12 +815,11 @@ let lastReactionTs = 0;
 
 // ===== ONLINE ELO =====
 // Рейтинг существует ТОЛЬКО для online-партий человек-против-человека.
-// Бот в Elo не участвует вообще (см. getEloMatchContext).
+// Бот в Elo не участвует вообще (см. isRatedMatchReadyForSettlement).
 // Старый игрок без поля rating считается имеющим ELO_START_RATING —
 // массовой миграции базы сознательно нет, отсутствующее поле
 // доинициализируется лениво, при первой же рейтинговой партии.
 const ELO_START_RATING = 1000;
-const ELO_K = 32;
 // Сколько раз пытаться записать receipt одной партии. Отказ — ШТАТНАЯ
 // ситуация: из двух клиентов receipt успевает записать ровно один, второй
 // получает permission denied от Rules (!data.exists()). Отличить "соперник
@@ -3337,29 +3336,11 @@ function resolveMyOnlineResult(state) {
 // ===== ELO: чистая математика =====
 
 // Отсутствующий/битый рейтинг = ELO_START_RATING. Единая точка правды:
-// используется и при расчёте, и при отображении, и при сортировке топа,
+// используется при отображении и при сортировке топа,
 // чтобы старый игрок везде выглядел одинаково.
 function normalizeEloRating(value) {
     if (typeof value !== "number" || !isFinite(value) || value < 0) return ELO_START_RATING;
     return value;
-}
-
-// Стандартная формула Elo. result: "light" | "dark" | "draw".
-// Обе дельты считаются из рейтингов ДО партии, поэтому оба клиента,
-// имея один и тот же ratingsAtStart, получают идентичный результат.
-// clamp: рейтинг не может уйти ниже нуля, поэтому отрицательная дельта
-// ограничивается величиной самого рейтинга. clamp делается ЗДЕСЬ, до
-// отправки: Rules проверяют итог (>= 0) и отклонили бы весь update целиком.
-function computeEloDeltas(lightRating, darkRating, result) {
-    const rl = normalizeEloRating(lightRating);
-    const rd = normalizeEloRating(darkRating);
-    const expectedLight = 1 / (1 + Math.pow(10, (rd - rl) / 400));
-    const scoreLight = (result === "light") ? 1 : ((result === "dark") ? 0 : 0.5);
-    let lightDelta = Math.round(ELO_K * (scoreLight - expectedLight));
-    let darkDelta = Math.round(ELO_K * ((1 - scoreLight) - (1 - expectedLight)));
-    if (lightDelta < -rl) lightDelta = -rl;
-    if (darkDelta < -rd) darkDelta = -rd;
-    return { light: lightDelta, dark: darkDelta };
 }
 
 // Стабильный ID партии. roomCode сам по себе НЕ уникален во времени
@@ -3375,55 +3356,35 @@ function buildEloMatchId(code, createdAt, matchNumber) {
     return "elo_" + code + "_" + stamp + "_" + num;
 }
 
-// Возвращает готовый контекст серверно зарегистрированной рейтинговой
-// партии либо null. В C1 null НЕ включает старый online fallback: клиент
-// больше не пишет stats напрямую, а просто ждёт server pointer/snapshot.
-// Поэтому условия здесь строгие:
+// Проверяет только факт, что завершённая партия является серверно
+// зарегистрированной рейтинговой партией, готовой к settlement. Клиент
+// НЕ рассчитывает Elo: единственный источник рейтинговой математики — Worker.
+// Все прежние guards сохранены намеренно:
 //   - только online между двумя РАЗНЫМИ людьми (бот и зритель исключены);
 //   - я сам обязан быть одним из игроков;
 //   - в комнате обязан лежать канонический ratedMatchId ТЕКУЩЕГО поколения
 //     и полный ratingsAtStart обеих сторон.
-// Worker публикует оба поля вместе при успешной регистрации. Один snapshot
-// без pointer не считается доказательством: cached v193 способен писать его
-// сам, поэтому C1 не должен принимать legacy-состояние за server-rated матч.
-function getEloMatchContext() {
-    if (!isOnlineGame || isBotGame || isSpectator) return null;
-    if (!roomCode || !myTelegramId) return null;
-    if (!currentState || !currentState.winner) return null;
+// Один snapshot без pointer не считается доказательством: cached v193 способен
+// писать его сам, поэтому legacy-состояние не принимается за server-rated матч.
+function isRatedMatchReadyForSettlement() {
+    if (!isOnlineGame || isBotGame || isSpectator) return false;
+    if (!roomCode || !myTelegramId) return false;
+    if (!currentState || !currentState.winner) return false;
 
     const players = currentState.players;
-    if (!players || !players.light || !players.dark) return null;
+    if (!players || !players.light || !players.dark) return false;
     const lightId = players.light.id;
     const darkId = players.dark.id;
-    if (!lightId || !darkId || lightId === darkId) return null;
-    if (myTelegramId !== lightId && myTelegramId !== darkId) return null;
+    if (!lightId || !darkId || lightId === darkId) return false;
+    if (myTelegramId !== lightId && myTelegramId !== darkId) return false;
 
-    // Полного snapshot недостаточно: cached v193 тоже умеет его создать.
-    // C1 считает матч серверно зарегистрированным только при каноническом
-    // ratedMatchId текущего поколения + полном snapshot.
+    // Полного snapshot недостаточно: нужен канонический server pointer
+    // текущего поколения + полный snapshot обеих сторон.
     const registeredMatchId = registeredMatchIdForState(currentState, roomCode);
-    if (!registeredMatchId) return null;
-    const snap = currentState.ratingsAtStart;
+    if (!registeredMatchId) return false;
 
     const result = (currentState.winner === "draw") ? "draw" : currentState.winner;
-    if (result !== "light" && result !== "dark" && result !== "draw") return null;
-
-    const lightRatingBefore = normalizeEloRating(snap.light);
-    const darkRatingBefore = normalizeEloRating(snap.dark);
-    const deltas = computeEloDeltas(lightRatingBefore, darkRatingBefore, result);
-
-    return {
-        matchId: registeredMatchId,
-        lightId: lightId,
-        darkId: darkId,
-        lightName: players.light.name || "Игрок",
-        darkName: players.dark.name || "Игрок",
-        result: result,
-        lightRatingBefore: lightRatingBefore,
-        darkRatingBefore: darkRatingBefore,
-        lightDelta: deltas.light,
-        darkDelta: deltas.dark
-    };
+    return result === "light" || result === "dark" || result === "draw";
 }
 
 // ===== РАСЧЁТ ПАРТИИ НА СЕРВЕРЕ =====
@@ -3801,8 +3762,7 @@ function recordGameResult(onlineMarker) {
     // выполняется — иначе те же wins прибавились бы дважды. Ничья тоже идёт
     // сюда, поэтому проверка на "draw" стоит НИЖЕ этой ветки.
     if (!isBotGame) {
-        const eloCtx = getEloMatchContext();
-        if (eloCtx) {
+        if (isRatedMatchReadyForSettlement()) {
             requestSettlement();
             return;
         }
