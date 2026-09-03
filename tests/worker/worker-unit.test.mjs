@@ -47,6 +47,58 @@ test("eloDeltas is zero-sum for equal ratings", () => {
   assert.deepEqual(eloDeltas(1000, 1000, "draw"), { light: 0, dark: 0 });
 });
 
+test("eloDeltas caps decisive losses at the frozen losing-side rating", () => {
+  for (const rating of [0, 1, 5, 15, 16]) {
+    const cap = Math.min(16, rating);
+    assert.deepEqual(
+      eloDeltas(rating, rating, "light"),
+      { light: cap, dark: -cap },
+      `dark loses from rating ${rating}`
+    );
+    assert.deepEqual(
+      eloDeltas(rating, rating, "dark"),
+      { light: -cap, dark: cap },
+      `light loses from rating ${rating}`
+    );
+  }
+});
+
+test("eloDeltas keeps normal draw behavior when the negative side can pay", () => {
+  assert.deepEqual(eloDeltas(0, 1000, "draw"), { light: 16, dark: -16 });
+  assert.deepEqual(eloDeltas(1000, 0, "draw"), { light: -16, dark: 16 });
+});
+
+test("eloDeltas rejects malformed frozen ratings before settlement can build NaN writes", () => {
+  const invalid = [undefined, Number.NaN, Number.POSITIVE_INFINITY, -1];
+  for (const value of invalid) {
+    assert.throws(() => eloDeltas(value, 1000, "light"), /card_mismatch/);
+    assert.throws(() => eloDeltas(1000, value, "dark"), /card_mismatch/);
+  }
+});
+
+test("eloDeltas stays strict zero-sum and never makes either frozen rating negative", () => {
+  const outcomes = ["light", "dark", "draw"];
+  for (let lightRating = 0; lightRating <= 3000; lightRating += 37) {
+    for (let darkRating = 0; darkRating <= 3000; darkRating += 41) {
+      for (const result of outcomes) {
+        const d = eloDeltas(lightRating, darkRating, result);
+        assert.equal(d.light + d.dark, 0, `${lightRating}/${darkRating}/${result}: zero-sum`);
+        assert.ok(lightRating + d.light >= 0, `${lightRating}/${darkRating}/${result}: light floor`);
+        assert.ok(darkRating + d.dark >= 0, `${lightRating}/${darkRating}/${result}: dark floor`);
+      }
+    }
+  }
+
+  for (const [lightRating, darkRating] of [[0, 10000], [10000, 0], [1, 1000000], [1000000, 1]]) {
+    for (const result of outcomes) {
+      const d = eloDeltas(lightRating, darkRating, result);
+      assert.equal(d.light + d.dark, 0);
+      assert.ok(lightRating + d.light >= 0);
+      assert.ok(darkRating + d.dark >= 0);
+    }
+  }
+});
+
 test("roomOutcome accepts only final result values", () => {
   assert.equal(roomOutcome({ winner: "light" }), "light");
   assert.equal(roomOutcome({ winner: "dark" }), "dark");
@@ -91,6 +143,34 @@ test("validateReceiptAgainstCard accepts exact Worker receipt and rejects forged
   );
   assert.throws(
     () => validateReceiptAgainstCard(receipt, card, "dark"),
+    /receipt_mismatch/
+  );
+});
+
+test("validateReceiptAgainstCard binds floor-capped receipt to frozen ratingAtJoin", () => {
+  const card = {
+    participants: {
+      tg_1: { color: "light", ratingAtJoin: 5 },
+      tg_2: { color: "dark", ratingAtJoin: 5 }
+    }
+  };
+  const receipt = {
+    lightId: "tg_1",
+    darkId: "tg_2",
+    result: "light",
+    lightRatingBefore: 5,
+    darkRatingBefore: 5,
+    lightDelta: 5,
+    darkDelta: -5,
+    settledBy: "worker"
+  };
+
+  assert.deepEqual(validateReceiptAgainstCard(receipt, card, "light"), {
+    light: "tg_1",
+    dark: "tg_2"
+  });
+  assert.throws(
+    () => validateReceiptAgainstCard({ ...receipt, lightDelta: 16, darkDelta: -16 }, card, "light"),
     /receipt_mismatch/
   );
 });
