@@ -9,6 +9,7 @@ import {
 } from "@firebase/rules-unit-testing";
 import {
   get,
+  increment,
   limitToLast,
   orderByChild,
   query,
@@ -165,21 +166,68 @@ test("stats: public leaderboard read is allowed", async () => {
   await assertSucceeds(get(ref(databaseFor(), "stats")));
 });
 
-test("stats: BRIDGE-A allows an unauthenticated cross-user write", async () => {
-  await assertSucceeds(set(ref(databaseFor(), "stats/bob"), stats()));
+test("stats: settlement identity can create a full node", async () => {
+  await assertSucceeds(set(
+    ref(databaseFor("srv_settlement"), "stats/tg_1001"),
+    stats()
+  ));
 });
 
-test("stats: missing required fields are denied", async () => {
-  await assertFails(set(ref(databaseFor(), "stats/alice"), { wins: 1, losses: 0 }));
+test("stats: settlement identity can apply atomic root increments", async () => {
+  await seed("stats/tg_1001", stats({ name: "Light", rating: 1200, wins: 2, losses: 1, draws: 3 }));
+  await seed("stats/tg_1002", stats({ name: "Dark", rating: 1200, wins: 4, losses: 2, draws: 1 }));
+
+  await assertSucceeds(update(ref(databaseFor("srv_settlement")), {
+    "stats/tg_1001/rating": increment(16),
+    "stats/tg_1002/rating": increment(-16),
+    "stats/tg_1001/wins": increment(1),
+    "stats/tg_1002/losses": increment(1)
+  }));
+
+  const light = await get(ref(databaseFor(), "stats/tg_1001"));
+  const dark = await get(ref(databaseFor(), "stats/tg_1002"));
+  assert.equal(light.child("rating").val(), 1216);
+  assert.equal(light.child("wins").val(), 3);
+  assert.equal(dark.child("rating").val(), 1184);
+  assert.equal(dark.child("losses").val(), 3);
 });
 
-test("stats: unknown fields are denied", async () => {
-  await assertFails(set(ref(databaseFor(), "stats/alice"), stats({ admin: true })));
+test("stats: legacy authenticated client cannot update own node", async () => {
+  await seed("stats/tg_1001", stats());
+  await assertFails(update(ref(databaseFor("tg_1001")), {
+    "stats/tg_1001/rating": increment(16),
+    "stats/tg_1001/wins": increment(1)
+  }));
 });
 
-test("stats: deletion is denied", async () => {
-  await seed("stats/alice", stats());
-  await assertFails(remove(ref(databaseFor(), "stats/alice")));
+test("stats: authenticated cross-user write is denied", async () => {
+  await assertFails(set(
+    ref(databaseFor("tg_1001"), "stats/tg_1002"),
+    stats()
+  ));
+});
+
+test("stats: unauthenticated write is denied", async () => {
+  await assertFails(set(ref(databaseFor(), "stats/tg_1001"), stats()));
+});
+
+test("stats: missing required fields are denied for settlement identity", async () => {
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "stats/tg_1001"),
+    { wins: 1, losses: 0 }
+  ));
+});
+
+test("stats: unknown fields are denied for settlement identity", async () => {
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "stats/tg_1001"),
+    stats({ admin: true })
+  ));
+});
+
+test("stats: deletion is denied for settlement identity", async () => {
+  await seed("stats/tg_1001", stats());
+  await assertFails(remove(ref(databaseFor("srv_settlement"), "stats/tg_1001")));
 });
 
 test("statsBot: public leaderboard read is allowed", async () => {

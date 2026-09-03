@@ -8,7 +8,7 @@
         "rating"
       ],
       "$uid": {
-        ".write": "newData.exists() && newData.hasChildren(['wins', 'losses', 'name'])",
+        ".write": "auth != null && auth.uid === 'srv_settlement' && newData.exists() && newData.hasChildren(['wins', 'losses', 'name'])",
         "wins": {
           ".validate": "newData.isNumber() && newData.val() >= 0"
         },
