@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { after, before, beforeEach, test } from "node:test";
 
@@ -600,41 +601,53 @@ test("botSessions: owner deletion is denied", async () => {
   await assertFails(remove(ref(databaseFor("alice"), "botSessions/alice")));
 });
 
-test("economy: a user node is publicly readable", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "economy/alice")));
+test("economy: unauthenticated user-node read is denied", async () => {
+  await seed("economy/alice", economy());
+  await assertFails(get(ref(databaseFor(), "economy/alice")));
 });
 
-test("economy: unrestricted collection read is denied", async () => {
-  await assertFails(get(ref(databaseFor(), "economy")));
+test("economy: authenticated user-node read is denied", async () => {
+  await seed("economy/alice", economy());
+  await assertFails(get(ref(databaseFor("alice"), "economy/alice")));
 });
 
-test("economy: top-ten leaderboard query is allowed", async () => {
+test("economy: former top-ten leaderboard query is denied", async () => {
+  await seed("economy/alice", economy());
   const leaderboard = query(
     ref(databaseFor(), "economy"),
     orderByChild("lifetimeEarned"),
     limitToLast(10)
   );
-  await assertSucceeds(get(leaderboard));
-});
-
-test("economy: leaderboard query over the limit is denied", async () => {
-  const leaderboard = query(
-    ref(databaseFor(), "economy"),
-    orderByChild("lifetimeEarned"),
-    limitToLast(11)
-  );
   await assertFails(get(leaderboard));
 });
 
-test("economy: BRIDGE-A allows cross-user writes", async () => {
-  await assertSucceeds(set(ref(databaseFor("alice"), "economy/bob"), economy()));
+test("economy: owner create is denied", async () => {
+  await assertFails(set(ref(databaseFor("alice"), "economy/alice"), economy()));
 });
 
-test("economy: negative balances are denied", async () => {
-  await assertFails(set(
-    ref(databaseFor("alice"), "economy/alice"),
-    economy({ balance: -1 })
-  ));
+test("economy: cross-user write is denied", async () => {
+  await assertFails(set(ref(databaseFor("alice"), "economy/bob"), economy()));
+});
+
+test("economy: unauthenticated write is denied", async () => {
+  await assertFails(set(ref(databaseFor(), "economy/alice"), economy()));
+});
+
+test("economy: owner update is denied", async () => {
+  await seed("economy/alice", economy());
+  await assertFails(update(ref(databaseFor("alice"), "economy/alice"), { balance: 11 }));
+});
+
+test("economy: owner deletion is denied and seeded data is preserved", async () => {
+  const original = economy();
+  await seed("economy/alice", original);
+  await assertFails(remove(ref(databaseFor("alice"), "economy/alice")));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const snapshot = await get(ref(context.database(), "economy/alice"));
+    if (!snapshot.exists()) throw new Error("seeded economy data was removed");
+    assert.deepStrictEqual(snapshot.val(), original);
+  });
 });
 
 test("matchmakingQueue: public read is allowed", async () => {

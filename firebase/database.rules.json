@@ -120,44 +120,10 @@
       }
     },
     "economy": {
-      ".read": "query.orderByChild === 'lifetimeEarned' && query.limitToLast <= 10",
-      ".indexOn": [
-        "lifetimeEarned"
-      ],
-      "$uid": {
-        ".read": true,
-        ".write": true,
-        ".validate": "newData.hasChildren(['name', 'balance', 'lifetimeEarned', 'lifetimeSpent', 'lastDailyClaim', 'welcomeClaimed'])",
-        "name": {
-          ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length < 50"
-        },
-        "balance": {
-          ".validate": "newData.isNumber() && newData.val() >= 0"
-        },
-        "lifetimeEarned": {
-          ".validate": "newData.isNumber() && newData.val() >= 0"
-        },
-        "lifetimeSpent": {
-          ".validate": "newData.isNumber() && newData.val() >= 0"
-        },
-        "lastDailyClaim": {
-          ".validate": "newData.isString()"
-        },
-        "welcomeClaimed": {
-          ".validate": "newData.isBoolean()"
-        },
-        "rewardedMatches": {
-          ".validate": "newData.hasChildren()",
-          "$matchId": {
-            ".validate": "newData.isBoolean() && newData.val() === true"
-          }
-        },
-        "$other": {
-          ".validate": false
-        }
-      }
-    },
-    "matchmakingQueue": {
+    ".read": false,
+    ".write": false
+  },
+  "matchmakingQueue": {
       ".read": true,
       "$uid": {
         ".write": true,
