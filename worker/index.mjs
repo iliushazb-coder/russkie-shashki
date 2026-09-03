@@ -336,12 +336,24 @@ export function decideRegistration(index, room) {
 }
 
 export function eloDeltas(lightRating, darkRating, result) {
+  if (!Number.isFinite(lightRating) || lightRating < 0 ||
+      !Number.isFinite(darkRating) || darkRating < 0) {
+    throw new Error("card_mismatch");
+  }
+
   const expectedLight = 1 / (1 + Math.pow(10, (darkRating - lightRating) / 400));
   const scoreLight = result === "draw" ? 0.5 : result === "light" ? 1 : 0;
-  return {
-    light: Math.round(ELO_K * (scoreLight - expectedLight)),
-    dark: Math.round(ELO_K * ((1 - scoreLight) - (1 - expectedLight)))
-  };
+  const originalLight = Math.round(ELO_K * (scoreLight - expectedLight));
+
+  // One original delta is authoritative; the other side is always its exact
+  // opposite. If the negative side cannot pay the full loss, cap BOTH sides
+  // by that frozen rating so the settlement stays strict zero-sum and >= 0.
+  if (originalLight === 0) return { light: 0, dark: 0 };
+  const negativeRating = originalLight < 0 ? lightRating : darkRating;
+  const cap = Math.min(Math.abs(originalLight), negativeRating);
+  if (cap === 0) return { light: 0, dark: 0 };
+  const light = originalLight < 0 ? -cap : cap;
+  return { light, dark: -light };
 }
 
 export function roomOutcome(room) {
