@@ -1,8 +1,8 @@
 # Проверка каждого push и pull request.
 #
-# Этот workflow пока запускает dependency-free frontend suite. Зависимости
-# Firebase Emulator и отдельный backend workflow подключаются в пункте №6;
-# npm test по-прежнему запускает только голый Node.
+# Этот workflow запускает dependency-free frontend suite. Backend/Emulator
+# проверки живут отдельно в backend.yml; npm test по-прежнему запускает
+# только голый Node без npm ci.
 #
 # Код возврата важнее вывода: сюита, упавшая при загрузке, печатает ноль
 # проверок и молча уменьшает общий счёт. Раннер это ловит и завершается
