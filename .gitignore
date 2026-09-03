@@ -22,3 +22,25 @@ npm-debug.log*
 
 # Локальные архивы и черновики, которые не должны попасть в репозиторий
 *.zip
+
+# Секреты и локальная конфигурация с секретами.
+# Никогда не коммитить: токен бота Telegram, приватный ключ сервисного
+# аккаунта Firebase, токен Cloudflare API, GitHub PAT.
+# worker/wrangler.toml сюда НЕ входит: конфигурация без секретных значений
+# версионируется, секреты задаются через Cloudflare Secrets и .dev.vars.
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+
+# JSON сервисного аккаунта Firebase, включая имена с префиксом.
+*service-account*.json
+*service_account*.json
+*[sS]erviceAccount*.json
+*firebase-adminsdk*.json
+
+# Приватные ключи и контейнеры сертификатов.
+*.pem
+*.key
+*.p12
+*.pfx
