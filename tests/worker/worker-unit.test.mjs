@@ -50,14 +50,15 @@ test("eloDeltas is zero-sum for equal ratings", () => {
 test("eloDeltas caps decisive losses at the frozen losing-side rating", () => {
   for (const rating of [0, 1, 5, 15, 16]) {
     const cap = Math.min(16, rating);
+    const loss = cap === 0 ? 0 : -cap;
     assert.deepEqual(
       eloDeltas(rating, rating, "light"),
-      { light: cap, dark: -cap },
+      { light: cap, dark: loss },
       `dark loses from rating ${rating}`
     );
     assert.deepEqual(
       eloDeltas(rating, rating, "dark"),
-      { light: -cap, dark: cap },
+      { light: loss, dark: cap },
       `light loses from rating ${rating}`
     );
   }
