@@ -124,12 +124,12 @@ function botSession(overrides = {}) {
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_000,
     state: {
-      pieces: {},
+      pieces: { b6: { color: "light", king: false } },
       turn: "light",
       capturedDark: 0,
       capturedLight: 0,
       moveCount: 0,
-      players: {}
+      players: { light: { id: "alice", name: "Alice" } }
     },
     ...overrides
   };
