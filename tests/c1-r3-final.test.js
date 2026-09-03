@@ -132,6 +132,6 @@ console.log('\n=== REMOVED ECONOMY / PRESERVED SAFETY ===');
   check('C6 no COIN_REWARDS executable residue', !/COIN_REWARDS/.test(SRC));
 }
 
-console.log(`\nFINAL ${pass}/${pass+fail}`);
+console.log(`\nИТОГ: ${pass}/${pass+fail}`);
 process.exit(fail?1:0);
 })().catch(e=>{console.error(e);process.exit(1)});
