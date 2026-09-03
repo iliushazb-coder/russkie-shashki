@@ -44,6 +44,7 @@ const FILES = [
   ['Y. ВОРОТА: ЗАКРЕПЛЕНИЕ ГАРАНТИЙ', 'auth-gate-regression.test.js'],
   ['Z. C1: РЕЙТИНГ ВМЕСТО МОНЕТ', 'c1-rating-ui.test.js'],
   ['Z2. C1: ШЕСТЬ БЛОКЕРОВ', 'c1-blockers.test.js'],
+  ['Z3. C1: ПОВЕДЕНИЕ SETTLEMENT', 'settlement-behavior.test.js'],
   ['W. ПАНЕЛИ ИГРОКОВ: ШИРИНА И СОКРАЩЕНИЕ', 'player-panel-layout.test.js'],
   ['V. СТОПКА ВЗЯТЫХ ШАШЕК: DOM', 'captured-stack-dom.test.js'],
 ];
