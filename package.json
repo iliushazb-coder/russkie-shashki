@@ -3,10 +3,14 @@
   "version": "1.0.0",
   "description": "Русские шашки 8x8 — Telegram Mini App",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "test": "node tests/run.js",
     "check": "node --check script.js",
-    "test:browser": "node tests/panel-browser-layout.test.js"
+    "test:browser": "node tests/panel-browser-layout.test.js",
+    "test:rules": "firebase emulators:exec --project demo-russkie-shashki --only database \"node --test --test-concurrency=1 tests/firebase-rules/database.rules.test.mjs\""
   },
   "keywords": [
     "draughts",
@@ -14,5 +18,10 @@
     "russian-draughts"
   ],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "5.0.2",
+    "firebase": "12.18.0",
+    "firebase-tools": "15.29.0"
+  }
 }
