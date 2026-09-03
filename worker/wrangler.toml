@@ -1,0 +1,39 @@
+# Конфигурация Cloudflare Worker russkie-shashki-auth.
+#
+# Здесь ТОЛЬКО несекретные значения. Два секрета —
+# FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY и TELEGRAM_BOT_TOKEN — хранятся
+# в Cloudflare Secrets и в репозиторий не попадают никогда.
+# Локально они задаются через .dev.vars. Этот файл ДОЛЖЕН быть добавлен
+# в .gitignore в пункте №2 MASTER PLAN. До выполнения №2 файл с секретами
+# не создавать и не коммитить.
+#
+# Значения ниже сняты с текущей панели Worker 2026-09-02. Активная версия
+# на тот момент отображалась как b4ddde49 (Dashboard-префикс), 100%
+# трафика. Явная привязка именно этих значений к идентификатору версии
+# панелью НЕ доказана: панель показывает текущие bindings Worker и
+# отдельно активную версию, но не связывает их между собой.
+
+name = "russkie-shashki-auth"
+main = "index.mjs"
+
+# compatibility_date НАМЕРЕННО НЕ ЗАДАН. Реальное значение активной версии
+# с панели не читается, а вписывать предположение нельзя: оно меняет
+# поведение среды выполнения. Заполнить по выводу
+#   wrangler versions view <полный Version ID>
+# когда он будет получен.
+#
+# ПРЕДУПРЕЖДЕНИЕ: файл фиксирует известную часть production-конфигурации,
+# но не готов к deploy. Не выполнять deploy до получения и добавления
+# настоящего production compatibility_date.
+
+[vars]
+ALLOWED_ORIGINS = "https://iliushazb-coder.github.io"
+FIREBASE_APP_ID = "1:225166276271:web:f15906ebc83350b002c65a"
+FIREBASE_DB_URL = "https://russkie-shashki-online-default-rtdb.europe-west1.firebasedatabase.app"
+FIREBASE_SERVICE_ACCOUNT_EMAIL = "firebase-adminsdk-fbsvc@russkie-shashki-online.iam.gserviceaccount.com"
+FIREBASE_WEB_API_KEY = "AIzaSyBZzxmmgRxNe1b-MFG4zIlCFTI7D3lStiA"
+TELEGRAM_AUTH_MAX_AGE_SECONDS = "3600"
+
+# Секреты (только имена, значений здесь быть не должно):
+#   FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY
+#   TELEGRAM_BOT_TOKEN
