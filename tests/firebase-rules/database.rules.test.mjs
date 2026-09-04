@@ -217,6 +217,7 @@ test("stats: missing required fields are denied for settlement identity", async 
     { wins: 1, losses: 0 }
   ));
 });
+
 test("stats: unknown fields are denied for settlement identity", async () => {
   await assertFails(set(
     ref(databaseFor("srv_settlement"), "stats/tg_1001"),
