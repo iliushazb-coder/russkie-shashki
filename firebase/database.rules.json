@@ -32,7 +32,7 @@
     "eloMatches": {
       ".read": "auth != null && auth.uid === 'srv_settlement'",
       "$matchId": {
-        ".write": "!data.exists() && newData.exists()",
+        ".write": "auth != null && auth.uid === 'srv_settlement' && !data.exists() && newData.exists()",
         ".validate": "$matchId.length > 0 && $matchId.length < 150 && newData.hasChildren(['lightId', 'darkId', 'result', 'lightRatingBefore', 'darkRatingBefore', 'lightDelta', 'darkDelta', 'createdAt']) && newData.child('lightId').val() !== newData.child('darkId').val() && (newData.child('lightDelta').val() + newData.child('darkDelta').val()) >= 0 && (newData.child('lightDelta').val() + newData.child('darkDelta').val()) <= 32 && (newData.child('result').val() !== 'light' || (newData.child('lightDelta').val() >= 0 && newData.child('darkDelta').val() <= 0)) && (newData.child('result').val() !== 'dark' || (newData.child('darkDelta').val() >= 0 && newData.child('lightDelta').val() <= 0)) && (newData.child('result').val() !== 'draw' || ((newData.child('lightDelta').val() >= 0 && newData.child('darkDelta').val() <= 0) || (newData.child('lightDelta').val() <= 0 && newData.child('darkDelta').val() >= 0)))",
         "lightId": {
           ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length < 100"
