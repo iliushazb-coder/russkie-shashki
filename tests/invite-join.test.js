@@ -216,6 +216,39 @@ function setup(serverRoom, opts) {
         // свободен, а room.status === 'waiting' В МОМЕНТ прихода write на
         // сервер — не в момент, когда клиент решил писать (warm-снимок
         // может быть устаревшим, ровно как в реальности).
+        //
+        // ЛОКАЛЬНЫЙ ОПТИМИЗМ update() (найдено на независимой проверке):
+        // update() в реальном RTDB СРАЗУ мутирует локальный кеш и стреляет
+        // локальными listener'ами ДО server ACK — в отличие от того, что
+        // предполагал более ранний комментарий здесь. Значит warm-listener
+        // МОЖЕТ увидеть спекулятивное "я уже dark, active" ещё до решения
+        // сервера. Симулируем это здесь: синхронно кормим warm-listener
+        // спекулятивным значением, и если сервер потом реджектит — стреляем
+        // ЕЩЁ РАЗ с откаченным (истинным) значением, как делает настоящий SDK.
+        if (opts.seatStolenDuringPendingWrite && !env.stolenDuringPendingDone) {
+          env.stolenDuringPendingDone = true;
+          const speculative = JSON.parse(JSON.stringify(env.serverRoom));
+          speculative.status = v.status;
+          speculative.players = speculative.players || {};
+          speculative.players.dark = v['players/dark'];
+          speculative.turnStartedAt = v.turnStartedAt;
+          (env.warmHandlers || []).forEach(function (h) {
+            h({ val: function () { return speculative; } });
+          });
+          // Сервер В ЭТОТ МОМЕНТ уже отдал место другому — гонка проиграна.
+          env.serverRoom.players = env.serverRoom.players || {};
+          env.serverRoom.players.dark = { id: 'C', name: 'Другой гость' };
+          env.serverRoom.status = 'active';
+          return Promise.resolve().then(function () {
+            const rolledBack = JSON.parse(JSON.stringify(env.serverRoom));
+            (env.warmHandlers || []).forEach(function (h) {
+              h({ val: function () { return rolledBack; } });
+            });
+            const err = new Error('PERMISSION_DENIED');
+            err.code = 'PERMISSION_DENIED';
+            throw err;
+          });
+        }
         if (opts.joinStuckInNetwork && !env.stuckDone) {
           env.stuckDone = true;
           // Сетевая яма: у update() нет applyLocally/локального оптимизма —
@@ -439,6 +472,26 @@ const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && 
   check('8. проигравший НЕ записал метаданные', !gotMeta());
   check('8. startOnlineGame НЕ запущен', env.startCalls === 0);
   check('8. показан err_room_taken', env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
+
+  console.log('');
+  console.log('СЦЕНАРИЙ 8b. ГОНКА: спекулятивный локальный apply update() НЕ маскирует проигрыш');
+  // Найдено на независимой проверке: update() в RTDB применяется локально
+  // ДО server ACK, и warm-listener реально может увидеть "я уже dark,
+  // active" ещё до решения сервера. Проверяем, что даже с этим спекулятивным
+  // событием итоговая классификация — проигрыш гонки (occupied), а не "won":
+  // attemptAtomicInviteJoin решает по ПРОМИСУ update(), а не по listener'у.
+  setup(mkRoom('waiting', 'A', null), { seatStolenDuringPendingWrite: true });
+  checkForInviteLink(); await flush();
+  check('8b. итоговое место на сервере осталось за перехватившим',
+    env.serverRoom.players.dark.id === 'C');
+  check('8b. несмотря на спекулятивный snapshot, проигравший НЕ стал dark',
+    global.myColor !== 'dark');
+  check('8b. проигравший НЕ в онлайн-игре', global.isOnlineGame === false);
+  check('8b. проигравший НЕ записал метаданные (спекулятивный snapshot не был принят за успех)',
+    !gotMeta());
+  check('8b. startOnlineGame НЕ запущен', env.startCalls === 0);
+  check('8b. классифицировано как occupied (err_room_taken), а не как won',
+    env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
 
   console.log('');
   console.log('СЦЕНАРИЙ 9. партию ЗАВЕРШИЛИ перед самой транзакцией');

@@ -415,20 +415,79 @@ test("rooms: a partial room create is denied", async () => {
   }));
 });
 
-test("rooms: a dark player can join a waiting room", async () => {
-  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
-  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
-    "players/dark": { id: "bob", name: "Bob" },
-    status: "active"
-  }));
-});
-
-test("rooms: join with turnStartedAt in the same update is allowed (matches real client shape)", async () => {
+test("rooms: a dark player can join a waiting room (full join: dark+status+fresh turnStartedAt)", async () => {
   await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
   await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     status: "active",
+    turnStartedAt: Date.now()
+  }));
+});
+
+test("rooms: players/dark alone, without status or turnStartedAt, is denied", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(set(
+    ref(databaseFor("bob"), "rooms/ROOM1/players/dark"),
+    { id: "bob", name: "Bob" }
+  ));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillWaiting = await get(ref(context.database(), "rooms/ROOM1"));
+    assert.equal(stillWaiting.child("status").val(), "waiting");
+    assert.equal(stillWaiting.child("players/dark").exists(), false);
+  });
+});
+
+test("rooms: players/dark + turnStartedAt without flipping status to active is denied (two-step escalation attempt)", async () => {
+  // Ровно найденная двухшаговая эскалация: если бы это прошло, room
+  // осталась бы waiting, но auth.uid уже сидел бы в players/dark — а
+  // participant-ветка $room/.write смотрит только на неизменность light/dark
+  // id, не на status. Все три поля теперь взаимно требуют друг друга.
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    turnStartedAt: Date.now()
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillWaiting = await get(ref(context.database(), "rooms/ROOM1"));
+    assert.equal(stillWaiting.child("status").val(), "waiting");
+    assert.equal(stillWaiting.child("players/dark").exists(), false);
+  });
+});
+
+test("rooms: players/dark + status without a fresh turnStartedAt is denied", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active"
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillWaiting = await get(ref(context.database(), "rooms/ROOM1"));
+    assert.equal(stillWaiting.child("status").val(), "waiting");
+    assert.equal(stillWaiting.child("players/dark").exists(), false);
+  });
+});
+
+test("rooms: join with a stale turnStartedAt (reusing the room-creation timestamp) is denied", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
     turnStartedAt: 1_700_000_000_000
+  }));
+});
+
+test("rooms: after any partial/failed join attempt, the attacker still cannot reach participant broad-write", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  // Шаг 1: неполная попытка (только players/dark) — уже DENY сама по себе.
+  await assertFails(set(
+    ref(databaseFor("bob"), "rooms/ROOM1/players/dark"),
+    { id: "bob", name: "Bob" }
+  ));
+  // Шаг 2: раз players/dark не записался, bob не участник — broad
+  // participant-ветка $room/.write ("unchanged players") его не пропустит.
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "dark", king: true } },
+    turn: "dark"
   }));
 });
 
@@ -437,6 +496,7 @@ test("rooms: join bundled with a pieces change is denied entirely", async () => 
   await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     status: "active",
+    turnStartedAt: Date.now(),
     pieces: { a1: { color: "dark", king: true } }
   }));
 });
@@ -446,6 +506,7 @@ test("rooms: join bundled with a turn change is denied entirely", async () => {
   await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     status: "active",
+    turnStartedAt: Date.now(),
     turn: "dark"
   }));
 });
@@ -455,6 +516,7 @@ test("rooms: join bundled with a winner change is denied entirely", async () => 
   await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     status: "active",
+    turnStartedAt: Date.now(),
     winner: "dark"
   }));
 });
@@ -464,7 +526,8 @@ test("rooms: join bundled with tampering the light player's own data is denied e
   await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     "players/light/name": "Hacked",
-    status: "active"
+    status: "active",
+    turnStartedAt: Date.now()
   }));
 });
 
@@ -472,11 +535,13 @@ test("rooms: two joiners racing for the same seat — the second cannot replace 
   await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
   await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
-    status: "active"
+    status: "active",
+    turnStartedAt: Date.now()
   }));
   await assertFails(update(ref(databaseFor("carol"), "rooms/ROOM1"), {
     "players/dark": { id: "carol", name: "Carol" },
-    status: "active"
+    status: "active",
+    turnStartedAt: Date.now()
   }));
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const finalDark = await get(ref(context.database(), "rooms/ROOM1/players/dark"));
@@ -493,7 +558,8 @@ test("rooms: an idempotent repeat by the same already-joined dark player leaves 
   // записи — см. script.js.
   await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
-    status: "active"
+    status: "active",
+    turnStartedAt: Date.now()
   }));
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const stillIntact = await get(ref(context.database(), "rooms/ROOM1"));
@@ -621,6 +687,29 @@ test("rooms: the same rated rematch is denied before the settlement receipt exis
   rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
   rated.matchNumber = 0;
   await seed("rooms/ROOM1", rated);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    matchNumber: 1,
+    ratingsAtStart: null
+  }));
+});
+
+test("rooms: a legacy (pre-#15) non-worker receipt does not authorize a rated rematch", async () => {
+  // Worker сам не доверяет такой receipt (worker/index.mjs: "Under BRIDGE-A
+  // a legacy receipt is not authoritative proof... ratingConfirmed: false") —
+  // Rules обязаны требовать тот же маркер settledBy==='worker', а не голое
+  // .exists(), иначе forged pre-#15 receipt даёт то же самое обход, что и
+  // не проверять settlement вовсе.
+  const rated = room({ status: "finished" });
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  rated.matchNumber = 0;
+  await seed("rooms/ROOM1", rated);
+  await seed("eloMatches/elo_ROOM1_1700000000000_0", { source: "legacy" });
   await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
     "players/light/id": "bob",
     "players/light/name": "Bob",
