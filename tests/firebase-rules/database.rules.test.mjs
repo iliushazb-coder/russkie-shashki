@@ -519,6 +519,58 @@ test("rooms: a rematch can swap the two existing participants' seats", async () 
   }));
 });
 
+test("rooms: a legal rated rematch is allowed once the settlement receipt exists", async () => {
+  const rated = room({ status: "finished" });
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  rated.matchNumber = 0;
+  await seed("rooms/ROOM1", rated);
+  await seed("eloMatches/elo_ROOM1_1700000000000_0", { settledBy: "worker" });
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    matchNumber: 1,
+    ratingsAtStart: null
+  }));
+});
+
+test("rooms: the same rated rematch is denied before the settlement receipt exists", async () => {
+  const rated = room({ status: "finished" });
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  rated.matchNumber = 0;
+  await seed("rooms/ROOM1", rated);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    matchNumber: 1,
+    ratingsAtStart: null
+  }));
+});
+
+test("rooms: an active rated room cannot swap seats and wipe the rating snapshot", async () => {
+  const rated = room({ status: "active" });
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  rated.matchNumber = 0;
+  rated.ratingsAtStart = { light: 1000, dark: 1000 };
+  await seed("rooms/ROOM1", rated);
+  await seed("eloMatches/elo_ROOM1_1700000000000_0", { settledBy: "worker" });
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    matchNumber: 1,
+    ratingsAtStart: null
+  }));
+});
+
 test("rooms: an outsider joining an active dark-absent room is denied", async () => {
   const active = room({ status: "waiting", dark: false });
   active.status = "active";
@@ -557,19 +609,38 @@ test("rooms: an outsider still cannot write into the legacy spectators path", as
   ));
 });
 
-test("rooms: a participant may write into the now-inert legacy spectators path (harmless, no longer authoritative)", async () => {
+test("rooms: a participant cannot create a new legacy spectator entry", async () => {
   await seed("rooms/ROOM1", room());
-  await assertSucceeds(set(
+  await assertFails(set(
     ref(databaseFor("alice"), "rooms/ROOM1/spectators/carol"),
     "Carol"
   ));
 });
 
+test("rooms: a participant cannot modify an existing legacy spectator entry", async () => {
+  const withLegacy = room();
+  withLegacy.spectators = { carol: "Carol" };
+  await seed("rooms/ROOM1", withLegacy);
+  await assertFails(set(
+    ref(databaseFor("alice"), "rooms/ROOM1/spectators/carol"),
+    "Mallory"
+  ));
+});
+
+test("rooms: a participant can delete an existing legacy spectator entry", async () => {
+  const withLegacy = room();
+  withLegacy.spectators = { carol: "Carol" };
+  await seed("rooms/ROOM1", withLegacy);
+  await assertSucceeds(remove(ref(databaseFor("alice"), "rooms/ROOM1/spectators/carol")));
+});
+
 test("rooms: a whole-room write carrying forward pre-existing legacy spectators data is not rejected", async () => {
-  // Это ровно тот сценарий, который сломала бы spectators/.validate:false:
-  // whole-room transaction читает всю комнату, меняет несколько полей и
-  // возвращает ОБЪЕКТ ЦЕЛИКОМ — включая старое значение spectators без
-  // изменений. Такой паттерн реально используется в script.js (8 мест).
+  // Это ровно тот сценарий, который сломала бы spectators/.validate:false на
+  // уровне узла целиком: whole-room transaction читает всю комнату, меняет
+  // несколько полей и возвращает ОБЪЕКТ ЦЕЛИКОМ — включая старое значение
+  // spectators БЕЗ ИЗМЕНЕНИЙ. Такой паттерн реально используется в script.js
+  // (8 мест). Guard теперь стоит per-$uid и требует точного равенства
+  // значения, а не запрещает узел целиком — carry-forward unchanged проходит.
   const withLegacy = room();
   withLegacy.spectators = { carol: "Carol" };
   await seed("rooms/ROOM1", withLegacy);
