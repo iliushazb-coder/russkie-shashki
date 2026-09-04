@@ -623,17 +623,17 @@ function stateWithOpponentSilentFor(absenceSec, online) {
         /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC));
     check('15.5 все четыре ИГРОВЫЕ whole-room транзакции защищены', (function () {
         // Ход, сдача, ничья, таймаут. Пятая транзакция на узле комнаты —
-        // вход в комнату (joinGroupRoom) — заменена №18 на узкий update()
-        // players/dark+status+turnStartedAt, независимо защищённый Rules
-        // (см. database.rules.json), а не connectivity-guard'ом — поэтому
-        // больше не whole-room transaction и не входит в этот подсчёт.
+        // вход в комнату (joinGroupRoom) — СОЗНАТЕЛЬНО не защищена: она
+        // выполняется в момент присоединения, до подписки на комнату, и без
+        // связи всё равно недостижима (список комнат не загрузится).
+        // Зафиксировано отдельной проверкой ниже, чтобы не потерялось.
         const move = /if \(isOnlineGame && !isFirebaseConnected\) return;/.test(SRC);
         const others = (SRC.match(/if \(!isFirebaseConnected\) return;/g) || []).length;
         return move && others >= 3;
     })());
-    check('15.5b join (joinGroupRoom) больше не whole-room транзакция (№18)',
-        !/ИСПОЛЬЗУЕМ ТРАНЗАКЦИЮ: гарантируем, что комната не удалена/.test(SRC) &&
-        (SRC.match(/database\.ref\("rooms\/" \+ roomCode\)\.transaction\(/g) || []).length === 4);
+    check('15.5b известна пятая whole-room транзакция — вход в комнату (Фаза 2)',
+        /ИСПОЛЬЗУЕМ ТРАНЗАКЦИЮ: гарантируем, что комната не удалена/.test(SRC) &&
+        (SRC.match(/database\.ref\("rooms\/" \+ roomCode\)\.transaction\(/g) || []).length === 5);
     check('15.6 guard защищает СЕРВЕРНУЮ сдачу, локальный выход не тронут',
         /Локальный выход из партии этим guard'ом НЕ затрагивается/.test(SRC));
     check('15.7 отмечено как временная инварианта Фазы 1 (снимется в Фазе 2)',

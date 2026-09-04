@@ -842,9 +842,6 @@ let myColor = "light";
 let isOnlineGame = false;
 let pendingTimeControlSeconds = 0;
 let roomListenerRef = null;
-let roomSpectatorsListenerRef = null;
-let roomSpectatorsListenerCode = null;
-let roomSpectatorsCache = null; // последний известный snapshot для listenerCode
 let myPresenceRef = null;
 let presenceHeartbeatInterval = null;
 // (v171) Я — создатель waiting-комнаты, и второй игрок ещё НЕ подключился.
@@ -1983,54 +1980,6 @@ function applyStatusToElement(el, panelEl, statusInfo) {
     } else {
         panelEl.classList.remove("player-faded");
     }
-}
-
-// Единый lifecycle для авторитетного списка зрителей "roomSpectators/{code}".
-// Заменяет три независимых ad-hoc копирования room.spectators — авторитетные
-// данные больше не лежат внутри rooms/$room (см. №18: participant не должен
-// иметь возможность протащить чужого зрителя через общий room-write).
-// stale-callback guard: сравниваем сам ref, а не только код, чтобы повторный
-// attach на тот же код не держал старый колбэк с предыдущей generation ref.
-//
-// INITIAL-ORDER RACE: этот listener и room-listener подписываются независимо
-// и приходят асинхронно в любом порядке. Если snapshot зрителей приходит
-// РАНЬШЕ, чем room-listener создал currentState, писать в currentState.spectators
-// напрямую нельзя — упадёт на null. Вместо этого кладём в roomSpectatorsCache
-// всегда, а в currentState — только если он уже существует. Обратная сторона:
-// каждое место, создающее currentState заново для этого же code, обязано само
-// подмешать roomSpectatorsCache — иначе snapshot, пришедший первым, потеряется
-// молча вместо явного краша. См. подмешивание в трёх местах ниже.
-function attachRoomSpectatorsListener(code) {
-    if (roomSpectatorsListenerRef && roomSpectatorsListenerCode === code) return;
-    detachRoomSpectatorsListener();
-    roomSpectatorsListenerCode = code;
-    const ref = database.ref("roomSpectators/" + code);
-    roomSpectatorsListenerRef = ref;
-    ref.on("value", function (snapshot) {
-        if (roomSpectatorsListenerRef !== ref) return; // отписались/сменили комнату
-        roomSpectatorsCache = snapshot.val() || null;
-        if (currentState) {
-            currentState.spectators = roomSpectatorsCache;
-            renderSpectatorsList();
-        }
-    });
-}
-
-function detachRoomSpectatorsListener() {
-    if (roomSpectatorsListenerRef) roomSpectatorsListenerRef.off();
-    roomSpectatorsListenerRef = null;
-    roomSpectatorsListenerCode = null;
-    roomSpectatorsCache = null;
-}
-
-// Единая точка разбора roomListenerRef. roomListenerRef разбирается больше
-// чем в десяти местах кода — заводить отдельный detach для зрителей в каждом
-// было бы гарантированным способом забыть один из них. Вместо этого ВСЕ
-// прежние "roomListenerRef.off(); roomListenerRef = null;" заменены на вызов
-// этой функции, так что оба listener'а всегда живут и умирают вместе.
-function detachRoomListener() {
-    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
-    detachRoomSpectatorsListener();
 }
 
 function renderSpectatorsList() {
@@ -3957,7 +3906,6 @@ let pendingSyncChain = Promise.resolve();
 // Поведение существующих вызовов без аргумента не меняется.
 function forceResyncFromServer(silent) {
     if (!roomCode) return Promise.resolve();
-    attachRoomSpectatorsListener(roomCode);
     return database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
         const room = snapshot.val();
         if (!room || !room.pieces) return;
@@ -3989,7 +3937,7 @@ function forceResyncFromServer(silent) {
             pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
-            spectators: roomSpectatorsCache,
+            spectators: room.spectators || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
@@ -4292,12 +4240,11 @@ function startOnlineGame() {
     // на каждом рендере (backButtonMode) — отдельный прямой toggle здесь
     // больше не нужен и был убран как источник избыточной сложности.
 
-    detachRoomListener();
+    if (roomListenerRef) roomListenerRef.off();
     // Новая подписка на комнату — прежние доказательства свежести больше не
     // действуют: они относились к другой комнате/другому listener'у.
     const myListenerGen = listenerGeneration;
     roomListenerRef = database.ref("rooms/" + roomCode);
-    attachRoomSpectatorsListener(roomCode);
     roomListenerRef.on("value", function (snapshot) {
         // Запоздалый колбэк уже отписанного listener'а не должен ничего
         // подтверждать для текущей комнаты.
@@ -4305,7 +4252,7 @@ function startOnlineGame() {
         const room = snapshot.val();
         if (!room || !room.pieces) {
             // Если комната была удалена (соперник закрыл игру или отменил реванш)
-            detachRoomListener();
+            if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
             // Комнаты больше нет — отвязываемся от её presence ПОЛНОСТЬЮ.
             // detachMyPresence() и останавливает heartbeat, и отменяет ранее
             // взведённый onDisconnect (cancel() ничего не записывает, поэтому
@@ -4355,7 +4302,7 @@ function startOnlineGame() {
             pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
-            spectators: roomSpectatorsCache,
+            spectators: room.spectators || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,
@@ -5032,7 +4979,7 @@ function ensureOwnerSpectatorsListener() {
         ownerSpectatorsListenerRef = null;
     }
     ownerSpectatorsListenerCode = botSpectateRoomCode;
-    ownerSpectatorsListenerRef = database.ref("roomSpectators/" + botSpectateRoomCode);
+    ownerSpectatorsListenerRef = database.ref("rooms/" + botSpectateRoomCode + "/spectators");
     ownerSpectatorsListenerRef.on("value", function (snapshot) {
         ownerSpectatorsCache = snapshot.val() || {};
         if (currentState) currentState.spectators = ownerSpectatorsCache;
@@ -5198,7 +5145,7 @@ function startBotSpectateRoom() {
     // Слушатель зрителей: обновляет список зрителей на экране игрока
     // без влияния на локальную логику игры с ботом.
     if (!botSpectateListenerRef) {
-        botSpectateListenerRef = database.ref("roomSpectators/" + botSpectateRoomCode);
+        botSpectateListenerRef = database.ref("rooms/" + botSpectateRoomCode + "/spectators");
         botSpectateListenerRef.on("value", function(snapshot) {
             if (!currentState) return;
             currentState.spectators = snapshot.val() || {};
@@ -5505,7 +5452,7 @@ function startOfflineGame() {
         botMoveTimer = null;
     }
     stopPresenceHeartbeat();
-    detachRoomListener();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     
     // Прячем кнопки реакций в игре с ботом
     if (reactionsRow) reactionsRow.classList.add("hidden");
@@ -5781,7 +5728,7 @@ function createRoomAndShowWaiting() {
     // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
     // Локальная игра при этом продолжает работать.
     if (!canUseFirebase()) return;
-    detachRoomListener();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = generateRoomCode();
     myPendingFriendRoomCode = roomCode; // Запоминаем именно этот код надёжно, для ссылки
@@ -5929,7 +5876,7 @@ if (btnBackBotYes) {
 // записи "я смотрю", возврат в лобби. Переиспользуется и кнопкой "Назад",
 // и модалкой "Игра прервана" — оба места делают ровно одно и то же. ---
 function leaveSpectatorAndReturnToLobby() {
-    detachRoomListener();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
     isSpectator = false;
     isOnlineGame = false;
@@ -6152,7 +6099,7 @@ btnCloseGame.addEventListener("click", function () {
     // Если мы зритель — просто отписываемся от комнаты и выходим в меню.
     if (isSpectator) {
         endGameModal.classList.add("hidden");
-        detachRoomListener();
+        if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
         if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
         showScreen(menuScreen);
         loadActiveRooms();
@@ -7000,17 +6947,14 @@ function checkForInviteLink() {
                     return null;
                 }
 
-                // №18: whole-room transaction заменена на attemptAtomicInviteJoin
-                // (узкий multi-location update) — decision-логика
-                // buildAtomicInviteJoin не менялась. update() (в отличие от
-                // прежнего предположения) ПРИМЕНЯЕТСЯ локально сразу, до server
-                // ACK — но attemptAtomicInviteJoin решает исход исключительно по
-                // промису самой записи, никогда не перечитывая warm-listener
-                // после отправки, поэтому спекулятивное состояние тут не
-                // используется как критерий успеха (см. scenario 8b в
-                // invite-join.test.js).
+                // applyLocally=false не даёт speculative active попасть в тот же
+                // локальный кеш до server commit. Но главное здесь — сама запись
+                // ОДНА: dark + status + turnStartedAt атомарны относительно всех
+                // конкурирующих изменений комнаты.
                 if (!canUseFirebase()) return Promise.resolve(null);
-                return attemptAtomicInviteJoin(inviteRoomRef, latestWarmRoom, myTelegramId, myTelegramName);
+        return inviteRoomRef.transaction(function (currentRoom) {
+                    return buildAtomicInviteJoin(currentRoom, myTelegramId, myTelegramName);
+                }, undefined, false);
             }).then(function (result) {
                 detachWarmListener();
 
@@ -7091,7 +7035,7 @@ function checkForInviteLink() {
 
 btnNewGameAfterLeave.addEventListener("click", function () {
     opponentLeftModal.classList.add("hidden");
-    detachRoomListener();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = null;
     currentState = null;
@@ -7101,7 +7045,7 @@ btnNewGameAfterLeave.addEventListener("click", function () {
 
 btnCloseAfterLeave.addEventListener("click", function () {
     opponentLeftModal.classList.add("hidden");
-    detachRoomListener();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     if (window.Telegram && window.Telegram.WebApp) {
         Telegram.WebApp.close();
@@ -7117,7 +7061,7 @@ btnCloseAfterLeave.addEventListener("click", function () {
 
 btnInfoNewGame.addEventListener("click", function () {
     infoModal.classList.add("hidden");
-    detachRoomListener();
+    if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     stopPresenceHeartbeat();
     roomCode = null;
     currentState = null;
@@ -7668,10 +7612,16 @@ function tryMatchOpponent(opponentId, opponentData) {
     if (!matchedRoomCode) return;
 
     // Я — присоединяющийся (myNumericId > oppNumericId). Пытаюсь "забрать" комнату создателя.
-    // №18: узкий multi-location update вместо whole-room transaction.
-    claimDarkSeatAndActivate(database.ref("rooms/" + matchedRoomCode), myTelegramId, myTelegramName).then(function() {
+    database.ref("rooms/" + matchedRoomCode).transaction(function(room) {
+        if (!room || room.status !== "waiting") return; // Abort if room gone or not waiting
+        room.status = "active";
+        room.players = room.players || {};
+        room.players.dark = { id: myTelegramId, name: myTelegramName };
+        room.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+        return room;
+    }).then(function(result) {
         if (!canUseFirebase()) return;
-        {
+        if (result.committed) {
             // Успех! Мы победили в гонке — мы JOINER (присоединившийся)
             isMatchmakingResolved = true;
             if (matchmakingQueueRef) { 
@@ -7708,9 +7658,7 @@ function tryMatchOpponent(opponentId, opponentData) {
             });
         }
     }).catch(function(error) {
-        if (!canUseFirebase()) return;
-        if (error && error.code === "PERMISSION_DENIED") return;
-        console.error("Matchmaking update failed:", error);
+        console.error("Matchmaking transaction failed:", error);
         showInfoModal(t("err_join_failed"), false);
         showScreen(menuScreen);
         loadActiveRooms();
@@ -8646,50 +8594,6 @@ function isRoomAbandonedNow(room) {
 // Единый колбэк атомарного invite-join. В отличие от двухфазной схемы
 // здесь нет промежуточного сохранённого players/dark: место и activation
 // появляются на сервере одним commit.
-// Единый atomic join-write: claim места dark + активация комнаты.
-// №18: Rules больше не дают join-grant на весь "$room" (outsider мог бы
-// протащить в тот же write произвольные pieces/turn/winner) — join теперь
-// узкий multi-location update ровно на players/dark + status +
-// turnStartedAt, у каждого из них свой узкий child ".write" в Rules.
-// Whole-room transaction/set для этой цели больше НЕ проходит.
-function claimDarkSeatAndActivate(roomRef, uid, name) {
-    return roomRef.update({
-        "players/dark": { id: uid, name: name },
-        status: "active",
-        turnStartedAt: firebase.database.ServerValue.TIMESTAMP
-    });
-}
-
-// Обёртка над buildAtomicInviteJoin, сохраняющая ЕЁ decision-логику (включая
-// идемпотентный повтор — "мы уже dark в active-комнате, писать нечего")
-// нетронутой, но заменяющая механизм записи с whole-room transaction на
-// узкий update(). Форма результата {committed, snapshot} совпадает с тем,
-// что отдавал transaction(), поэтому вся retry/timeout/классификация в
-// startAtomicInviteJoin() ниже не меняется ни строкой.
-function attemptAtomicInviteJoin(roomRef, warmRoom, uid, name) {
-    // Идемпотентность нужно определить ДО вызова buildAtomicInviteJoin: она
-    // мутирует переданный объект на месте и возвращает ТУ ЖЕ ссылку что для
-    // идемпотентного повтора, что для свежего join — по reference они
-    // неразличимы ПОСЛЕ вызова.
-    const alreadyJoined = warmRoom && warmRoom.status === "active" &&
-        warmRoom.players && warmRoom.players.dark && warmRoom.players.dark.id === uid;
-    const decision = buildAtomicInviteJoin(warmRoom, uid, name);
-    if (decision === undefined) {
-        return Promise.resolve({ committed: false, snapshot: { val: function () { return warmRoom; } } });
-    }
-    if (alreadyJoined) {
-        // Мы уже dark в active-комнате — писать нечего.
-        return Promise.resolve({ committed: true });
-    }
-    return claimDarkSeatAndActivate(roomRef, uid, name).then(function () {
-        return { committed: true };
-    }).catch(function () {
-        return roomRef.once("value").then(function (freshSnapshot) {
-            return { committed: false, snapshot: freshSnapshot };
-        });
-    });
-}
-
 function buildAtomicInviteJoin(currentRoom, uid, name) {
     if (!currentRoom || !currentRoom.pieces || !currentRoom.players) return undefined;
     if (currentRoom.winner || currentRoom.result || currentRoom.status === "finished") return undefined;
@@ -9219,11 +9123,20 @@ function joinGroupRoom(code) {
             return;
         }
 
-        // №18: узкий multi-location update вместо whole-room transaction —
-        // Rules теперь дают join-grant только на players/dark + status +
-        // turnStartedAt.
-        claimDarkSeatAndActivate(database.ref("rooms/" + roomCode), myTelegramId, myTelegramName).then(function() {
+        // ИСПОЛЬЗУЕМ ТРАНЗАКЦИЮ: гарантируем, что комната не удалена и имеет pieces
+        database.ref("rooms/" + roomCode).transaction(function(currentRoom) {
+            if (!currentRoom || !currentRoom.pieces || currentRoom.status !== "waiting") return; // Отмена, если комната битая/удалена
+            currentRoom.status = "active";
+            currentRoom.players = currentRoom.players || {};
+            currentRoom.players.dark = { id: myTelegramId, name: myTelegramName };
+            currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
+            return currentRoom;
+        }).then(function(result) {
             if (!canUseFirebase()) return;
+            if (!result.committed) {
+                showInfoModal("Комната уже занята, удалена или не существует.", false);
+                return;
+            }
 
             // Если я сам в этот момент тоже ждал соперника в своей комнате —
             // убираем её, раз я теперь играю здесь (иначе останется "призраком").
@@ -9247,12 +9160,7 @@ function joinGroupRoom(code) {
             showScreen(gameScreen);
             startOnlineGame();
         }).catch(function(error) {
-            if (!canUseFirebase()) return;
-            if (error && error.code === "PERMISSION_DENIED") {
-                showInfoModal("Комната уже занята, удалена или не существует.", false);
-                return;
-            }
-            console.error("Join room update failed:", error);
+            console.error("Join room transaction failed:", error);
             showInfoModal(t("err_join_failed"), false);
             showScreen(menuScreen);
             loadActiveRooms();
@@ -9322,7 +9230,7 @@ function watchGroupRoomAsSpectator(code) {
     // Регистрируем себя как зрителя этой партии (для счётчика "N зрителей"),
     // и сразу настраиваем автоматическое удаление при закрытии приложения.
     if (myTelegramId) {
-        const myWatchRef = database.ref("roomSpectators/" + roomCode + "/" + myTelegramId);
+        const myWatchRef = database.ref("rooms/" + roomCode + "/spectators/" + myTelegramId);
         myWatchRef.set(myTelegramName);
         myWatchRef.onDisconnect().remove();
         myCurrentSpectatorRef = myWatchRef;
@@ -9331,20 +9239,19 @@ function watchGroupRoomAsSpectator(code) {
     showScreen(gameScreen);
     
     // Запускаем слушатель игры без установки Presence
-    detachRoomListener();
+    if (roomListenerRef) roomListenerRef.off();
     // Новая подписка на комнату — прежние доказательства свежести больше не
     // действуют: они относились к другой комнате/другому listener'у.
     resetRoomFreshnessProof();
     const myListenerGen = listenerGeneration;
     roomListenerRef = database.ref("rooms/" + roomCode);
-    attachRoomSpectatorsListener(roomCode);
     roomListenerRef.on("value", function (snapshot) {
         // Запоздалый колбэк уже отписанного listener'а не должен ничего
         // подтверждать для текущей комнаты.
         if (myListenerGen !== listenerGeneration) return;
         const room = snapshot.val();
         if (!room || !room.pieces) {
-            detachRoomListener();
+            if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
             if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
             showScreen(menuScreen);
             showInfoModal(t("err_game_closed"), false);
@@ -9370,7 +9277,7 @@ function watchGroupRoomAsSpectator(code) {
             pendingRemovals: room.pendingRemovals || null,
             players: room.players || null,
             presence: room.presence || null,
-            spectators: roomSpectatorsCache,
+            spectators: room.spectators || null,
             timeControlSeconds: room.timeControlSeconds || 0,
             turnStartedAt: room.turnStartedAt || null,
             winner: room.winner || null,

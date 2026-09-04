@@ -116,8 +116,6 @@ function reset() {
     READS = []; WRITES = []; PENDING_TX = []; FAIL_READ = false;
     global.isOnlineGame = true; global.isBotGame = false; global.isSpectator = false;
     global.roomCode = 'R1'; global.myColor = 'light'; global.myTelegramId = 'tg_1';
-    global.attachRoomSpectatorsListener = function () {};
-    global.roomSpectatorsCache = null;
     global.isFirebaseConnected = true;
     global.pendingMoveStartedAt = null;
     global.syncRecoveryInFlight = false;
