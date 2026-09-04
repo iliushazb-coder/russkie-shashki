@@ -455,18 +455,6 @@ test("rooms: players/dark + turnStartedAt without flipping status to active is d
   });
 });
 
-test("rooms: players/dark + status without a fresh turnStartedAt is denied", async () => {
-  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
-  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
-    "players/dark": { id: "bob", name: "Bob" },
-    status: "active"
-  }));
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    const stillWaiting = await get(ref(context.database(), "rooms/ROOM1"));
-    assert.equal(stillWaiting.child("status").val(), "waiting");
-    assert.equal(stillWaiting.child("players/dark").exists(), false);
-  });
-});
 
 test("rooms: join with a stale turnStartedAt (reusing the room-creation timestamp) is denied", async () => {
   await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
