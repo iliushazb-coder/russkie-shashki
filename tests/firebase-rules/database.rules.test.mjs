@@ -423,9 +423,9 @@ test("rooms: a dark player can join a waiting room", async () => {
   }));
 });
 
-test("rooms: BRIDGE-A allows a second joiner to replace the dark player", async () => {
+test("rooms: an outsider replacing an occupied dark seat is denied", async () => {
   await seed("rooms/ROOM1", room());
-  await assertSucceeds(set(
+  await assertFails(set(
     ref(databaseFor("carol"), "rooms/ROOM1/players/dark"),
     { id: "carol", name: "Carol" }
   ));
@@ -444,9 +444,79 @@ test("rooms: invalid turn values are denied", async () => {
   await assertFails(set(ref(databaseFor("alice"), "rooms/ROOM1/turn"), "blue"));
 });
 
-test("rooms: BRIDGE-A allows an outsider to delete a room", async () => {
+test("rooms: an unauthenticated caller cannot delete a room", async () => {
   await seed("rooms/ROOM1", room());
-  await assertSucceeds(remove(ref(databaseFor("mallory"), "rooms/ROOM1")));
+  await assertFails(remove(ref(databaseFor(), "rooms/ROOM1")));
+});
+
+test("rooms: an outsider cannot delete a live room", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(remove(ref(databaseFor("mallory"), "rooms/ROOM1")));
+});
+
+test("rooms: a current participant can delete their own room", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(remove(ref(databaseFor("alice"), "rooms/ROOM1")));
+});
+
+test("rooms: the other participant can also delete their own room", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(remove(ref(databaseFor("bob"), "rooms/ROOM1")));
+});
+
+test("rooms: forging a seat then deleting as that forged identity is denied", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(
+    ref(databaseFor("mallory"), "rooms/ROOM1/players/dark"),
+    { id: "mallory", name: "Mallory" }
+  ));
+  await assertFails(remove(ref(databaseFor("mallory"), "rooms/ROOM1")));
+});
+
+test("rooms: a bot room can be created with the human as light", async () => {
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/BOTROOM"), {
+    pieces: { b6: { color: "light", king: false } },
+    turn: "light",
+    status: "active",
+    players: {
+      light: { id: "alice", name: "Alice" },
+      dark: { id: "bot", name: "Bot" }
+    }
+  }));
+});
+
+test("rooms: a bot room can be created with the human as dark", async () => {
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/BOTROOM"), {
+    pieces: { b6: { color: "light", king: false } },
+    turn: "light",
+    status: "active",
+    players: {
+      light: { id: "bot", name: "Bot" },
+      dark: { id: "alice", name: "Alice" }
+    }
+  }));
+});
+
+test("rooms: a rematch can swap the two existing participants' seats", async () => {
+  await seed("rooms/ROOM1", room({ status: "finished" }));
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null
+  }));
+});
+
+test("rooms: an outsider joining an active dark-absent room is denied", async () => {
+  const active = room({ status: "waiting", dark: false });
+  active.status = "active";
+  await seed("rooms/ROOM1", active);
+  await assertFails(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
+    "players/dark": { id: "mallory", name: "Mallory" },
+    status: "active"
+  }));
 });
 
 test("rooms: a room missing pieces stays denied for an unrelated presence write", async () => {
@@ -486,14 +556,15 @@ test("rooms: a malformed players shape stays denied for an unrelated presence wr
   }));
 });
 
-test("cleanup: BRIDGE-A allows cross-user multi-location cleanup", async () => {
+test("cleanup: an outsider cannot multi-location delete someone else's room", async () => {
   await seed("rooms/ROOM1", room());
   await seed("users/alice/rooms/ROOM1", { status: "active" });
-  await assertSucceeds(update(ref(databaseFor("mallory")), {
+  await assertFails(update(ref(databaseFor("mallory")), {
     "rooms/ROOM1": null,
     "users/alice/rooms/ROOM1": null
   }));
 });
+
 
 test("presence: a player can publish presence", async () => {
   await seed("rooms/ROOM1", room());
