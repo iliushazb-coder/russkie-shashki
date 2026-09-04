@@ -95,6 +95,7 @@ global.pendingSyncChain = Promise.resolve(); global.pendingMoveStartedAt = 123;
 global.syncRecoveryInFlight = true; global.syncRecoveryFailed = true;
 global.opponentGraceTimer = null; global.mustCaptureHintTimer = null; global.botMoveTimer = null;
 global.roomListenerRef = null; global.reactionsRow = { classList: { add: function () {} } };
+global.detachRoomListener = function () {};
 global.stopPresenceHeartbeat = function () {};
 global.getDrawPositionKey = function () { return 'initial'; };
 let realRenderCount = 0;

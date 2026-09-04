@@ -259,15 +259,16 @@ console.log('\n=== 7. КОД: СТРУКТУРА ПОТОКА ===');
 const flow = grab('checkForInviteLink').split('\n')
     .filter(function (l) { return l.trim().indexOf('//') !== 0; }).join('\n');
 
-check('7.1 вход — ОДНА корневая транзакция',
-    /inviteRoomRef\.transaction\(/.test(flow) &&
-    /buildAtomicInviteJoin/.test(flow));
+check('7.1 вход — ОДНА атомарная join-операция (attemptAtomicInviteJoin)',
+    /attemptAtomicInviteJoin\(/.test(flow) &&
+    !/inviteRoomRef\.transaction\(/.test(flow));
 check('7.2 отдельной транзакции по players/dark больше нет',
     flow.indexOf('players/dark') === -1);
 check('7.3 безусловного update с players/dark нет',
     flow.indexOf('"players/dark":') === -1);
-check('7.4 applyLocally=false — спекулятивное состояние не попадает в кеш',
-    /\}, undefined, false\)/.test(flow));
+check('7.4 узкий join-write через update() (не whole-room transaction)',
+    /roomRef\.update\(/.test(grab('claimDarkSeatAndActivate')) &&
+    !/\.transaction\(/.test(grab('claimDarkSeatAndActivate')));
 check('7.5 прерывание классифицируется, а не считается отказом', (function () {
     return /classifyAtomicInviteJoinFailure/.test(flow);
 })());
@@ -294,8 +295,9 @@ check('7.10 слушатель удерживается и снимается с
 
 console.log('\n=== 8. ЧУЖИЕ ПОДСИСТЕМЫ НЕ ЗАТРОНУТЫ ===');
 
-check('8.1 joinGroupRoom не изменён этим патчем',
-    /currentRoom\.status = "active";/.test(grab('joinGroupRoom')));
+check('8.1 joinGroupRoom по-прежнему устанавливает status=active при join',
+    grab('joinGroupRoom').indexOf('claimDarkSeatAndActivate') !== -1 &&
+    /status:\s*"active"/.test(grab('claimDarkSeatAndActivate')));
 check('8.2 resumeOwnActiveRoom по-прежнему используется для creator/reopen',
     /resumeOwnActiveRoom\(roomCode\)/.test(grab('checkForInviteLink')));
 check('8.3 предикат v184 в потоке сохранён',

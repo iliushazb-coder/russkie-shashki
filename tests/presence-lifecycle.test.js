@@ -214,6 +214,8 @@ function setupCommonGlobals() {
     global.myWaitingRoomNoOpponent = false; // в v170 не существует — глобаль безвредна
     global.reactionsRow = stubEl();
     global.roomListenerRef = null;
+    global.detachRoomListener = function () {};
+    global.attachRoomSpectatorsListener = function () {};
     global.menuScreen = 'MENU'; global.gameScreen = 'GAME';
     global.showScreen = function () {};
     global.showInfoModal = function () {};

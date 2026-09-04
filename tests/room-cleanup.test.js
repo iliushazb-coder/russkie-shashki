@@ -204,6 +204,8 @@ function setupCommonGlobals() {
     global.presenceHeartbeatInterval = null; global.currentState = null;
     global.reactionsRow = stubEl();
     global.roomListenerRef = null;
+    global.detachRoomListener = function () {};
+    global.attachRoomSpectatorsListener = function () {};
     global.menuScreen = 'MENU'; global.gameScreen = 'GAME';
     global.showScreen = function (s) { env.screens.push(s); };
     global.showInfoModal = function (txt) { env.modals.push(txt); };

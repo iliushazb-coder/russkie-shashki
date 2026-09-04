@@ -39,6 +39,8 @@ try {
   // активация» убрана целиком: промежуточного состояния на сервере больше
   // нет, поэтому нет и уборки места по таймауту.
   eval(extractFunc('buildAtomicInviteJoin'));
+  eval(extractFunc('claimDarkSeatAndActivate'));
+  eval(extractFunc('attemptAtomicInviteJoin'));
   eval(extractFunc('classifyAtomicInviteJoinFailure'));
   global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
 global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
@@ -90,6 +92,10 @@ function setup(serverRoom, opts) {
     //   3. если вернули значение, а на сервере оно ДРУГОЕ, SDK
     //      ПЕРЕЗАПУСКАЕТ колбэк с серверным значением — именно этим
     //      закрывается гонка при захвате узла места.
+    // №18 ПРИМЕЧАНИЕ: этот мок теперь МЁРТВЫЙ КОД. Ни один текущий код-путь
+    // (claimDarkSeatAndActivate/attemptAtomicInviteJoin) больше не вызывает
+    // .transaction() — join переведён на узкий update() (см. мок ниже).
+    // Оставлен для истории/справки, не трогаем ради минимальности диффа.
     transaction: function (cb, onComplete, applyLocally) {
       env.txCalls++;
 
@@ -209,6 +215,93 @@ function setup(serverRoom, opts) {
     update: function (v) {
       env.writes.push({ path: p, v: v });
       if (opts.failRoomUpdate && p === 'rooms/ROOM1') return Promise.reject(new Error('PERMISSION_DENIED (mock)'));
+      if (p === 'rooms/ROOM1' && v && v['players/dark'] !== undefined) {
+        // №18: узкий join-update. Зеркалим реальные Rules: dark должен быть
+        // свободен, а room.status === 'waiting' В МОМЕНТ прихода write на
+        // сервер — не в момент, когда клиент решил писать (warm-снимок
+        // может быть устаревшим, ровно как в реальности).
+        //
+        // ЛОКАЛЬНЫЙ ОПТИМИЗМ update() (найдено на независимой проверке):
+        // update() в реальном RTDB СРАЗУ мутирует локальный кеш и стреляет
+        // локальными listener'ами ДО server ACK — в отличие от того, что
+        // предполагал более ранний комментарий здесь. Значит warm-listener
+        // МОЖЕТ увидеть спекулятивное "я уже dark, active" ещё до решения
+        // сервера. Симулируем это здесь: синхронно кормим warm-listener
+        // спекулятивным значением, и если сервер потом реджектит — стреляем
+        // ЕЩЁ РАЗ с откаченным (истинным) значением, как делает настоящий SDK.
+        if (opts.seatStolenDuringPendingWrite && !env.stolenDuringPendingDone) {
+          env.stolenDuringPendingDone = true;
+          const speculative = JSON.parse(JSON.stringify(env.serverRoom));
+          speculative.status = v.status;
+          speculative.players = speculative.players || {};
+          speculative.players.dark = v['players/dark'];
+          speculative.turnStartedAt = v.turnStartedAt;
+          (env.warmHandlers || []).forEach(function (h) {
+            h({ val: function () { return speculative; } });
+          });
+          // Сервер В ЭТОТ МОМЕНТ уже отдал место другому — гонка проиграна.
+          env.serverRoom.players = env.serverRoom.players || {};
+          env.serverRoom.players.dark = { id: 'C', name: 'Другой гость' };
+          env.serverRoom.status = 'active';
+          return Promise.resolve().then(function () {
+            const rolledBack = JSON.parse(JSON.stringify(env.serverRoom));
+            (env.warmHandlers || []).forEach(function (h) {
+              h({ val: function () { return rolledBack; } });
+            });
+            const err = new Error('PERMISSION_DENIED');
+            err.code = 'PERMISSION_DENIED';
+            throw err;
+          });
+        }
+        if (opts.joinStuckInNetwork && !env.stuckDone) {
+          env.stuckDone = true;
+          // Сетевая яма: промис никогда не резолвится/реджектится. update()
+          // В РЕАЛЬНОСТИ применяет спекулятивное значение локально сразу
+          // (см. scenario 8b) — здесь этот шаг сознательно не эмулируется,
+          // потому что для ЭТОГО сценария он не имеет значения: интересен
+          // только факт, что после 10с таймаута на сервере не остаётся следов.
+          return new Promise(function () {});
+        }
+        if (opts.delayJoinAck && !env.ackHeld) {
+          env.ackHeld = true;
+          // Write реально коммитится на сервере СЕЙЧАС — задерживается
+          // только доставка ACK клиенту, не сама запись.
+          const roomNow = env.serverRoom;
+          const legalNow = roomNow && roomNow.status === 'waiting' &&
+            (!roomNow.players || !roomNow.players.dark);
+          if (legalNow) {
+            roomNow.status = v.status;
+            roomNow.players = roomNow.players || {};
+            roomNow.players.dark = v['players/dark'];
+            roomNow.turnStartedAt = v.turnStartedAt;
+            env.seatDone = true;
+          }
+          return new Promise(function (resolve, reject) {
+            env.releaseAck = function () {
+              if (legalNow) resolve(); else { const e = new Error('PERMISSION_DENIED'); e.code = 'PERMISSION_DENIED'; reject(e); }
+            };
+          });
+        }
+        if (opts.failActivation) {
+          const err = new Error('PERMISSION_DENIED (mock, persistent)');
+          err.code = 'INTERNAL_ERROR'; // имитирует иной (не race) сбой сервера
+          return Promise.reject(err);
+        }
+        const room = env.serverRoom;
+        const darkFree = !room || !room.players || !room.players.dark || room.players.dark === null;
+        const legal = room && room.status === 'waiting' && darkFree;
+        if (!legal) {
+          const err = new Error('PERMISSION_DENIED');
+          err.code = 'PERMISSION_DENIED';
+          return Promise.reject(err);
+        }
+        room.status = v.status;
+        room.players = room.players || {};
+        room.players.dark = v['players/dark'];
+        room.turnStartedAt = v.turnStartedAt;
+        env.seatDone = true;
+        return Promise.resolve();
+      }
       if (p === 'rooms/ROOM1' && env.serverRoom) {
         Object.keys(v).forEach(function (k) {
           if (k === 'players/dark') { env.serverRoom.players.dark = v[k]; }
@@ -226,6 +319,26 @@ function setup(serverRoom, opts) {
       if (p === 'rooms/ROOM1') {
         env.warmHandlers = (env.warmHandlers || []).concat([cb]);
         env.warm = true;
+        // ОДНОШАГОВЫЙ КОНТРАКТ (№18): промежуточного состояния нет, поэтому
+        // все помехи-гонки вносятся ПЕРЕД первым warm-снимком — attemptAtomic-
+        // InviteJoin решает join/no-join именно по latestWarmRoom.
+        if (!env.interleaveDone) {
+          if (opts.stolenBeforeJoin) {
+            env.interleaveDone = true;
+            env.serverRoom.players.dark = { id: 'C', name: 'Другой гость' };
+            env.serverRoom.status = 'active';
+          }
+          if (opts.finishedBeforeJoin) {
+            env.interleaveDone = true;
+            env.serverRoom.status = 'finished';
+            env.serverRoom.winner = 'light';
+            env.serverRoom.result = { winnerId: 'A', loserId: 'B' };
+          }
+          if (opts.deletedBeforeJoin) {
+            env.interleaveDone = true;
+            env.serverRoom = null;
+          }
+        }
         const copy = env.serverRoom ? JSON.parse(JSON.stringify(env.serverRoom)) : null;
         if (cb) cb({ val: function () { return copy; } });
       }
@@ -283,17 +396,18 @@ const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && 
   check('1. пользователь стал dark', global.myColor === 'dark' && global.isOnlineGame === true);
   check('1. status стал active НА СЕРВЕРЕ', !!env.serverRoom && env.serverRoom.status === 'active');
   check('1. players.dark записан на сервере', !!env.serverRoom && !!env.serverRoom.players.dark && env.serverRoom.players.dark.id === 'B');
-  // ОЖИДАНИЕ ИЗМЕНЕНО ОСОЗНАННО (v188). Прежняя схема писала место, статус и
-  // turnStartedAt одним безусловным update() — и именно поэтому двое,
-  // прошедшие проверки по одному и тому же снимку, оба записывались.
-  // Теперь место захватывается ТРАНЗАКЦИЕЙ по узлу players/dark, а статус
-  // выставляется следом. Требование прежнее и проверяется ниже: на сервере
-  // оказываются и dark, и active, и серверная метка времени.
-  check('1. место захвачено транзакцией по узлу players/dark', env.txCalls >= 1);
-  check('1. статус и turnStartedAt выставлены следом', (function () {
+  // №18: join теперь узкий multi-location update ровно на players/dark +
+  // status + turnStartedAt, ОДНОЙ атомарной операцией (сама атомарность
+  // теперь обеспечена Rules — каждое из трёх полей проверяет тот же
+  // переход, см. database.rules.json). Комментарий про "транзакцию по
+  // узлу players/dark, а статус следом" описывал более старую (v188)
+  // двухфазную схему, которой в buildAtomicInviteJoin уже не было даже
+  // до №18 — она мутирует все три поля разом и коммитит одним write.
+  check('1. dark/status/turnStartedAt записаны одним атомарным write', (function () {
     const w = roomWrites();
-    return w.length === 1 && w[0].v.status === 'active' &&
-      w[0].v.turnStartedAt && !('players/dark' in w[0].v);
+    return w.length === 1 &&
+      w[0].v['players/dark'] && w[0].v['players/dark'].id === 'B' &&
+      w[0].v.status === 'active' && w[0].v.turnStartedAt;
   })(), JSON.stringify(roomWrites()));
   check('1. turnStartedAt — СЕРВЕРНАЯ метка', (function () {
     const w = roomWrites();
@@ -367,6 +481,26 @@ const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && 
   check('8. показан err_room_taken', env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
 
   console.log('');
+  console.log('СЦЕНАРИЙ 8b. ГОНКА: спекулятивный локальный apply update() НЕ маскирует проигрыш');
+  // Найдено на независимой проверке: update() в RTDB применяется локально
+  // ДО server ACK, и warm-listener реально может увидеть "я уже dark,
+  // active" ещё до решения сервера. Проверяем, что даже с этим спекулятивным
+  // событием итоговая классификация — проигрыш гонки (occupied), а не "won":
+  // attemptAtomicInviteJoin решает по ПРОМИСУ update(), а не по listener'у.
+  setup(mkRoom('waiting', 'A', null), { seatStolenDuringPendingWrite: true });
+  checkForInviteLink(); await flush();
+  check('8b. итоговое место на сервере осталось за перехватившим',
+    env.serverRoom.players.dark.id === 'C');
+  check('8b. несмотря на спекулятивный snapshot, проигравший НЕ стал dark',
+    global.myColor !== 'dark');
+  check('8b. проигравший НЕ в онлайн-игре', global.isOnlineGame === false);
+  check('8b. проигравший НЕ записал метаданные (спекулятивный snapshot не был принят за успех)',
+    !gotMeta());
+  check('8b. startOnlineGame НЕ запущен', env.startCalls === 0);
+  check('8b. классифицировано как occupied (err_room_taken), а не как won',
+    env.modals.indexOf('err_room_taken') !== -1, JSON.stringify(env.modals));
+
+  console.log('');
   console.log('СЦЕНАРИЙ 9. партию ЗАВЕРШИЛИ перед самой транзакцией');
   setup(mkRoom('waiting', 'A', null), { finishedBeforeJoin: true });
   checkForInviteLink(); await flush();
@@ -401,11 +535,20 @@ const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && 
     global.isSpectator === false && global.roomCode === null);
 
   console.log('');
-  console.log('СЦЕНАРИЙ 12. applyLocally=false: спекулятивного состояния нет');
+  console.log('СЦЕНАРИЙ 12. update() ещё pending: игра НЕ стартует преждевременно');
+  // update() применяется локально сразу (см. scenario 8b) — но это влияет
+  // только на снимок warm-listener'а. myColor/isOnlineGame выставляются
+  // оптимистично ДО самой попытки записи (существующее поведение, не
+  // связанное с №18) — значимый признак "принято за подтверждённый успех"
+  // это запуск экрана игры, а не эти два поля. startOnlineGame вызывается
+  // ТОЛЬКО из finishInviteSuccess(), а она — только из result.committed;
+  // здесь промис claimDarkSeatAndActivate никогда не резолвится/реджектится.
   setup(mkRoom('waiting', 'A', null), { joinStuckInNetwork: true });
   checkForInviteLink(); await flush();
-  check('12. локально комната НЕ показана активной', env.localOverlay === undefined,
-    JSON.stringify(env.localOverlay && env.localOverlay.status));
+  check('12. startOnlineGame НЕ запущен пока write pending',
+    env.startCalls === 0);
+  check('12. экран игры НЕ показан пока write pending',
+    env.screens.indexOf('game') === -1);
   check('12. на сервере по-прежнему waiting без dark',
     env.serverRoom.status === 'waiting' && !env.serverRoom.players.dark);
 
