@@ -571,6 +571,16 @@ test("rooms: an active rated room cannot swap seats and wipe the rating snapshot
   }));
 });
 
+test("rooms: a non-rated active room also cannot swap seats mid-game (finished->active is universal, not just for rated)", async () => {
+  await seed("rooms/ROOM1", room({ status: "active" }));
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice"
+  }));
+});
+
 test("rooms: an outsider joining an active dark-absent room is denied", async () => {
   const active = room({ status: "waiting", dark: false });
   active.status = "active";
