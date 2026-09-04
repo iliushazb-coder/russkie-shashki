@@ -46,6 +46,7 @@ const FILES = [
   ['Z2. C1: ШЕСТЬ БЛОКЕРОВ', 'c1-blockers.test.js'],
   ['Z2.1 №10: ELO ТОЛЬКО В WORKER', 'n10-client-elo-source.test.js'],
   ['Z3. C1: ПОВЕДЕНИЕ SETTLEMENT', 'settlement-behavior.test.js'],
+  ['Z3.1 roomSpectators: lifecycle listener', 'room-spectators-listener.test.js'],
   ['Z4. C1 R3: REVIEW REGRESSION', 'c1-r3-review.test.js'],
   ['Z5. C1 R3: FINAL REGRESSION', 'c1-r3-final.test.js'],
   ['W. ПАНЕЛИ ИГРОКОВ: ШИРИНА И СОКРАЩЕНИЕ', 'player-panel-layout.test.js'],

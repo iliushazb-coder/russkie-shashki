@@ -439,10 +439,9 @@ test("rooms: an outsider cannot move pieces in someone else's active game", asyn
   }));
 });
 
-test("rooms: a participant can move pieces even when a populated ratingsAtStart and spectators subtree is otherwise untouched", async () => {
+test("rooms: a participant can move pieces even when a populated ratingsAtStart subtree is otherwise untouched", async () => {
   const withDelegated = room();
   withDelegated.ratingsAtStart = { light: 1000, dark: 1000 };
-  withDelegated.spectators = { victim: "Victim", keep: "Keep" };
   await seed("rooms/ROOM1", withDelegated);
   await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
     pieces: { a1: { color: "light", king: true } },
@@ -540,14 +539,42 @@ test("rooms: a participant cannot smuggle a ratingsAtStart change into a gamepla
   }));
 });
 
-test("rooms: a participant cannot smuggle a foreign spectator removal into a gameplay update, even alongside an untouched sibling spectator", async () => {
-  const withSpectators = room();
-  withSpectators.spectators = { victim: "Victim", keep: "Keep" };
-  await seed("rooms/ROOM1", withSpectators);
+test("rooms: a participant cannot add an unknown key under ratingsAtStart", async () => {
+  const withSnapshot = room();
+  withSnapshot.ratingsAtStart = { light: 1000, dark: 1000 };
+  await seed("rooms/ROOM1", withSnapshot);
   await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
     pieces: { a1: { color: "light", king: true } },
-    "spectators/victim": null
+    "ratingsAtStart/extra": 1
   }));
+});
+
+test("rooms: an outsider still cannot write into the legacy spectators path", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(
+    ref(databaseFor("mallory"), "rooms/ROOM1/spectators/carol"),
+    "Carol"
+  ));
+});
+
+test("rooms: a participant may write into the now-inert legacy spectators path (harmless, no longer authoritative)", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(set(
+    ref(databaseFor("alice"), "rooms/ROOM1/spectators/carol"),
+    "Carol"
+  ));
+});
+
+test("rooms: a whole-room write carrying forward pre-existing legacy spectators data is not rejected", async () => {
+  // Это ровно тот сценарий, который сломала бы spectators/.validate:false:
+  // whole-room transaction читает всю комнату, меняет несколько полей и
+  // возвращает ОБЪЕКТ ЦЕЛИКОМ — включая старое значение spectators без
+  // изменений. Такой паттерн реально используется в script.js (8 мест).
+  const withLegacy = room();
+  withLegacy.spectators = { carol: "Carol" };
+  await seed("rooms/ROOM1", withLegacy);
+  const fullRoom = { ...withLegacy, turn: "dark" };
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/ROOM1"), fullRoom));
 });
 
 test("rooms: settlement identity can atomically publish ratedMatchId and ratingsAtStart", async () => {
@@ -560,20 +587,85 @@ test("rooms: settlement identity can atomically publish ratedMatchId and ratings
   }));
 });
 
-test("rooms: a spectator can write their own spectator entry", async () => {
+test("roomSpectators: a spectator can create their own entry in a live room", async () => {
   await seed("rooms/ROOM1", room());
   await assertSucceeds(set(
-    ref(databaseFor("carol"), "rooms/ROOM1/spectators/carol"),
+    ref(databaseFor("carol"), "roomSpectators/ROOM1/carol"),
     "Carol"
   ));
 });
 
-test("rooms: a participant cannot write another user's spectator entry", async () => {
-  await seed("rooms/ROOM1", room());
+test("roomSpectators: cannot create an entry for someone else's room while it does not exist", async () => {
   await assertFails(set(
-    ref(databaseFor("alice"), "rooms/ROOM1/spectators/carol"),
+    ref(databaseFor("carol"), "roomSpectators/GHOST/carol"),
     "Carol"
   ));
+});
+
+test("roomSpectators: a participant cannot write another user's spectator entry", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "roomSpectators/ROOM1/carol"),
+    "Carol"
+  ));
+});
+
+test("roomSpectators: public read is allowed, so an ordinary player sees the spectator list", async () => {
+  await seed("rooms/ROOM1", room());
+  await seed("roomSpectators/ROOM1/carol", "Carol");
+  await assertSucceeds(get(ref(databaseFor("alice"), "roomSpectators/ROOM1")));
+});
+
+test("roomSpectators: a spectator leaving removes only their own entry, siblings remain", async () => {
+  await seed("rooms/ROOM1", room());
+  await seed("roomSpectators/ROOM1/carol", "Carol");
+  await seed("roomSpectators/ROOM1/dave", "Dave");
+  await assertSucceeds(remove(ref(databaseFor("carol"), "roomSpectators/ROOM1/carol")));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const rest = await get(ref(context.database(), "roomSpectators/ROOM1"));
+    assert.deepStrictEqual(rest.val(), { dave: "Dave" });
+  });
+});
+
+test("roomSpectators: a spectator can delete their own orphaned entry after the room itself is gone", async () => {
+  await seed("roomSpectators/ROOM1/carol", "Carol");
+  await assertSucceeds(remove(ref(databaseFor("carol"), "roomSpectators/ROOM1/carol")));
+});
+
+test("roomSpectators: a bot-mirror owner sees the same authoritative list as any other room", async () => {
+  await seed("rooms/BOTROOM", room());
+  await seed("roomSpectators/BOTROOM/carol", "Carol");
+  await assertSucceeds(get(ref(databaseFor("alice"), "roomSpectators/BOTROOM")));
+});
+
+test("roomSpectators: a rematch cannot bundle a write into someone else's spectator entry", async () => {
+  const finished = room({ status: "finished" });
+  await seed("rooms/ROOM1", finished);
+  await seed("roomSpectators/ROOM1/carol", "Carol");
+  await assertFails(update(ref(databaseFor("alice")), {
+    "rooms/ROOM1/players/light/id": "bob",
+    "rooms/ROOM1/players/light/name": "Bob",
+    "rooms/ROOM1/players/dark/id": "alice",
+    "rooms/ROOM1/players/dark/name": "Alice",
+    "rooms/ROOM1/status": "active",
+    "rooms/ROOM1/winner": null,
+    "roomSpectators/ROOM1/carol": null
+  }));
+});
+
+test("roomSpectators: spectators survive a bot rematch that reuses the same room code", async () => {
+  await seed("rooms/BOTROOM", room({ status: "finished" }));
+  await seed("roomSpectators/BOTROOM/carol", "Carol");
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/BOTROOM"), {
+    pieces: { b6: { color: "light", king: false } },
+    turn: "light",
+    status: "active",
+    winner: null
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillThere = await get(ref(context.database(), "roomSpectators/BOTROOM/carol"));
+    assert.equal(stillThere.val(), "Carol");
+  });
 });
 
 test("rooms: an outsider can still write presence (deferred to #19)", async () => {
@@ -590,21 +682,6 @@ test("rooms: an outsider cannot smuggle a pieces change bundled with a presence 
   await assertFails(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
     pieces: { a1: { color: "light", king: true } },
     "presence/light": { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_500 }
-  }));
-});
-
-test("rooms: a rematch cannot bundle a foreign spectator deletion, even alongside an untouched sibling spectator", async () => {
-  const finished = room({ status: "finished" });
-  finished.spectators = { victim: "Victim", keep: "Keep" };
-  await seed("rooms/ROOM1", finished);
-  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
-    "players/light/id": "bob",
-    "players/light/name": "Bob",
-    "players/dark/id": "alice",
-    "players/dark/name": "Alice",
-    status: "active",
-    winner: null,
-    "spectators/victim": null
   }));
 });
 
