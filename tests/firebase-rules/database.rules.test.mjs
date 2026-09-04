@@ -431,9 +431,20 @@ test("rooms: an outsider replacing an occupied dark seat is denied", async () =>
   ));
 });
 
-test("rooms: BRIDGE-A allows an outsider to move pieces", async () => {
+test("rooms: an outsider cannot move pieces in someone else's active game", async () => {
   await seed("rooms/ROOM1", room());
-  await assertSucceeds(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
+  await assertFails(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    turn: "dark"
+  }));
+});
+
+test("rooms: a participant can move pieces even when a populated ratingsAtStart and spectators subtree is otherwise untouched", async () => {
+  const withDelegated = room();
+  withDelegated.ratingsAtStart = { light: 1000, dark: 1000 };
+  withDelegated.spectators = { victim: "Victim", keep: "Keep" };
+  await seed("rooms/ROOM1", withDelegated);
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
     pieces: { a1: { color: "light", king: true } },
     turn: "dark"
   }));
@@ -519,6 +530,84 @@ test("rooms: an outsider joining an active dark-absent room is denied", async ()
   }));
 });
 
+test("rooms: a participant cannot smuggle a ratingsAtStart change into a gameplay update", async () => {
+  const withSnapshot = room();
+  withSnapshot.ratingsAtStart = { light: 1000, dark: 1000 };
+  await seed("rooms/ROOM1", withSnapshot);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    "ratingsAtStart/light": 9999
+  }));
+});
+
+test("rooms: a participant cannot smuggle a foreign spectator removal into a gameplay update, even alongside an untouched sibling spectator", async () => {
+  const withSpectators = room();
+  withSpectators.spectators = { victim: "Victim", keep: "Keep" };
+  await seed("rooms/ROOM1", withSpectators);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    "spectators/victim": null
+  }));
+});
+
+test("rooms: settlement identity can atomically publish ratedMatchId and ratingsAtStart", async () => {
+  await seed("rooms/ROOM1", room());
+  await seed("matchIndex/ROOM1", { matchId: "elo_ROOM1_0_0", createdAt: 1_700_000_000_000, lastMatchNumber: 0 });
+  await assertSucceeds(update(ref(databaseFor("srv_settlement")), {
+    "rooms/ROOM1/ratedMatchId": "elo_ROOM1_0_0",
+    "rooms/ROOM1/ratingsAtStart/light": 1000,
+    "rooms/ROOM1/ratingsAtStart/dark": 1000
+  }));
+});
+
+test("rooms: a spectator can write their own spectator entry", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(set(
+    ref(databaseFor("carol"), "rooms/ROOM1/spectators/carol"),
+    "Carol"
+  ));
+});
+
+test("rooms: a participant cannot write another user's spectator entry", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "rooms/ROOM1/spectators/carol"),
+    "Carol"
+  ));
+});
+
+test("rooms: an outsider can still write presence (deferred to #19)", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(set(ref(databaseFor("mallory"), "rooms/ROOM1/presence/light"), {
+    online: true,
+    onlineSince: 1_700_000_000_000,
+    lastSeen: 1_700_000_000_500
+  }));
+});
+
+test("rooms: an outsider cannot smuggle a pieces change bundled with a presence write", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    "presence/light": { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_500 }
+  }));
+});
+
+test("rooms: a rematch cannot bundle a foreign spectator deletion, even alongside an untouched sibling spectator", async () => {
+  const finished = room({ status: "finished" });
+  finished.spectators = { victim: "Victim", keep: "Keep" };
+  await seed("rooms/ROOM1", finished);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    "spectators/victim": null
+  }));
+});
+
 test("rooms: a room missing pieces stays denied for an unrelated presence write", async () => {
   const malformed = room();
   delete malformed.pieces;
@@ -583,7 +672,7 @@ test("presence: BRIDGE-A allows an outsider to overwrite another player's presen
   }));
 });
 
-test("technical result: BRIDGE-A allows an outsider's mature disconnect result", async () => {
+test("technical result: an outsider cannot claim a disconnect result for someone else's game", async () => {
   const now = Date.now();
   await seed("rooms/ROOM1", room({
     presence: {
@@ -592,7 +681,7 @@ test("technical result: BRIDGE-A allows an outsider's mature disconnect result",
     }
   }));
 
-  await assertSucceeds(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
+  await assertFails(update(ref(databaseFor("mallory"), "rooms/ROOM1"), {
     status: "finished",
     winner: "light",
     winReason: "disconnect",
@@ -607,6 +696,7 @@ test("technical result: BRIDGE-A allows an outsider's mature disconnect result",
     }
   }));
 });
+
 
 test("technical result: an early disconnect claim is denied", async () => {
   const now = Date.now();
