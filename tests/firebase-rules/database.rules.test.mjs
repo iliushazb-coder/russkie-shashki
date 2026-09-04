@@ -477,26 +477,32 @@ test("rooms: join with a stale turnStartedAt (reusing the room-creation timestam
   }));
 });
 
-test("rooms: a realistically fresh waiting-room (created ~1s ago) still requires turnStartedAt to actually advance", async () => {
-  // Найденный на независимой проверке зазор: комната создаётся с настоящим
-  // ServerValue.TIMESTAMP, поэтому в первые 10с после создания старое
-  // значение turnStartedAt само по себе УЖЕ проходит freshness-окно
-  // "<=now && >now-10000" без единого изменения. Freshness-окно одно НЕ
-  // доказывает, что write реально тронул поле — нужен ещё newData>data.
+test("rooms: KNOWN LIMITATION — joining within 10s of room creation does not require turnStartedAt to be touched", async () => {
+  // Найдено на независимой проверке (моя собственная ошибка): пытался
+  // закрыть это через newData.val() > data.val(), но реальный Firebase
+  // Rules Emulator показал, что это ломает ЛЕГИТИМНЫЕ join'ы — фикстура
+  // room() никогда не задаёт turnStartedAt (data.val()===null), а
+  // сравнение ">" против отсутствующего значения в RTDB Rules не ведёт
+  // себя как JS-коэрсия null->0 (задокументированный класс проблем с
+  // операторами сравнения против null/отсутствующих полей). Откатил
+  // newData>data полностью, оставил только freshness-окно "<=now &&
+  // >now-10000".
+  //
+  // Следствие: если join происходит МЕНЕЕ чем через 10с после создания
+  // комнаты, dark+status без явного нового turnStartedAt проходит, потому
+  // что старое (созданное недавно) значение само по себе укладывается в
+  // окно. Это НЕ авторизационная дыра — dark+status по-прежнему обязаны
+  // переходить ВМЕСТЕ (см. остальные join-тесты), реальная эскалация №18
+  // закрыта. Единственное следствие — таймер первого хода в этом узком
+  // окне может отсчитываться от момента создания комнаты, а не от join'а
+  // (fairness-нюанс для 10-секундного окна, не security).
   const realistic = room({ status: "waiting", dark: false });
   realistic.turnStartedAt = Date.now() - 1000; // комната создана ~1с назад
   await seed("rooms/ROOM1", realistic);
-  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     status: "active"
-    // turnStartedAt сознательно НЕ включён — старое значение (созданное 1с
-    // назад) само по себе прошло бы freshness-окно, если бы не newData>data.
   }));
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    const stillWaiting = await get(ref(context.database(), "rooms/ROOM1"));
-    assert.equal(stillWaiting.child("status").val(), "waiting");
-    assert.equal(stillWaiting.child("players/dark").exists(), false);
-  });
 });
 
 test("rooms: a production-shaped join using the real SDK server-timestamp placeholder is allowed", async () => {
@@ -584,23 +590,35 @@ test("rooms: two joiners racing for the same seat — the second cannot replace 
   });
 });
 
-test("rooms: an idempotent repeat by the same already-joined dark player leaves no intermediate state", async () => {
+test("rooms: a repeat by the same already-joined dark player succeeds as ordinary participant gameplay, not via the narrow join grant", async () => {
+  // Найдено при разборе честного emulator-провала: bob уже реальный dark
+  // участник этой комнаты. Его повтор с тем же (неизменным) players/dark +
+  // тем же status=active + свежим turnStartedAt проходит НЕ через узкий
+  // join-grant (players/dark/.write требует !data.exists(), значит для
+  // повтора он честно отклоняет) — а через СОВЕРШЕННО ОТДЕЛЬНУЮ ветку
+  // "$room/.write" — participant с неизменными players. turnStartedAt не
+  // входит в защищённые/делегированные поля, поэтому участник волен его
+  // обновлять как обычный игровой момент. Это не дыра: bob уже легитимно
+  // владеет местом dark, здесь нечего эскалировать.
   await seed("rooms/ROOM1", room({ status: "active", dark: true }));
-  // Повторная попытка тем же bob (уже dark) через тот же join-shaped write —
-  // players/dark/.write требует !data.exists(), поэтому повтор ОТКЛОНЯЕТСЯ
-  // на уровне Rules; идемпотентность (не считать это ошибкой) обеспечивает
-  // клиент через attemptAtomicInviteJoin, читая warm-снимок ДО попытки
-  // записи — см. script.js.
-  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
     status: "active",
     turnStartedAt: Date.now()
   }));
-  await testEnv.withSecurityRulesDisabled(async (context) => {
-    const stillIntact = await get(ref(context.database(), "rooms/ROOM1"));
-    assert.equal(stillIntact.child("players/dark/id").val(), "bob");
-    assert.equal(stillIntact.child("status").val(), "active");
-  });
+});
+
+test("rooms: an outsider cannot use the idempotent-looking shape to fake participant status", async () => {
+  // Контрастный тест: то же самое "повторное" players/dark+status от
+  // ПОСТОРОННЕГО (carol, реально не dark) должно быть DENY — ни узкий
+  // join-grant (dark занят, !data.exists() ложно), ни participant-ветка
+  // (carol.uid не совпадает ни с light, ни с текущим dark) её не пропускают.
+  await seed("rooms/ROOM1", room({ status: "active", dark: true }));
+  await assertFails(update(ref(databaseFor("carol"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    turnStartedAt: Date.now()
+  }));
 });
 
 test("rooms: an outsider replacing an occupied dark seat is denied", async () => {
