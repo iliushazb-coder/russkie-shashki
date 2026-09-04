@@ -658,6 +658,99 @@ test("rooms: settlement identity can atomically publish ratedMatchId and ratings
   }));
 });
 
+test("rooms: settlement identity can replace the pointer with the next generation's canonical matchId after a legal rematch", async () => {
+  // Точная последовательность: первая партия зарегистрирована (M0), rematch
+  // легально прошёл (matchNumber 0->1, ratedMatchId НЕ тронут rematch'ем —
+  // остаётся M0 на этом шаге), Worker регистрирует ВТОРУЮ партию и заменяет
+  // pointer M0 -> M1 вместе с новым снимком рейтингов.
+  const afterRematch = room({ status: "active" });
+  afterRematch.ratedMatchId = "elo_ROOM1_1700000000000_0"; // M0, ещё не заменён
+  afterRematch.matchNumber = 1;
+  afterRematch.createdAt = 1_700_000_000_000;
+  await seed("rooms/ROOM1", afterRematch);
+  await seed("matchIndex/ROOM1", {
+    matchId: "elo_ROOM1_1700000000000_1", // Worker уже обновил matchIndex до M1
+    createdAt: 1_700_000_000_000,
+    lastMatchNumber: 1
+  });
+  await assertSucceeds(update(ref(databaseFor("srv_settlement")), {
+    "rooms/ROOM1/ratedMatchId": "elo_ROOM1_1700000000000_1",
+    "rooms/ROOM1/ratingsAtStart/light": 1000,
+    "rooms/ROOM1/ratingsAtStart/dark": 1000
+  }));
+});
+
+test("rooms: an ordinary participant cannot replace an existing ratedMatchId pointer", async () => {
+  const rated = room();
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  await seed("rooms/ROOM1", rated);
+  await assertFails(set(
+    ref(databaseFor("alice"), "rooms/ROOM1/ratedMatchId"),
+    "elo_ROOM1_1700000000000_1"
+  ));
+});
+
+test("rooms: settlement identity writing a non-canonical pointer is denied", async () => {
+  const rated = room();
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  await seed("rooms/ROOM1", rated);
+  await seed("matchIndex/ROOM1", {
+    matchId: "elo_ROOM1_1700000000000_1",
+    createdAt: 1_700_000_000_000,
+    lastMatchNumber: 1
+  });
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "rooms/ROOM1/ratedMatchId"),
+    "elo_SOME_OTHER_VALUE"
+  ));
+});
+
+test("rooms: a full legal rematch cycle replaces the old pointer with the new one atomically", async () => {
+  // Сквозной сценарий: (1) старая партия settled, (2) rematch проходит и
+  // оставляет старый pointer нетронутым, (3) Worker атомарно заменяет
+  // pointer и публикует новый снимок рейтингов для поколения 1.
+  const rated = room({ status: "finished" });
+  rated.ratedMatchId = "elo_ROOM1_1700000000000_0";
+  rated.matchNumber = 0;
+  rated.createdAt = 1_700_000_000_000;
+  await seed("rooms/ROOM1", rated);
+  await seed("eloMatches/elo_ROOM1_1700000000000_0", { settledBy: "worker" });
+
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    matchNumber: 1,
+    ratingsAtStart: null
+  }));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillOldPointer = await get(ref(context.database(), "rooms/ROOM1/ratedMatchId"));
+    assert.equal(stillOldPointer.val(), "elo_ROOM1_1700000000000_0");
+  });
+
+  await seed("matchIndex/ROOM1", {
+    matchId: "elo_ROOM1_1700000000000_1",
+    createdAt: 1_700_000_000_000,
+    lastMatchNumber: 1
+  });
+  await assertSucceeds(update(ref(databaseFor("srv_settlement")), {
+    "rooms/ROOM1/ratedMatchId": "elo_ROOM1_1700000000000_1",
+    "rooms/ROOM1/ratingsAtStart/light": 1000,
+    "rooms/ROOM1/ratingsAtStart/dark": 1000
+  }));
+
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const finalPointer = await get(ref(context.database(), "rooms/ROOM1/ratedMatchId"));
+    assert.equal(finalPointer.val(), "elo_ROOM1_1700000000000_1");
+    const snapshot = await get(ref(context.database(), "rooms/ROOM1/ratingsAtStart"));
+    assert.deepStrictEqual(snapshot.val(), { light: 1000, dark: 1000 });
+  });
+});
+
 test("roomSpectators: a spectator can create their own entry in a live room", async () => {
   await seed("rooms/ROOM1", room());
   await assertSucceeds(set(
