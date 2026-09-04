@@ -7000,10 +7000,15 @@ function checkForInviteLink() {
                     return null;
                 }
 
-                // applyLocally=false не даёт speculative active попасть в тот же
-                // локальный кеш до server commit. №18: whole-room transaction
-                // заменена на attemptAtomicInviteJoin (узкий multi-location
-                // update) — decision-логика buildAtomicInviteJoin не менялась.
+                // №18: whole-room transaction заменена на attemptAtomicInviteJoin
+                // (узкий multi-location update) — decision-логика
+                // buildAtomicInviteJoin не менялась. update() (в отличие от
+                // прежнего предположения) ПРИМЕНЯЕТСЯ локально сразу, до server
+                // ACK — но attemptAtomicInviteJoin решает исход исключительно по
+                // промису самой записи, никогда не перечитывая warm-listener
+                // после отправки, поэтому спекулятивное состояние тут не
+                // используется как критерий успеха (см. scenario 8b в
+                // invite-join.test.js).
                 if (!canUseFirebase()) return Promise.resolve(null);
                 return attemptAtomicInviteJoin(inviteRoomRef, latestWarmRoom, myTelegramId, myTelegramName);
             }).then(function (result) {

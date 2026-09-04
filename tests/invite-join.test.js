@@ -92,6 +92,10 @@ function setup(serverRoom, opts) {
     //   3. если вернули значение, а на сервере оно ДРУГОЕ, SDK
     //      ПЕРЕЗАПУСКАЕТ колбэк с серверным значением — именно этим
     //      закрывается гонка при захвате узла места.
+    // №18 ПРИМЕЧАНИЕ: этот мок теперь МЁРТВЫЙ КОД. Ни один текущий код-путь
+    // (claimDarkSeatAndActivate/attemptAtomicInviteJoin) больше не вызывает
+    // .transaction() — join переведён на узкий update() (см. мок ниже).
+    // Оставлен для истории/справки, не трогаем ради минимальности диффа.
     transaction: function (cb, onComplete, applyLocally) {
       env.txCalls++;
 
@@ -251,8 +255,11 @@ function setup(serverRoom, opts) {
         }
         if (opts.joinStuckInNetwork && !env.stuckDone) {
           env.stuckDone = true;
-          // Сетевая яма: у update() нет applyLocally/локального оптимизма —
-          // просто ничего не мутируем и никогда не резолвим/реджектим.
+          // Сетевая яма: промис никогда не резолвится/реджектится. update()
+          // В РЕАЛЬНОСТИ применяет спекулятивное значение локально сразу
+          // (см. scenario 8b) — здесь этот шаг сознательно не эмулируется,
+          // потому что для ЭТОГО сценария он не имеет значения: интересен
+          // только факт, что после 10с таймаута на сервере не остаётся следов.
           return new Promise(function () {});
         }
         if (opts.delayJoinAck && !env.ackHeld) {
@@ -528,11 +535,20 @@ const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && 
     global.isSpectator === false && global.roomCode === null);
 
   console.log('');
-  console.log('СЦЕНАРИЙ 12. applyLocally=false: спекулятивного состояния нет');
+  console.log('СЦЕНАРИЙ 12. update() ещё pending: игра НЕ стартует преждевременно');
+  // update() применяется локально сразу (см. scenario 8b) — но это влияет
+  // только на снимок warm-listener'а. myColor/isOnlineGame выставляются
+  // оптимистично ДО самой попытки записи (существующее поведение, не
+  // связанное с №18) — значимый признак "принято за подтверждённый успех"
+  // это запуск экрана игры, а не эти два поля. startOnlineGame вызывается
+  // ТОЛЬКО из finishInviteSuccess(), а она — только из result.committed;
+  // здесь промис claimDarkSeatAndActivate никогда не резолвится/реджектится.
   setup(mkRoom('waiting', 'A', null), { joinStuckInNetwork: true });
   checkForInviteLink(); await flush();
-  check('12. локально комната НЕ показана активной', env.localOverlay === undefined,
-    JSON.stringify(env.localOverlay && env.localOverlay.status));
+  check('12. startOnlineGame НЕ запущен пока write pending',
+    env.startCalls === 0);
+  check('12. экран игры НЕ показан пока write pending',
+    env.screens.indexOf('game') === -1);
   check('12. на сервере по-прежнему waiting без dark',
     env.serverRoom.status === 'waiting' && !env.serverRoom.players.dark);
 

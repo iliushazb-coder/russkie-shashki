@@ -266,7 +266,7 @@ check('7.2 отдельной транзакции по players/dark больш�
     flow.indexOf('players/dark') === -1);
 check('7.3 безусловного update с players/dark нет',
     flow.indexOf('"players/dark":') === -1);
-check('7.4 узкий join-write через update() — у update() нет applyLocally/локального оптимизма в принципе',
+check('7.4 узкий join-write через update() (не whole-room transaction)',
     /roomRef\.update\(/.test(grab('claimDarkSeatAndActivate')) &&
     !/\.transaction\(/.test(grab('claimDarkSeatAndActivate')));
 check('7.5 прерывание классифицируется, а не считается отказом', (function () {

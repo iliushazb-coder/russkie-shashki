@@ -15,6 +15,7 @@ import {
   query,
   ref,
   remove,
+  serverTimestamp,
   set,
   update
 } from "firebase/database";
@@ -473,6 +474,40 @@ test("rooms: join with a stale turnStartedAt (reusing the room-creation timestam
     "players/dark": { id: "bob", name: "Bob" },
     status: "active",
     turnStartedAt: 1_700_000_000_000
+  }));
+});
+
+test("rooms: a realistically fresh waiting-room (created ~1s ago) still requires turnStartedAt to actually advance", async () => {
+  // Найденный на независимой проверке зазор: комната создаётся с настоящим
+  // ServerValue.TIMESTAMP, поэтому в первые 10с после создания старое
+  // значение turnStartedAt само по себе УЖЕ проходит freshness-окно
+  // "<=now && >now-10000" без единого изменения. Freshness-окно одно НЕ
+  // доказывает, что write реально тронул поле — нужен ещё newData>data.
+  const realistic = room({ status: "waiting", dark: false });
+  realistic.turnStartedAt = Date.now() - 1000; // комната создана ~1с назад
+  await seed("rooms/ROOM1", realistic);
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active"
+    // turnStartedAt сознательно НЕ включён — старое значение (созданное 1с
+    // назад) само по себе прошло бы freshness-окно, если бы не newData>data.
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillWaiting = await get(ref(context.database(), "rooms/ROOM1"));
+    assert.equal(stillWaiting.child("status").val(), "waiting");
+    assert.equal(stillWaiting.child("players/dark").exists(), false);
+  });
+});
+
+test("rooms: a production-shaped join using the real SDK server-timestamp placeholder is allowed", async () => {
+  // Тот же механизм, что claimDarkSeatAndActivate реально использует в
+  // script.js (firebase.database.ServerValue.TIMESTAMP) — не литеральный
+  // Date.now(), а настоящий serverTimestamp()-плейсхолдер модульного SDK.
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    turnStartedAt: serverTimestamp()
   }));
 });
 
