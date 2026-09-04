@@ -272,12 +272,12 @@ test("eloMatches: public read is denied", async () => {
   await assertFails(get(ref(databaseFor(), "eloMatches/match-1")));
 });
 
-test("eloMatches: settlement identity can read", async () => {
-  await assertSucceeds(get(ref(databaseFor("srv_settlement"), "eloMatches/match-1")));
+test("eloMatches: authenticated non-settlement read is denied", async () => {
+  await assertFails(get(ref(databaseFor("tg_1001"), "eloMatches/match-1")));
 });
 
-test("eloMatches: BRIDGE-A allows unauthenticated create without settledBy", async () => {
-  await assertSucceeds(set(ref(databaseFor(), "eloMatches/match-1"), receipt()));
+test("eloMatches: settlement identity can read", async () => {
+  await assertSucceeds(get(ref(databaseFor("srv_settlement"), "eloMatches/match-1")));
 });
 
 test("eloMatches: settlement identity can create a worker receipt", async () => {
@@ -287,6 +287,14 @@ test("eloMatches: settlement identity can create a worker receipt", async () => 
   ));
 });
 
+test("eloMatches: unauthenticated create is denied even with a fully valid receipt", async () => {
+  await assertFails(set(ref(databaseFor(), "eloMatches/match-1"), receipt()));
+});
+
+test("eloMatches: authenticated non-settlement create is denied even with a fully valid receipt", async () => {
+  await assertFails(set(ref(databaseFor("tg_1001"), "eloMatches/match-1"), receipt()));
+});
+
 test("eloMatches: unauthenticated settledBy spoof is denied", async () => {
   await assertFails(set(
     ref(databaseFor(), "eloMatches/match-1"),
@@ -294,16 +302,16 @@ test("eloMatches: unauthenticated settledBy spoof is denied", async () => {
   ));
 });
 
-test("eloMatches: an invalid delta sum is denied", async () => {
+test("eloMatches: an invalid delta sum is denied for settlement identity", async () => {
   await assertFails(set(
-    ref(databaseFor(), "eloMatches/match-1"),
+    ref(databaseFor("srv_settlement"), "eloMatches/match-1"),
     receipt({ lightDelta: 1, darkDelta: -16 })
   ));
 });
 
-test("eloMatches: BRIDGE-A still allows a positive non-zero delta sum", async () => {
+test("eloMatches: a positive non-zero delta sum is allowed for settlement identity", async () => {
   await assertSucceeds(set(
-    ref(databaseFor(), "eloMatches/match-1"),
+    ref(databaseFor("srv_settlement"), "eloMatches/match-1"),
     receipt({ lightDelta: 16, darkDelta: -1 })
   ));
 });
@@ -313,9 +321,43 @@ test("eloMatches: duplicate settlement is denied", async () => {
   await assertFails(set(ref(databaseFor("srv_settlement"), "eloMatches/match-1"), receipt()));
 });
 
+test("eloMatches: overwrite of an existing receipt is denied even for settlement identity", async () => {
+  await seed("eloMatches/match-1", receipt());
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "eloMatches/match-1"),
+    receipt({ lightDelta: 1, darkDelta: -1 })
+  ));
+});
+
 test("eloMatches: deletion is denied", async () => {
   await seed("eloMatches/match-1", receipt());
   await assertFails(remove(ref(databaseFor("srv_settlement"), "eloMatches/match-1")));
+});
+
+test("eloMatches: atomic root PATCH creates the receipt and updates both stats nodes", async () => {
+  await seed("stats/alice", stats({ name: "Alice", rating: 1200, wins: 2, losses: 1, draws: 3 }));
+  await seed("stats/bob", stats({ name: "Bob", rating: 1200, wins: 4, losses: 2, draws: 1 }));
+
+  await assertSucceeds(update(ref(databaseFor("srv_settlement")), {
+    "eloMatches/match-1": receipt({ lightId: "alice", darkId: "bob", settledBy: "worker" }),
+    "stats/alice/rating": increment(16),
+    "stats/bob/rating": increment(-16),
+    "stats/alice/wins": increment(1),
+    "stats/bob/losses": increment(1)
+  }));
+
+  const light = await get(ref(databaseFor(), "stats/alice"));
+  const dark = await get(ref(databaseFor(), "stats/bob"));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const raw = await get(ref(context.database(), "eloMatches/match-1"));
+    assert.equal(raw.exists(), true);
+    assert.equal(raw.child("lightId").val(), "alice");
+    assert.equal(raw.child("darkId").val(), "bob");
+  });
+  assert.equal(light.child("rating").val(), 1216);
+  assert.equal(light.child("wins").val(), 3);
+  assert.equal(dark.child("rating").val(), 1184);
+  assert.equal(dark.child("losses").val(), 3);
 });
 
 test("matches: unauthenticated create is denied", async () => {
