@@ -7001,13 +7001,11 @@ function checkForInviteLink() {
                 }
 
                 // applyLocally=false не даёт speculative active попасть в тот же
-                // локальный кеш до server commit. Но главное здесь — сама запись
-                // ОДНА: dark + status + turnStartedAt атомарны относительно всех
-                // конкурирующих изменений комнаты.
+                // локальный кеш до server commit. №18: whole-room transaction
+                // заменена на attemptAtomicInviteJoin (узкий multi-location
+                // update) — decision-логика buildAtomicInviteJoin не менялась.
                 if (!canUseFirebase()) return Promise.resolve(null);
-        return inviteRoomRef.transaction(function (currentRoom) {
-                    return buildAtomicInviteJoin(currentRoom, myTelegramId, myTelegramName);
-                }, undefined, false);
+                return attemptAtomicInviteJoin(inviteRoomRef, latestWarmRoom, myTelegramId, myTelegramName);
             }).then(function (result) {
                 detachWarmListener();
 
@@ -7665,16 +7663,10 @@ function tryMatchOpponent(opponentId, opponentData) {
     if (!matchedRoomCode) return;
 
     // Я — присоединяющийся (myNumericId > oppNumericId). Пытаюсь "забрать" комнату создателя.
-    database.ref("rooms/" + matchedRoomCode).transaction(function(room) {
-        if (!room || room.status !== "waiting") return; // Abort if room gone or not waiting
-        room.status = "active";
-        room.players = room.players || {};
-        room.players.dark = { id: myTelegramId, name: myTelegramName };
-        room.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
-        return room;
-    }).then(function(result) {
+    // №18: узкий multi-location update вместо whole-room transaction.
+    claimDarkSeatAndActivate(database.ref("rooms/" + matchedRoomCode), myTelegramId, myTelegramName).then(function() {
         if (!canUseFirebase()) return;
-        if (result.committed) {
+        {
             // Успех! Мы победили в гонке — мы JOINER (присоединившийся)
             isMatchmakingResolved = true;
             if (matchmakingQueueRef) { 
@@ -7711,7 +7703,9 @@ function tryMatchOpponent(opponentId, opponentData) {
             });
         }
     }).catch(function(error) {
-        console.error("Matchmaking transaction failed:", error);
+        if (!canUseFirebase()) return;
+        if (error && error.code === "PERMISSION_DENIED") return;
+        console.error("Matchmaking update failed:", error);
         showInfoModal(t("err_join_failed"), false);
         showScreen(menuScreen);
         loadActiveRooms();
@@ -8647,6 +8641,50 @@ function isRoomAbandonedNow(room) {
 // Единый колбэк атомарного invite-join. В отличие от двухфазной схемы
 // здесь нет промежуточного сохранённого players/dark: место и activation
 // появляются на сервере одним commit.
+// Единый atomic join-write: claim места dark + активация комнаты.
+// №18: Rules больше не дают join-grant на весь "$room" (outsider мог бы
+// протащить в тот же write произвольные pieces/turn/winner) — join теперь
+// узкий multi-location update ровно на players/dark + status +
+// turnStartedAt, у каждого из них свой узкий child ".write" в Rules.
+// Whole-room transaction/set для этой цели больше НЕ проходит.
+function claimDarkSeatAndActivate(roomRef, uid, name) {
+    return roomRef.update({
+        "players/dark": { id: uid, name: name },
+        status: "active",
+        turnStartedAt: firebase.database.ServerValue.TIMESTAMP
+    });
+}
+
+// Обёртка над buildAtomicInviteJoin, сохраняющая ЕЁ decision-логику (включая
+// идемпотентный повтор — "мы уже dark в active-комнате, писать нечего")
+// нетронутой, но заменяющая механизм записи с whole-room transaction на
+// узкий update(). Форма результата {committed, snapshot} совпадает с тем,
+// что отдавал transaction(), поэтому вся retry/timeout/классификация в
+// startAtomicInviteJoin() ниже не меняется ни строкой.
+function attemptAtomicInviteJoin(roomRef, warmRoom, uid, name) {
+    // Идемпотентность нужно определить ДО вызова buildAtomicInviteJoin: она
+    // мутирует переданный объект на месте и возвращает ТУ ЖЕ ссылку что для
+    // идемпотентного повтора, что для свежего join — по reference они
+    // неразличимы ПОСЛЕ вызова.
+    const alreadyJoined = warmRoom && warmRoom.status === "active" &&
+        warmRoom.players && warmRoom.players.dark && warmRoom.players.dark.id === uid;
+    const decision = buildAtomicInviteJoin(warmRoom, uid, name);
+    if (decision === undefined) {
+        return Promise.resolve({ committed: false, snapshot: { val: function () { return warmRoom; } } });
+    }
+    if (alreadyJoined) {
+        // Мы уже dark в active-комнате — писать нечего.
+        return Promise.resolve({ committed: true });
+    }
+    return claimDarkSeatAndActivate(roomRef, uid, name).then(function () {
+        return { committed: true };
+    }).catch(function () {
+        return roomRef.once("value").then(function (freshSnapshot) {
+            return { committed: false, snapshot: freshSnapshot };
+        });
+    });
+}
+
 function buildAtomicInviteJoin(currentRoom, uid, name) {
     if (!currentRoom || !currentRoom.pieces || !currentRoom.players) return undefined;
     if (currentRoom.winner || currentRoom.result || currentRoom.status === "finished") return undefined;
@@ -9176,20 +9214,11 @@ function joinGroupRoom(code) {
             return;
         }
 
-        // ИСПОЛЬЗУЕМ ТРАНЗАКЦИЮ: гарантируем, что комната не удалена и имеет pieces
-        database.ref("rooms/" + roomCode).transaction(function(currentRoom) {
-            if (!currentRoom || !currentRoom.pieces || currentRoom.status !== "waiting") return; // Отмена, если комната битая/удалена
-            currentRoom.status = "active";
-            currentRoom.players = currentRoom.players || {};
-            currentRoom.players.dark = { id: myTelegramId, name: myTelegramName };
-            currentRoom.turnStartedAt = firebase.database.ServerValue.TIMESTAMP;
-            return currentRoom;
-        }).then(function(result) {
+        // №18: узкий multi-location update вместо whole-room transaction —
+        // Rules теперь дают join-grant только на players/dark + status +
+        // turnStartedAt.
+        claimDarkSeatAndActivate(database.ref("rooms/" + roomCode), myTelegramId, myTelegramName).then(function() {
             if (!canUseFirebase()) return;
-            if (!result.committed) {
-                showInfoModal("Комната уже занята, удалена или не существует.", false);
-                return;
-            }
 
             // Если я сам в этот момент тоже ждал соперника в своей комнате —
             // убираем её, раз я теперь играю здесь (иначе останется "призраком").
@@ -9213,7 +9242,12 @@ function joinGroupRoom(code) {
             showScreen(gameScreen);
             startOnlineGame();
         }).catch(function(error) {
-            console.error("Join room transaction failed:", error);
+            if (!canUseFirebase()) return;
+            if (error && error.code === "PERMISSION_DENIED") {
+                showInfoModal("Комната уже занята, удалена или не существует.", false);
+                return;
+            }
+            console.error("Join room update failed:", error);
             showInfoModal(t("err_join_failed"), false);
             showScreen(menuScreen);
             loadActiveRooms();

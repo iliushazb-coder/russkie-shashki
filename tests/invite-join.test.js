@@ -39,6 +39,8 @@ try {
   // активация» убрана целиком: промежуточного состояния на сервере больше
   // нет, поэтому нет и уборки места по таймауту.
   eval(extractFunc('buildAtomicInviteJoin'));
+  eval(extractFunc('claimDarkSeatAndActivate'));
+  eval(extractFunc('attemptAtomicInviteJoin'));
   eval(extractFunc('classifyAtomicInviteJoinFailure'));
   global.serverTimeOffsetReady = (typeof serverTimeOffsetReady !== 'undefined') ? serverTimeOffsetReady : true;
 global.cachedServerTimeOffsetMs = global.cachedServerTimeOffsetMs || 0;
@@ -209,6 +211,57 @@ function setup(serverRoom, opts) {
     update: function (v) {
       env.writes.push({ path: p, v: v });
       if (opts.failRoomUpdate && p === 'rooms/ROOM1') return Promise.reject(new Error('PERMISSION_DENIED (mock)'));
+      if (p === 'rooms/ROOM1' && v && v['players/dark'] !== undefined) {
+        // №18: узкий join-update. Зеркалим реальные Rules: dark должен быть
+        // свободен, а room.status === 'waiting' В МОМЕНТ прихода write на
+        // сервер — не в момент, когда клиент решил писать (warm-снимок
+        // может быть устаревшим, ровно как в реальности).
+        if (opts.joinStuckInNetwork && !env.stuckDone) {
+          env.stuckDone = true;
+          // Сетевая яма: у update() нет applyLocally/локального оптимизма —
+          // просто ничего не мутируем и никогда не резолвим/реджектим.
+          return new Promise(function () {});
+        }
+        if (opts.delayJoinAck && !env.ackHeld) {
+          env.ackHeld = true;
+          // Write реально коммитится на сервере СЕЙЧАС — задерживается
+          // только доставка ACK клиенту, не сама запись.
+          const roomNow = env.serverRoom;
+          const legalNow = roomNow && roomNow.status === 'waiting' &&
+            (!roomNow.players || !roomNow.players.dark);
+          if (legalNow) {
+            roomNow.status = v.status;
+            roomNow.players = roomNow.players || {};
+            roomNow.players.dark = v['players/dark'];
+            roomNow.turnStartedAt = v.turnStartedAt;
+            env.seatDone = true;
+          }
+          return new Promise(function (resolve, reject) {
+            env.releaseAck = function () {
+              if (legalNow) resolve(); else { const e = new Error('PERMISSION_DENIED'); e.code = 'PERMISSION_DENIED'; reject(e); }
+            };
+          });
+        }
+        if (opts.failActivation) {
+          const err = new Error('PERMISSION_DENIED (mock, persistent)');
+          err.code = 'INTERNAL_ERROR'; // имитирует иной (не race) сбой сервера
+          return Promise.reject(err);
+        }
+        const room = env.serverRoom;
+        const darkFree = !room || !room.players || !room.players.dark || room.players.dark === null;
+        const legal = room && room.status === 'waiting' && darkFree;
+        if (!legal) {
+          const err = new Error('PERMISSION_DENIED');
+          err.code = 'PERMISSION_DENIED';
+          return Promise.reject(err);
+        }
+        room.status = v.status;
+        room.players = room.players || {};
+        room.players.dark = v['players/dark'];
+        room.turnStartedAt = v.turnStartedAt;
+        env.seatDone = true;
+        return Promise.resolve();
+      }
       if (p === 'rooms/ROOM1' && env.serverRoom) {
         Object.keys(v).forEach(function (k) {
           if (k === 'players/dark') { env.serverRoom.players.dark = v[k]; }
@@ -226,6 +279,26 @@ function setup(serverRoom, opts) {
       if (p === 'rooms/ROOM1') {
         env.warmHandlers = (env.warmHandlers || []).concat([cb]);
         env.warm = true;
+        // ОДНОШАГОВЫЙ КОНТРАКТ (№18): промежуточного состояния нет, поэтому
+        // все помехи-гонки вносятся ПЕРЕД первым warm-снимком — attemptAtomic-
+        // InviteJoin решает join/no-join именно по latestWarmRoom.
+        if (!env.interleaveDone) {
+          if (opts.stolenBeforeJoin) {
+            env.interleaveDone = true;
+            env.serverRoom.players.dark = { id: 'C', name: 'Другой гость' };
+            env.serverRoom.status = 'active';
+          }
+          if (opts.finishedBeforeJoin) {
+            env.interleaveDone = true;
+            env.serverRoom.status = 'finished';
+            env.serverRoom.winner = 'light';
+            env.serverRoom.result = { winnerId: 'A', loserId: 'B' };
+          }
+          if (opts.deletedBeforeJoin) {
+            env.interleaveDone = true;
+            env.serverRoom = null;
+          }
+        }
         const copy = env.serverRoom ? JSON.parse(JSON.stringify(env.serverRoom)) : null;
         if (cb) cb({ val: function () { return copy; } });
       }
@@ -283,17 +356,18 @@ const runTimer = (ms) => { env.timers.forEach(function (t) { if (t.ms === ms && 
   check('1. пользователь стал dark', global.myColor === 'dark' && global.isOnlineGame === true);
   check('1. status стал active НА СЕРВЕРЕ', !!env.serverRoom && env.serverRoom.status === 'active');
   check('1. players.dark записан на сервере', !!env.serverRoom && !!env.serverRoom.players.dark && env.serverRoom.players.dark.id === 'B');
-  // ОЖИДАНИЕ ИЗМЕНЕНО ОСОЗНАННО (v188). Прежняя схема писала место, статус и
-  // turnStartedAt одним безусловным update() — и именно поэтому двое,
-  // прошедшие проверки по одному и тому же снимку, оба записывались.
-  // Теперь место захватывается ТРАНЗАКЦИЕЙ по узлу players/dark, а статус
-  // выставляется следом. Требование прежнее и проверяется ниже: на сервере
-  // оказываются и dark, и active, и серверная метка времени.
-  check('1. место захвачено транзакцией по узлу players/dark', env.txCalls >= 1);
-  check('1. статус и turnStartedAt выставлены следом', (function () {
+  // №18: join теперь узкий multi-location update ровно на players/dark +
+  // status + turnStartedAt, ОДНОЙ атомарной операцией (сама атомарность
+  // теперь обеспечена Rules — каждое из трёх полей проверяет тот же
+  // переход, см. database.rules.json). Комментарий про "транзакцию по
+  // узлу players/dark, а статус следом" описывал более старую (v188)
+  // двухфазную схему, которой в buildAtomicInviteJoin уже не было даже
+  // до №18 — она мутирует все три поля разом и коммитит одним write.
+  check('1. dark/status/turnStartedAt записаны одним атомарным write', (function () {
     const w = roomWrites();
-    return w.length === 1 && w[0].v.status === 'active' &&
-      w[0].v.turnStartedAt && !('players/dark' in w[0].v);
+    return w.length === 1 &&
+      w[0].v['players/dark'] && w[0].v['players/dark'].id === 'B' &&
+      w[0].v.status === 'active' && w[0].v.turnStartedAt;
   })(), JSON.stringify(roomWrites()));
   check('1. turnStartedAt — СЕРВЕРНАЯ метка', (function () {
     const w = roomWrites();

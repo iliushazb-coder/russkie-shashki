@@ -423,6 +423,85 @@ test("rooms: a dark player can join a waiting room", async () => {
   }));
 });
 
+test("rooms: join with turnStartedAt in the same update is allowed (matches real client shape)", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    turnStartedAt: 1_700_000_000_000
+  }));
+});
+
+test("rooms: join bundled with a pieces change is denied entirely", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    pieces: { a1: { color: "dark", king: true } }
+  }));
+});
+
+test("rooms: join bundled with a turn change is denied entirely", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    turn: "dark"
+  }));
+});
+
+test("rooms: join bundled with a winner change is denied entirely", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    winner: "dark"
+  }));
+});
+
+test("rooms: join bundled with tampering the light player's own data is denied entirely", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    "players/light/name": "Hacked",
+    status: "active"
+  }));
+});
+
+test("rooms: two joiners racing for the same seat — the second cannot replace the first", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active"
+  }));
+  await assertFails(update(ref(databaseFor("carol"), "rooms/ROOM1"), {
+    "players/dark": { id: "carol", name: "Carol" },
+    status: "active"
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const finalDark = await get(ref(context.database(), "rooms/ROOM1/players/dark"));
+    assert.equal(finalDark.child("id").val(), "bob");
+  });
+});
+
+test("rooms: an idempotent repeat by the same already-joined dark player leaves no intermediate state", async () => {
+  await seed("rooms/ROOM1", room({ status: "active", dark: true }));
+  // Повторная попытка тем же bob (уже dark) через тот же join-shaped write —
+  // players/dark/.write требует !data.exists(), поэтому повтор ОТКЛОНЯЕТСЯ
+  // на уровне Rules; идемпотентность (не считать это ошибкой) обеспечивает
+  // клиент через attemptAtomicInviteJoin, читая warm-снимок ДО попытки
+  // записи — см. script.js.
+  await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active"
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillIntact = await get(ref(context.database(), "rooms/ROOM1"));
+    assert.equal(stillIntact.child("players/dark/id").val(), "bob");
+    assert.equal(stillIntact.child("status").val(), "active");
+  });
+});
+
 test("rooms: an outsider replacing an occupied dark seat is denied", async () => {
   await seed("rooms/ROOM1", room());
   await assertFails(set(

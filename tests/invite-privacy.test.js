@@ -162,8 +162,9 @@ check('4.3 checkForInviteLink читает комнату САМ, минуя л�
 check('4.4 deep-link не зависит от joinGroupRoom',
     grab('checkForInviteLink').indexOf('joinGroupRoom') === -1);
 check('4.5 joinGroupRoom НЕ удалён из кода', /function joinGroupRoom\(code\) \{/.test(SRC));
-check('4.6 переход waiting -> active по-прежнему делается транзакцией',
-    /currentRoom\.status = "active";/.test(grab('joinGroupRoom')));
+check('4.6 переход waiting -> active по-прежнему устанавливается при join',
+    grab('joinGroupRoom').indexOf('claimDarkSeatAndActivate') !== -1 &&
+    /status:\s*"active"/.test(grab('claimDarkSeatAndActivate')));
 
 console.log('\n=== 5. НИЧЕГО ЛИШНЕГО НЕ ЗАТРОНУТО ===');
 
