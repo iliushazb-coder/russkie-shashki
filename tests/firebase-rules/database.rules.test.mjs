@@ -449,6 +449,43 @@ test("rooms: BRIDGE-A allows an outsider to delete a room", async () => {
   await assertSucceeds(remove(ref(databaseFor("mallory"), "rooms/ROOM1")));
 });
 
+test("rooms: a room missing pieces stays denied for an unrelated presence write", async () => {
+  const malformed = room();
+  delete malformed.pieces;
+  await seed("rooms/ROOM1", malformed);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "presence/light": { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_500 }
+  }));
+});
+
+test("rooms: a room missing pieces stays denied for an unrelated drawProposal write", async () => {
+  const malformed = room();
+  delete malformed.pieces;
+  await seed("rooms/ROOM1", malformed);
+  await assertFails(set(
+    ref(databaseFor("alice"), "rooms/ROOM1/drawProposal"),
+    { by: "light", name: "Alice" }
+  ));
+});
+
+test("rooms: an invalid status value stays denied for an unrelated presence write", async () => {
+  const malformed = room();
+  malformed.status = "corrupted";
+  await seed("rooms/ROOM1", malformed);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "presence/light": { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_500 }
+  }));
+});
+
+test("rooms: a malformed players shape stays denied for an unrelated presence write", async () => {
+  const malformed = room();
+  malformed.players = { light: { id: "alice" } };
+  await seed("rooms/ROOM1", malformed);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "presence/light": { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_500 }
+  }));
+});
+
 test("cleanup: BRIDGE-A allows cross-user multi-location cleanup", async () => {
   await seed("rooms/ROOM1", room());
   await seed("users/alice/rooms/ROOM1", { status: "active" });
