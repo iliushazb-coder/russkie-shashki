@@ -120,10 +120,10 @@
       }
     },
     "economy": {
-      ".read": false,
-      ".write": false
-    },
-    "matchmakingQueue": {
+    ".read": false,
+    ".write": false
+  },
+  "matchmakingQueue": {
       ".read": true,
       "$uid": {
         ".write": true,

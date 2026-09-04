@@ -442,7 +442,11 @@ test("rooms: players/dark + turnStartedAt without flipping status to active is d
   // Ровно найденная двухшаговая эскалация: если бы это прошло, room
   // осталась бы waiting, но auth.uid уже сидел бы в players/dark — а
   // participant-ветка $room/.write смотрит только на неизменность light/dark
-  // id, не на status. Все три поля теперь взаимно требуют друг друга.
+  // id, не на status. Доказано только это: "dark" нельзя записать отдельно
+  // и получить participant-доступ. dark и status обязаны меняться вместе —
+  // это НЕ то же самое, что "все три поля взаимно требуют друг друга":
+  // turnStartedAt при свежем creation timestamp может остаться нетронутым
+  // (см. KNOWN LIMITATION ниже) без последствий для этой гарантии.
   await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
   await assertFails(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
     "players/dark": { id: "bob", name: "Bob" },
