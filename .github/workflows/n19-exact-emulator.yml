@@ -1,0 +1,78 @@
+name: n19 exact emulator verification
+
+on:
+  push:
+    branches:
+      - verify/n19-emulator
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-n19:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout verification branch
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Reconstruct and authenticate exact candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/n19.patch
+          for f in ci/n19/part*.b64; do
+            base64 -d "$f" >> /tmp/n19.patch
+          done
+          test "$(wc -c < /tmp/n19.patch)" -eq 37193
+          actual_sha="$(sha256sum /tmp/n19.patch | awk '{print $1}')"
+          test "$actual_sha" = "7a1720a62be1e6452275173582cb2560fd3b79cb594fde8e1cf0fdc5c4953171"
+          echo "Exact patch verified: 37193 bytes, sha256=$actual_sha"
+
+      - name: Apply exact №19 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check /tmp/n19.patch
+          git apply /tmp/n19.patch
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' 'firebase/database.rules.json' 'tests/firebase-rules/database.rules.test.mjs' | sort)"
+          test "$actual" = "$expected"
+          echo "Changed files after patch:"
+          printf '%s\n' "$actual"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Frontend syntax
+        run: npm run check
+
+      - name: Frontend tests
+        run: npm test
+
+      - name: Worker syntax
+        run: node --check worker/index.mjs
+
+      - name: Worker unit tests
+        run: node --test tests/worker/worker-unit.test.mjs
+
+      - name: Settlement behavior tests
+        run: node tests/settlement-behavior.test.js
+
+      - name: Firebase Rules Emulator tests
+        run: npm run test:rules
