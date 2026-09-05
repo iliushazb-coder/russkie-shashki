@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify-n19:
@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout verification branch
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@v5
@@ -57,6 +59,18 @@ jobs:
           assert digest == "52a89660da68f55be3618e4c15c64ce0fa994084bb7cee0c8319ac7d806564fd", digest
           PY
 
+      - name: Checkout exact №18 base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          current_main="$(git rev-parse origin/main)"
+          expected_base="e86040f7ae532dda6d979d0189b1951630db79b9"
+          echo "origin/main=$current_main"
+          test "$current_main" = "$expected_base"
+          git checkout --detach "$expected_base"
+          test "$(git rev-parse HEAD)" = "$expected_base"
+
       - name: Apply exact №19 patch
         shell: bash
         run: |
@@ -90,3 +104,24 @@ jobs:
 
       - name: Firebase Rules Emulator tests
         run: npm run test:rules
+
+      - name: Publish exact №19 to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' 'firebase/database.rules.json' 'tests/firebase-rules/database.rules.test.mjs' | sort)"
+          test "$actual" = "$expected"
+          git diff --check
+
+          git config user.name "iliushazb-coder"
+          git config user.email "iliushazb@gmail.com"
+          git add firebase/database.rules.json tests/firebase-rules/database.rules.test.mjs
+
+          staged="$(git diff --cached --name-only | sort)"
+          test "$staged" = "$expected"
+
+          git commit -m "security: protect room presence ownership (№19)" -m "Publishes exact candidate 17c5338d after independent review and Firebase Rules Emulator 165/165."
+          echo "publish_commit=$(git rev-parse HEAD)"
+          echo "publish_tree=$(git rev-parse HEAD^{tree})"
+          git push origin HEAD:main
