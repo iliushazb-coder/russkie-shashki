@@ -53,8 +53,8 @@ jobs:
           digest = hashlib.sha256(patch).hexdigest()
           Path("/tmp/n19.patch").write_bytes(patch)
           print(f"Exact patch reconstructed: size={size} sha256={digest}")
-          assert size == 37193, size
-          assert digest == "7a1720a62be1e6452275173582cb2560fd3b79cb594fde8e1cf0fdc5c4953171", digest
+          assert size == 37309, size
+          assert digest == "52a89660da68f55be3618e4c15c64ce0fa994084bb7cee0c8319ac7d806564fd", digest
           PY
 
       - name: Apply exact №19 patch
