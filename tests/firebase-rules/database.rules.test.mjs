@@ -1055,9 +1055,9 @@ test("roomSpectators: spectators survive a bot rematch that reuses the same room
   });
 });
 
-test("rooms: an outsider can still write presence (deferred to #19)", async () => {
+test("rooms: an outsider cannot write presence at all (#19)", async () => {
   await seed("rooms/ROOM1", room());
-  await assertSucceeds(set(ref(databaseFor("mallory"), "rooms/ROOM1/presence/light"), {
+  await assertFails(set(ref(databaseFor("mallory"), "rooms/ROOM1/presence/light"), {
     online: true,
     onlineSince: 1_700_000_000_000,
     lastSeen: 1_700_000_000_500
@@ -1119,7 +1119,7 @@ test("cleanup: an outsider cannot multi-location delete someone else's room", as
 });
 
 
-test("presence: a player can publish presence", async () => {
+test("presence: a player can publish their own presence", async () => {
   await seed("rooms/ROOM1", room());
   await assertSucceeds(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
     online: true,
@@ -1128,12 +1128,397 @@ test("presence: a player can publish presence", async () => {
   }));
 });
 
-test("presence: BRIDGE-A allows an outsider to overwrite another player's presence", async () => {
+test("presence: a player cannot write the other color's presence", async () => {
   await seed("rooms/ROOM1", room());
-  await assertSucceeds(set(ref(databaseFor("mallory"), "rooms/ROOM1/presence/light"), {
+  await assertFails(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/dark"), {
     online: false,
-    absentSince: 1
+    absentSince: 1_700_000_000_000
   }));
+});
+
+test("presence: the opponent (not an outsider, but the OTHER real participant) cannot write my presence", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(ref(databaseFor("bob"), "rooms/ROOM1/presence/light"), {
+    online: false,
+    absentSince: 1_700_000_000_000
+  }));
+});
+
+test("presence: a spectator cannot write either color's presence", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(ref(databaseFor("carol"), "rooms/ROOM1/presence/light"), {
+    online: true,
+    lastSeen: 1_700_000_000_000
+  }));
+});
+
+test("presence: own presence bundled with the other color's presence in one request is denied entirely (human room)", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "presence/light": { online: true, lastSeen: 1_700_000_000_000 },
+    "presence/dark": { online: false, absentSince: 1_700_000_000_000 }
+  }));
+});
+
+test("presence: own heartbeat (lastSeen only, partial update) is allowed", async () => {
+  await seed("rooms/ROOM1", room({
+    presence: { light: { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_000 } }
+  }));
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    lastSeen: 1_700_000_000_500
+  }));
+});
+
+test("presence: hidden (going offline, partial update without onlineSince) is allowed", async () => {
+  await seed("rooms/ROOM1", room({
+    presence: { light: { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_000 } }
+  }));
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    online: false,
+    absentSince: 1_700_000_000_500,
+    lastSeen: 1_700_000_000_500
+  }));
+});
+
+test("presence: reconnect (full 4-field refresh) is allowed", async () => {
+  await seed("rooms/ROOM1", room({
+    presence: { light: { online: false, absentSince: 1_700_000_000_000 } }
+  }));
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    online: true,
+    absentSince: null,
+    onlineSince: 1_700_000_000_600,
+    lastSeen: 1_700_000_000_600
+  }));
+});
+
+test("presence: onDisconnect-shaped partial write (online:false + absentSince only) is allowed", async () => {
+  // ГРАНИЦА ТЕСТА: @firebase/rules-unit-testing проверяет только Rules-
+  // оценку для данного payload+auth, не реальный SDK-механизм разрыва
+  // соединения. Этот тест доказывает, что ПРАВИЛА пропускают payload формы
+  // onDisconnect ("online:false, absentSince" — 2 поля) от auth'а,
+  // зарегистрировавшего его, — НЕ то, что настоящий обрыв соединения
+  // сработает end-to-end (это свойство самого Firebase SDK, официально
+  // документированное как использующее auth регистрирующего клиента, а не
+  // то, что можно проверить этим harness'ом).
+  await seed("rooms/ROOM1", room({
+    presence: { light: { online: true, onlineSince: 1_700_000_000_000, lastSeen: 1_700_000_000_000 } }
+  }));
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    online: false,
+    absentSince: 1_700_000_000_500
+  }));
+});
+
+test("presence: an unknown field on a presence write is denied", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    somethingElse: true
+  }));
+});
+
+test("presence: normal waiting-room creation has no presence at all (createOnlineRoom path)", async () => {
+  const initialState = room({ status: "waiting", dark: false });
+  delete initialState.presence;
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/ROOM1"), initialState));
+});
+
+test("presence: production friend-invite create with initial presence.light and no presence.dark is allowed (createRoomAndShowWaiting path)", async () => {
+  // Найдено на независимой проверке: createRoomAndShowWaiting() реально
+  // создаёт комнату ОДНИМ set() с presence.light уже внутри (не отдельным
+  // запросом, как createOnlineRoom) -- это ВТОРАЯ легитимная форма normal
+  // create, а не синтетическое удобство теста.
+  const initialState = room({ status: "waiting", dark: false });
+  initialState.presence = { light: { online: true, lastSeen: 1_700_000_000_000 } };
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/ROOM1"), initialState));
+});
+
+test("presence: a fake dark presence smuggled into a normal create is denied", async () => {
+  const initialState = room({ status: "waiting", dark: false });
+  initialState.presence = { dark: { online: false, absentSince: 1 } };
+  await assertFails(set(ref(databaseFor("alice"), "rooms/GHOST"), initialState));
+});
+
+test("presence: after a rematch swap, the new dark (former light) can publish presence for their new color", async () => {
+  await seed("rooms/ROOM1", room({ status: "finished" }));
+  await update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null
+  });
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/dark"), {
+    online: true,
+    onlineSince: 1_700_000_000_700,
+    lastSeen: 1_700_000_000_700
+  }));
+});
+
+test("presence: after a rematch swap, writing the OLD color as the new identity is denied", async () => {
+  await seed("rooms/ROOM1", room({ status: "finished" }));
+  await update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null
+  });
+  await assertFails(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    online: true,
+    lastSeen: 1_700_000_000_700
+  }));
+});
+
+test("presence: a rematch write cannot bundle a presence change in the same request", async () => {
+  const finished = room({ status: "finished" });
+  finished.presence = { light: { online: true, lastSeen: 1_700_000_000_000 } };
+  await seed("rooms/ROOM1", finished);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bob",
+    "players/light/name": "Bob",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    "presence/light": { online: false, lastSeen: 1_700_000_000_999 }
+  }));
+});
+
+test("presence: a genuine bot-mirror rematch (exact seat swap + gameplay + presence refresh for both colors) is allowed", async () => {
+  // Найдено на независимой проверке: applyRematchViaSession() реально
+  // меняет botColor местами, и последующий mirrorCommittedStateToSpectateRoom()
+  // одним room-level update меняет players (точный swap human<->bot),
+  // переводит finished->active, обновляет gameplay И освежает presence
+  // ОБОИХ цветов новыми ServerValue.TIMESTAMP -- всё в одном запросе.
+  const botFinished = room({ status: "finished" });
+  botFinished.players = { light: { id: "alice", name: "Alice" }, dark: { id: "bot", name: "Bot" } };
+  botFinished.presence = {
+    light: { online: true, lastSeen: 1_700_000_000_000 },
+    dark: { online: true, lastSeen: 1_700_000_000_000 }
+  };
+  await seed("rooms/ROOM1", botFinished);
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    "players/light/id": "bot",
+    "players/light/name": "Bot",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    pieces: { b6: { color: "light", king: false } },
+    turn: "light",
+    presence: {
+      light: { online: true, lastSeen: 1_700_000_000_900 },
+      dark: { online: true, lastSeen: 1_700_000_000_900 }
+    }
+  }));
+});
+
+test("presence: an outsider (not part of an existing bot pairing) cannot exploit the bot-rematch exception even with a correctly-shaped swap payload", async () => {
+  // Уточнение после независимой проверки собственной первой версии этого
+  // теста: swap-условие ("newData.light.id===data.dark.id" и наоборот)
+  // физически не даёт подставить произвольный НОВЫЙ id вроде 'bot' в уже
+  // человеческую пару -- сам swap развалился бы первым. Реально
+  // достижимая граница другая: в НАСТОЯЩЕЙ bot-комнате caller обязан быть
+  // тем самым human-owner'ом (auth.uid совпадает с ОДНИМ из старых seats);
+  // посторонний carol, даже зная точную легитимную форму swap+presence,
+  // не проходит именно по этому условию.
+  const botFinished = room({ status: "finished" });
+  botFinished.players = { light: { id: "alice", name: "Alice" }, dark: { id: "bot", name: "Bot" } };
+  botFinished.presence = {
+    light: { online: true, lastSeen: 1_700_000_000_000 },
+    dark: { online: true, lastSeen: 1_700_000_000_000 }
+  };
+  await seed("rooms/ROOM1", botFinished);
+  await assertFails(update(ref(databaseFor("carol"), "rooms/ROOM1"), {
+    "players/light/id": "bot",
+    "players/light/name": "Bot",
+    "players/dark/id": "alice",
+    "players/dark/name": "Alice",
+    status: "active",
+    winner: null,
+    presence: {
+      light: { online: true, lastSeen: 1_700_000_000_900 },
+      dark: { online: true, lastSeen: 1_700_000_000_900 }
+    }
+  }));
+});
+
+test("rooms: a bot room can be created with no presence in the initial payload", async () => {
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/BOTROOM"), {
+    pieces: { b6: { color: "light", king: false } },
+    turn: "light",
+    status: "active",
+    players: {
+      light: { id: "alice", name: "Alice" },
+      dark: { id: "bot", name: "Bot" }
+    }
+  }));
+});
+
+test("rooms: production bot-create/resurrection with presence for both colors is allowed (startBotSpectateRoom / stale-sweep resurrection path)", async () => {
+  // Найдено на независимой проверке: startBotSpectateRoom() и resurrection
+  // через onOwnerSessionUpdate()->mirrorCommittedStateToSpectateRoom()
+  // (когда lobby stale-sweep удалил комнату, пока владелец был offline)
+  // реально пишут presence ОБОИХ цветов ВНУТРИ initial payload через
+  // update(), не отдельным запросом.
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/BOTROOM2"), {
+    pieces: { b6: { color: "light", king: false } },
+    turn: "light",
+    status: "active",
+    players: {
+      light: { id: "alice", name: "Alice" },
+      dark: { id: "bot", name: "Bot" }
+    },
+    presence: {
+      light: { online: true, lastSeen: 1_700_000_000_000 },
+      dark: { online: true, lastSeen: 1_700_000_000_000 }
+    }
+  }));
+});
+
+test("bot-mirror: owner heartbeat updating both colors' presence in one request is allowed", async () => {
+  const botRoom = room({ status: "active" });
+  botRoom.players = { light: { id: "alice", name: "Alice" }, dark: { id: "bot", name: "Bot" } };
+  await seed("rooms/ROOM1", botRoom);
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1/presence"), {
+    light: { online: true, lastSeen: 1_700_000_000_500 },
+    dark: { online: true, lastSeen: 1_700_000_000_500 }
+  }));
+});
+
+test("bot-mirror: a per-move gameplay update can legitimately bundle a presence refresh for both colors", async () => {
+  const botRoom = room({ status: "active" });
+  botRoom.players = { light: { id: "alice", name: "Alice" }, dark: { id: "bot", name: "Bot" } };
+  await seed("rooms/ROOM1", botRoom);
+  await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    turn: "dark",
+    "presence/light": { online: true, lastSeen: 1_700_000_000_500 },
+    "presence/dark": { online: true, lastSeen: 1_700_000_000_500 }
+  }));
+});
+
+test("bot-mirror: the bot exception is unreachable in a genuine human-vs-human room", async () => {
+  // Ни при create, ни при join ни один из players/*/id никогда не может
+  // стать литералом "bot" в человеческой комнате (проверено по коду:
+  // normal-create/join грант требуют newData id === auth.uid). Здесь
+  // явно проверяем, что даже ЕСЛИ бы кто-то попытался это подделать
+  // (искусственно засеянная комната), обычный человек не получает через
+  // это доступ к чужому presence -- он не является ни auth.uid дальней
+  // стороны, ни легитимным "владельцем bot-пары".
+  const fake = room();
+  fake.players.dark = { id: "bot", name: "Bot" }; // искусственно, не через настоящий runtime
+  await seed("rooms/ROOM1", fake);
+  await assertFails(set(ref(databaseFor("mallory"), "rooms/ROOM1/presence/dark"), {
+    online: true,
+    lastSeen: 1_700_000_000_500
+  }));
+});
+
+test("rooms: a participant can still delete their own room after presence lockdown", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(remove(ref(databaseFor("alice"), "rooms/ROOM1")));
+});
+
+test("presence: attempting to delete a presence node (set to null) is denied", async () => {
+  await seed("rooms/ROOM1", room({
+    presence: { light: { online: true, lastSeen: 1_700_000_000_000 } }
+  }));
+  await assertFails(remove(ref(databaseFor("alice"), "rooms/ROOM1/presence/light")));
+});
+
+test("presence: smuggling an unknown color node ('presence/evil') through an otherwise-legitimate gameplay update is denied", async () => {
+  // Найдено на независимой проверке: без presence/$other:false участник
+  // мог бы добавить совершенно новый sibling-узел под presence, никак не
+  // задевая восемь сравниваемых light/dark scalar-полей -- ancestor-freeze
+  // их не видит, потому что не про них.
+  await seed("rooms/ROOM1", room());
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    "presence/evil": { foo: "bar" }
+  }));
+});
+
+test("presence: a bare scalar value instead of an object at presence/light is denied", async () => {
+  // Найдено на независимой проверке: старый .validate проверял только
+  // "если поле online/absentSince/... существует -- тип верный", поэтому
+  // presence/light=true проходил (ни одно known-поле не .exists() на
+  // скаляре, все optional-проверки становятся вакуально true).
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), true));
+});
+
+test("presence: an object missing the mandatory 'online' field is denied", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    lastSeen: 1_700_000_000_000
+  }));
+});
+
+test("presence: a scalar 'presence: true' smuggled through an otherwise-legitimate gameplay update on a presence-less room is denied", async () => {
+  // Найдено на независимой проверке: ни один из восьми сравниваемых
+  // light/dark scalar-полей, ни existence-проверка на них не отличают
+  // "presence отсутствует" от "presence существует как посторонний
+  // скаляр" -- оба случая дают null/false по всем восьми путям.
+  // "$other:false" тоже не защищает: он матчит ДОЧЕРНИЕ ключи, а у скаляра
+  // детей нет вовсе (подтверждено официальной документацией Firebase:
+  // $other описан именно как "no other CHILD paths").
+  const initialState = room({ status: "waiting", dark: false });
+  delete initialState.presence;
+  await seed("rooms/ROOM1", initialState);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    presence: true
+  }));
+});
+
+test("presence: a string value at 'presence' is also denied", async () => {
+  const initialState = room({ status: "waiting", dark: false });
+  delete initialState.presence;
+  await seed("rooms/ROOM1", initialState);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    presence: "online"
+  }));
+});
+
+test("presence: normal presence/light creation still succeeds after starting from a presence-less room", async () => {
+  const initialState = room({ status: "waiting", dark: false });
+  delete initialState.presence;
+  await seed("rooms/ROOM1", initialState);
+  await assertSucceeds(set(ref(databaseFor("alice"), "rooms/ROOM1/presence/light"), {
+    online: true,
+    onlineSince: 1_700_000_000_000,
+    lastSeen: 1_700_000_000_000
+  }));
+});
+
+test("presence: a bot-room owner cannot delete either color's presence via the ancestor bot-exception", async () => {
+  // Найдено на независимой проверке: bot-exception в unchanged-participant
+  // ветке разрешала "presence unchanged || room содержит bot" -- ancestor
+  // allow каскадно перекрывал child ".write" (newData.exists()), потому
+  // что validate не выполняется на delete. Exception теперь ДОПОЛНИТЕЛЬНО
+  // требует newData.child('presence/light').exists() &&
+  // newData.child('presence/dark').exists(), что production bot-mirror
+  // всегда и так пишет (оба узла как объекты, никогда null).
+  const botRoom = room({ status: "active" });
+  botRoom.players = { light: { id: "alice", name: "Alice" }, dark: { id: "bot", name: "Bot" } };
+  botRoom.presence = {
+    light: { online: true, lastSeen: 1_700_000_000_000 },
+    dark: { online: true, lastSeen: 1_700_000_000_000 }
+  };
+  await seed("rooms/ROOM1", botRoom);
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ROOM1"), {
+    pieces: { a1: { color: "light", king: true } },
+    "presence/light": null
+  }));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillThere = await get(ref(context.database(), "rooms/ROOM1/presence/light"));
+    assert.equal(stillThere.exists(), true);
+  });
 });
 
 test("technical result: an outsider cannot claim a disconnect result for someone else's game", async () => {
