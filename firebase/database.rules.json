@@ -130,10 +130,32 @@
         ".validate": "!newData.exists() || (newData.hasChildren(['name', 'timestamp', 'roomCode']) && newData.child('name').isString() && newData.child('name').val().length < 50 && newData.child('roomCode').isString() && newData.child('roomCode').val().length <= 10)"
       }
     },
+
     "users": {
-      ".read": true,
       "$uid": {
-        ".write": true
+        ".read": "auth != null && auth.uid === $uid",
+        "rooms": {
+          "$code": {
+            ".write": "auth != null && (auth.uid === $uid || (newData.exists() && root.child('rooms').child($code).child('status').val() === 'active' && root.child('rooms').child($code).child('players/light/id').val() === $uid && root.child('rooms').child($code).child('players/dark/id').val() === auth.uid && newData.child('myColor').val() === 'light' && newData.child('opponentName').val() === root.child('rooms').child($code).child('players/dark/name').val()) || (!newData.exists() && root.child('rooms').child($code).exists() && (root.child('rooms').child($code).child('players/light/id').val() === $uid || root.child('rooms').child($code).child('players/dark/id').val() === $uid) && ((root.child('rooms').child($code).child('status').val() === 'finished' && ((root.child('rooms').child($code).child('players/light/id').val() === $uid && root.child('rooms').child($code).child('players/dark/id').val() === auth.uid) || (root.child('rooms').child($code).child('players/dark/id').val() === $uid && root.child('rooms').child($code).child('players/light/id').val() === auth.uid))) || (root.child('rooms').child($code).child('status').val() === 'waiting' && root.child('rooms').child($code).child('players/light/id').val() === $uid && !root.child('rooms').child($code).child('players/dark').exists() && root.child('rooms').child($code).child('presence/light/lastSeen').isNumber() && root.child('rooms').child($code).child('presence/light/lastSeen').val() + 60000 <= now) || (root.child('rooms').child($code).child('status').val() === 'active' && root.child('rooms').child($code).child('players/dark/id').exists() && !root.child('rooms').child($code).child('winner').exists() && !root.child('rooms').child($code).child('result').exists() && ((root.child('rooms').child($code).child('presence/light/lastSeen').isNumber() && root.child('rooms').child($code).child('presence/dark/lastSeen').isNumber() && root.child('rooms').child($code).child('presence/light/lastSeen').val() + 60000 <= now && root.child('rooms').child($code).child('presence/dark/lastSeen').val() + 60000 <= now) || (root.child('rooms').child($code).child('presence/light/online').val() === false && root.child('rooms').child($code).child('presence/dark/online').val() === false && root.child('rooms').child($code).child('presence/light/absentSince').isNumber() && root.child('rooms').child($code).child('presence/dark/absentSince').isNumber() && root.child('rooms').child($code).child('presence/light/absentSince').val() + 60000 <= now && root.child('rooms').child($code).child('presence/dark/absentSince').val() + 60000 <= now))))))",
+            ".validate": "!newData.exists() || ($code.matches(/^[A-Z0-9]{6}$/) && newData.hasChildren(['opponentName','myColor']) && root.child('rooms').child($code).exists() && ((newData.child('myColor').val() === 'light' && root.child('rooms').child($code).child('players/light/id').val() === $uid) || (newData.child('myColor').val() === 'dark' && root.child('rooms').child($code).child('players/dark/id').val() === $uid)))",
+            "opponentName": {
+              ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length < 50"
+            },
+            "myColor": {
+              ".validate": "newData.isString() && (newData.val() === 'light' || newData.val() === 'dark')"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        },
+        "activeMatch": {
+          ".write": "auth != null && ((!newData.exists() && auth.uid === $uid) || (newData.exists() && newData.isString() && root.child('rooms').child(newData.val()).child('status').val() === 'active' && root.child('rooms').child(newData.val()).child('players/light/id').val() === $uid && root.child('rooms').child(newData.val()).child('players/dark/id').val() === auth.uid))",
+          ".validate": "!newData.exists() || (newData.isString() && newData.val().matches(/^[A-Z0-9]{6}$/))"
+        },
+        "$other": {
+          ".validate": false
+        }
       }
     },
     "rooms": {

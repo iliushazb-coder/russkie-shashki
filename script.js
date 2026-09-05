@@ -6955,8 +6955,9 @@ function checkForInviteLink() {
             });
 
             if (creatorId) {
-                database.ref("users/" + creatorId + "/rooms/" + roomCode).update({
-                    opponentName: myTelegramName
+                database.ref("users/" + creatorId + "/rooms/" + roomCode).set({
+                    opponentName: myTelegramName,
+                    myColor: "light"
                 });
             }
 

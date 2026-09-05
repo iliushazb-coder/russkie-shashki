@@ -1655,20 +1655,277 @@ test("rematch and reaction fields are writable", async () => {
   ));
 });
 
-test("users: public read is allowed", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "users")));
+test("users: owner reads own users subtree", async () => {
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  const snap = await assertSucceeds(get(ref(databaseFor("alice"), "users/alice")));
+  assert.equal(snap.child("rooms/ROOM01/myColor").val(), "light");
 });
 
-test("users: BRIDGE-A allows cross-user writes", async () => {
+test("users: foreign user root read is denied", async () => {
+  await seed("users/bob/rooms/ROOM01", { opponentName: "Alice", myColor: "dark" });
+  await assertFails(get(ref(databaseFor("alice"), "users/bob")));
+});
+
+test("users: unauthenticated root read is denied", async () => {
+  await assertFails(get(ref(databaseFor(), "users")));
+});
+
+test("users rooms: owner can create legal own room index", async () => {
+  await seed("rooms/ROOM01", room());
   await assertSucceeds(set(
-    ref(databaseFor("alice"), "users/bob/activeMatch"),
-    "ROOM1"
+    ref(databaseFor("alice"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Bob", myColor: "light" }
   ));
 });
 
-test("users: BRIDGE-A allows cross-user deletion", async () => {
-  await seed("users/bob/activeMatch", "ROOM1");
-  await assertSucceeds(remove(ref(databaseFor("alice"), "users/bob/activeMatch")));
+test("users rooms: owner can delete own room index", async () => {
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertSucceeds(remove(ref(databaseFor("alice"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: real dark joiner can create canonical creator metadata", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertSucceeds(set(
+    ref(databaseFor("bob"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Bob", myColor: "light" }
+  ));
+});
+
+test("users rooms: real dark joiner can update canonical creator metadata", async () => {
+  await seed("rooms/ROOM01", room());
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Waiting", myColor: "light" });
+  await assertSucceeds(update(
+    ref(databaseFor("bob"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Bob" }
+  ));
+});
+
+test("users rooms: foreign arbitrary create is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("charlie"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Charlie", myColor: "light" }
+  ));
+});
+
+test("users rooms: joiner cannot spoof creator opponentName", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("bob"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Mallory", myColor: "light" }
+  ));
+});
+
+test("users rooms: joiner cannot write creator metadata with wrong myColor", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("bob"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Bob", myColor: "dark" }
+  ));
+});
+
+test("users rooms: foreign arbitrary update is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertFails(update(
+    ref(databaseFor("charlie"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Charlie" }
+  ));
+});
+
+test("users rooms: foreign arbitrary delete is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertFails(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: finished participant can delete opponent room index", async () => {
+  await seed("rooms/ROOM01", room({ status: "finished" }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertSucceeds(remove(ref(databaseFor("bob"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: finished outsider cannot delete player room index", async () => {
+  await seed("rooms/ROOM01", room({ status: "finished" }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertFails(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: bystander can clean proven stale waiting owner index", async () => {
+  const old = Date.now() - 120000;
+  await seed("rooms/ROOM01", room({
+    status: "waiting",
+    dark: false,
+    presence: { light: { online: true, lastSeen: old } }
+  }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Waiting", myColor: "light" });
+  await assertSucceeds(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: missing waiting presence is not cleanup proof", async () => {
+  await seed("rooms/ROOM01", room({ status: "waiting", dark: false }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Waiting", myColor: "light" });
+  await assertFails(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: fresh waiting lastSeen is not cleanup proof", async () => {
+  await seed("rooms/ROOM01", room({
+    status: "waiting",
+    dark: false,
+    presence: { light: { online: true, lastSeen: Date.now() } }
+  }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Waiting", myColor: "light" });
+  await assertFails(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: bystander can clean active room when both lastSeen timestamps are stale", async () => {
+  const old = Date.now() - 120000;
+  await seed("rooms/ROOM01", room({
+    presence: {
+      light: { online: true, lastSeen: old },
+      dark: { online: true, lastSeen: old }
+    }
+  }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertSucceeds(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: bystander can clean active room via both stale absentSince timestamps", async () => {
+  const old = Date.now() - 120000;
+  const fresh = Date.now();
+  await seed("rooms/ROOM01", room({
+    presence: {
+      light: { online: false, absentSince: old, lastSeen: fresh },
+      dark: { online: false, absentSince: old, lastSeen: fresh }
+    }
+  }));
+  await seed("users/bob/rooms/ROOM01", { opponentName: "Alice", myColor: "dark" });
+  await assertSucceeds(remove(ref(databaseFor("charlie"), "users/bob/rooms/ROOM01")));
+});
+
+test("users rooms: one fresh active player blocks bystander cleanup", async () => {
+  const old = Date.now() - 120000;
+  await seed("rooms/ROOM01", room({
+    presence: {
+      light: { online: true, lastSeen: old },
+      dark: { online: true, lastSeen: Date.now() }
+    }
+  }));
+  await seed("users/alice/rooms/ROOM01", { opponentName: "Bob", myColor: "light" });
+  await assertFails(remove(ref(databaseFor("charlie"), "users/alice/rooms/ROOM01")));
+});
+
+test("users rooms: stale proof cannot delete an index for a non-player target", async () => {
+  const old = Date.now() - 120000;
+  await seed("rooms/ROOM01", room({
+    presence: {
+      light: { online: true, lastSeen: old },
+      dark: { online: true, lastSeen: old }
+    }
+  }));
+  await seed("users/charlie/rooms/ROOM01", { opponentName: "Nobody", myColor: "light" });
+  await assertFails(remove(ref(databaseFor("dave"), "users/charlie/rooms/ROOM01")));
+});
+
+test("users rooms: malformed room code is denied", async () => {
+  await seed("rooms/SHORT", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "users/alice/rooms/SHORT"),
+    { opponentName: "Bob", myColor: "light" }
+  ));
+});
+
+test("users rooms: extra field is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Bob", myColor: "light", admin: true }
+  ));
+});
+
+test("users rooms: nested opponentName object is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "users/alice/rooms/ROOM01"),
+    { opponentName: { text: "Bob" }, myColor: "light" }
+  ));
+});
+
+test("users rooms: long opponentName is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "users/alice/rooms/ROOM01"),
+    { opponentName: "x".repeat(50), myColor: "light" }
+  ));
+});
+
+test("users rooms: invalid myColor is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(
+    ref(databaseFor("alice"), "users/alice/rooms/ROOM01"),
+    { opponentName: "Bob", myColor: "blue" }
+  ));
+});
+
+test("users rooms: scalar instead of object is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(ref(databaseFor("alice"), "users/alice/rooms/ROOM01"), "ROOM01"));
+});
+
+test("users: owner arbitrary child is denied", async () => {
+  await assertFails(set(ref(databaseFor("alice"), "users/alice/admin"), true));
+});
+
+test("users: no broad ancestor write permits whole-user replacement", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(ref(databaseFor("alice"), "users/alice"), {
+    rooms: {
+      ROOM01: { opponentName: "Bob", myColor: "light" }
+    },
+    admin: true
+  }));
+});
+
+test("users activeMatch: real dark joiner can set creator activeMatch", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertSucceeds(set(ref(databaseFor("bob"), "users/alice/activeMatch"), "ROOM01"));
+});
+
+test("users activeMatch: fake joiner is denied", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(ref(databaseFor("charlie"), "users/alice/activeMatch"), "ROOM01"));
+});
+
+test("users activeMatch: real joiner cannot redirect to another room", async () => {
+  const other = room();
+  other.players.dark = { id: "charlie", name: "Charlie" };
+  await seed("rooms/ROOM02", other);
+  await assertFails(set(ref(databaseFor("bob"), "users/alice/activeMatch"), "ROOM02"));
+});
+
+test("users activeMatch: outsider cannot target another uid", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(ref(databaseFor("bob"), "users/charlie/activeMatch"), "ROOM01"));
+});
+
+test("users activeMatch: waiting room cannot authorize cross-user set", async () => {
+  await seed("rooms/ROOM01", room({ status: "waiting", dark: false }));
+  await assertFails(set(ref(databaseFor("bob"), "users/alice/activeMatch"), "ROOM01"));
+});
+
+test("users activeMatch: owner can remove own activeMatch", async () => {
+  await seed("users/alice/activeMatch", "ROOM01");
+  await assertSucceeds(remove(ref(databaseFor("alice"), "users/alice/activeMatch")));
+});
+
+test("users activeMatch: cross-user deletion is denied", async () => {
+  await seed("users/alice/activeMatch", "ROOM01");
+  await assertFails(remove(ref(databaseFor("bob"), "users/alice/activeMatch")));
+});
+
+test("users activeMatch: owner cannot arbitrarily set own activeMatch", async () => {
+  await seed("rooms/ROOM01", room());
+  await assertFails(set(ref(databaseFor("alice"), "users/alice/activeMatch"), "ROOM01"));
 });
 
 test("botSessions: owner can read own node", async () => {
