@@ -1,0 +1,71 @@
+name: n22 v2 small exact builder
+on:
+  push:
+    branches: [helper/n22-exact-builder]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout helper
+        uses: actions/checkout@v5
+        with:
+          ref: helper/n22-exact-builder
+          fetch-depth: 0
+      - name: Verify chunks and reconstruct exact v2 patch
+        run: |
+          set -euo pipefail
+          echo "ad6717fb47e77ecd8c34da260f79fdc261d845aea5f1fdcbd3393f024bbda560  .n22v2small/c01.txt" | sha256sum -c -
+          echo "fe5f57adb6e4e43149e72b3f12e5657206dfc493e4d9fcd5bd2f26ed84f8f5be  .n22v2small/c02.txt" | sha256sum -c -
+          echo "4c6ef7ea6959b950a6a0cd4122353a6304bfc8b82de63f5b79798cb8c70a9276  .n22v2small/c03.txt" | sha256sum -c -
+          echo "1cb1a4c9b159af9078f9481d251d3991c4cb67b526b3d11bbdf95f02a434bfd4  .n22v2small/c04.txt" | sha256sum -c -
+          echo "ff76f31697e2ab98230a49b95176ec73a774f5a9d54ae9fb80f9c8400d48dbbc  .n22v2small/c05.txt" | sha256sum -c -
+          echo "a211e9c487259edd63f48c15645db215ec5abdd8aabf2e43b3d771d88ab56042  .n22v2small/c06.txt" | sha256sum -c -
+          echo "7e03e82207c3ab379e18c58a46a8add833ccec8f92f6d064daf388b537730e3b  .n22v2small/c07.txt" | sha256sum -c -
+          echo "8e43ecc6e05b8bea1dc9aaf68982032dc7829cf91dfbe3c2e9b66a35e411fdf6  .n22v2small/c08.txt" | sha256sum -c -
+          echo "a8bcf1d77c2191a84d36e7ed741e6920284c01474eb2bcec6896415c098d8e46  .n22v2small/c09.txt" | sha256sum -c -
+          echo "8eee1e0afc0a267dc0d45247b8c2645db79c64dda68303c0f92a9563a489b0c5  .n22v2small/c10.txt" | sha256sum -c -
+          echo "4f8b5b879d21dad379636ad7543528b1a5d7645363e5d5b25f6c29f502562388  .n22v2small/c11.txt" | sha256sum -c -
+          echo "c021ec2392618481b78ad472e6cdfc0de54a3827a38def88eda150672a613dfc  .n22v2small/c12.txt" | sha256sum -c -
+          echo "3ce6e9a75bb9a3b986854278fd5dc119352d3210fa4c547c3b760207515a7f46  .n22v2small/c13.txt" | sha256sum -c -
+          echo "ca64670f76121b783e90dfd7d547a71c6bdaa68f267e7bf3f115ecb5b1df4669  .n22v2small/c14.txt" | sha256sum -c -
+          cat .n22v2small/c{01..14}.txt > /tmp/n22-v2.patch.gz.b64
+          base64 -d /tmp/n22-v2.patch.gz.b64 > /tmp/n22-v2.patch.gz
+          gzip -dc /tmp/n22-v2.patch.gz > /tmp/n22-v2.patch
+          echo "e8bd4df2b2095309fd9760bfbdf3129d3b2c61445558fc61ee4f6e8bb8c276c8  /tmp/n22-v2.patch" | sha256sum -c -
+      - name: Apply exact v2 patch to exact base
+        run: |
+          set -euo pipefail
+          BASE=15264d1c449cd991447a40c8909dd7385b8f3775
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
+          git checkout --detach "$BASE"
+          git am /tmp/n22-v2.patch
+          test "$(git rev-parse HEAD^)" = "$BASE"
+          test "$(git rev-parse HEAD^{tree})" = "d6a198f6c545d3c1aae067c3c5c2df113c239a70"
+          git diff --check "$BASE" HEAD
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Verify exact candidate v2
+        run: |
+          set -euo pipefail
+          BASE=15264d1c449cd991447a40c8909dd7385b8f3775
+          node --check shared/game-engine.js
+          node --check script.js
+          node --check worker/index.mjs
+          npm run check
+          npm test
+          node --test tests/worker/worker-unit.test.mjs
+          node tests/settlement-behavior.test.js
+          git diff --check "$BASE" HEAD
+          npx --yes wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run-v2 --config worker/wrangler.toml --compatibility-date 2026-09-03
+          test -z "$(git status --short)"
+      - name: Push isolated candidate v2 branch
+        run: git push origin HEAD:refs/heads/candidate/n22-shared-engine-v2
