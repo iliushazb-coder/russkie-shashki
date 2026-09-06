@@ -1,0 +1,30 @@
+name: n21 exact builder
+on:
+  push:
+    branches:
+      - helper/n21-builder
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Rebuild exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .n21/n21-exact.patch.gz /tmp/n21.patch.gz
+          gunzip -c /tmp/n21.patch.gz > /tmp/n21.patch
+          echo 'abf1a2c041f5bd8aa7b3b9e00c15199dc4d9c629637babc97fb1311c847348cb  /tmp/n21.patch' | sha256sum -c -
+          git checkout --detach f276e972aceedb465a8b9fe56b9b31c3e34b81ae
+          git config user.name 'candidate-review'
+          git config user.email 'candidate-review@local'
+          git am --committer-date-is-author-date /tmp/n21.patch
+          test "$(git rev-parse HEAD^)" = 'f276e972aceedb465a8b9fe56b9b31c3e34b81ae'
+          test "$(git rev-parse HEAD^{tree})" = '7270d772a696139941ef6b1db1cb5accc079c387'
+          test "$(git rev-parse HEAD)" = 'ef661a01ded2f866b295db66db735a873fcfbc7f'
+          git diff --check HEAD^..HEAD
+          git push origin HEAD:refs/heads/candidate/n21-remove-matchmakingqueue
