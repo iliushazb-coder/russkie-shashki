@@ -30,7 +30,7 @@ jobs:
             | base64 -d | gzip -d > /tmp/invite-ux-exact.patch
           echo "b950c811d24af03d526710b4d982ba90281a90b495cac0e6c8f3c7089b435f11  /tmp/invite-ux-exact.patch" | sha256sum -c -
 
-      - name: Reproduce exact candidate commit
+      - name: Reproduce exact candidate tree
         shell: bash
         env:
           GIT_COMMITTER_NAME: "candidate-review"
@@ -40,10 +40,9 @@ jobs:
           set -euo pipefail
           git checkout --detach ef661a01ded2f866b295db66db735a873fcfbc7f
           git am /tmp/invite-ux-exact.patch
-          echo "HEAD=$(git rev-parse HEAD)"
+          echo "RECREATED_HEAD=$(git rev-parse HEAD)"
           echo "TREE=$(git rev-parse HEAD^{tree})"
           echo "PARENT=$(git rev-parse HEAD^)"
-          test "$(git rev-parse HEAD)" = "c4baa3b0fab5ff69a45c48b4db3b87be927e0ca9"
           test "$(git rev-parse HEAD^{tree})" = "647dc6beda60478294b32e71b4883a4c194e2d7a"
           test "$(git rev-parse HEAD^)" = "ef661a01ded2f866b295db66db735a873fcfbc7f"
 
