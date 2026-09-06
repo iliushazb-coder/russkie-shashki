@@ -123,13 +123,6 @@
     ".read": false,
     ".write": false
   },
-  "matchmakingQueue": {
-      ".read": true,
-      "$uid": {
-        ".write": true,
-        ".validate": "!newData.exists() || (newData.hasChildren(['name', 'timestamp', 'roomCode']) && newData.child('name').isString() && newData.child('name').val().length < 50 && newData.child('roomCode').isString() && newData.child('roomCode').val().length <= 10)"
-      }
-    },
 
     "users": {
       "$uid": {

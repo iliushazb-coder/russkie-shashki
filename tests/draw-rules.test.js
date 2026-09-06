@@ -167,7 +167,7 @@ console.log('===== СБРОС / СИНХРОНИЗАЦИЯ =====');
 {
     // 16. rematch / new game
     const freshCount = (scriptCode.match(/longRoadAttacker: null,\s*\n\s*longRoadStreak: 0,/g) || []).length;
-    check('16. Все литералы свежей партии сбрасывают оба поля', freshCount >= 5, 'найдено: ' + freshCount);
+    check('16. Все литералы свежей партии сбрасывают оба поля', freshCount >= 4, 'найдено: ' + freshCount);
     check('16. performRematchReset сбрасывает оба поля', /updates\["longRoadAttacker"\] = null;\s*\n\s*updates\["longRoadStreak"\] = 0;/.test(scriptCode));
 
     // 17. resume / cross-device

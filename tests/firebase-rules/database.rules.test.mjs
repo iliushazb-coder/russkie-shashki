@@ -2044,25 +2044,34 @@ test("economy: owner deletion is denied and seeded data is preserved", async () 
   });
 });
 
-test("matchmakingQueue: public read is allowed", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "matchmakingQueue")));
+test("matchmakingQueue: unauthenticated read is denied (#21 -- path removed)", async () => {
+  await assertFails(get(ref(databaseFor(), "matchmakingQueue")));
 });
 
-test("matchmakingQueue: BRIDGE-A allows cross-user writes", async () => {
-  await assertSucceeds(set(
+test("matchmakingQueue: authenticated read is denied (#21 -- path removed)", async () => {
+  await assertFails(get(ref(databaseFor("alice"), "matchmakingQueue")));
+});
+
+test("matchmakingQueue: owner set with a normal legacy-shaped payload is denied (#21 -- path removed)", async () => {
+  await assertFails(set(
+    ref(databaseFor("alice"), "matchmakingQueue/alice"),
+    queueEntry()
+  ));
+});
+
+test("matchmakingQueue: cross-user set with a normal legacy-shaped payload is denied (#21 -- path removed)", async () => {
+  await assertFails(set(
     ref(databaseFor("alice"), "matchmakingQueue/bob"),
     queueEntry()
   ));
 });
 
-test("matchmakingQueue: oversized room codes are denied", async () => {
-  await assertFails(set(
-    ref(databaseFor("alice"), "matchmakingQueue/alice"),
-    queueEntry({ roomCode: "TOO-LONG-ROOM" })
-  ));
+test("matchmakingQueue: owner delete of their own entry is denied (#21 -- path removed)", async () => {
+  await seed("matchmakingQueue/alice", queueEntry());
+  await assertFails(remove(ref(databaseFor("alice"), "matchmakingQueue/alice")));
 });
 
-test("matchmakingQueue: cross-user cleanup is allowed", async () => {
+test("matchmakingQueue: cross-user delete of another entry is denied (#21 -- path removed)", async () => {
   await seed("matchmakingQueue/bob", queueEntry());
-  await assertSucceeds(remove(ref(databaseFor("alice"), "matchmakingQueue/bob")));
+  await assertFails(remove(ref(databaseFor("alice"), "matchmakingQueue/bob")));
 });

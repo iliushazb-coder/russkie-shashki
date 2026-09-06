@@ -80,9 +80,9 @@ console.log('===== 1-2. НОВАЯ ПАРТИЯ -> null / 0 =====');
     check('1. Новая bot-партия (buildFreshBotGameState): longRoadAttacker=null', fresh.longRoadAttacker === null);
     check('1. Новая bot-партия: longRoadStreak=0', fresh.longRoadStreak === 0);
     check('1. Новая bot-партия: noProgressStreak=0', fresh.noProgressStreak === 0);
-    // online-партия: литералы createOnlineRoom / createRoomAndShowWaiting / addToMatchmakingQueue
+    // online-партия: литералы createOnlineRoom / createRoomAndShowWaiting
     const onlineLiterals = (scriptCode.match(/longRoadAttacker: null,\s*\n\s*longRoadStreak: 0,/g) || []).length;
-    check('2. Все 5 литералов свежей партии (bot + online) содержат null/0', onlineLiterals === 5, 'найдено: ' + onlineLiterals);
+    check('2. Все 4 литерала свежей партии (bot + online) содержат null/0', onlineLiterals === 4, 'найдено: ' + onlineLiterals);
 }
 
 console.log('');
