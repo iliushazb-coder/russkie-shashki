@@ -51,6 +51,7 @@ const FILES = [
   ['Z5. C1 R3: FINAL REGRESSION', 'c1-r3-final.test.js'],
   ['W. ПАНЕЛИ ИГРОКОВ: ШИРИНА И СОКРАЩЕНИЕ', 'player-panel-layout.test.js'],
   ['V. СТОПКА ВЗЯТЫХ ШАШЕК: DOM', 'captured-stack-dom.test.js'],
+  ['AA. STARTUP COVER: invite-link/lobby flash fix', 'startup-cover.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

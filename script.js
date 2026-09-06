@@ -408,6 +408,8 @@ const translations = {
         btn_cancel_offer: "Отменить предложение",
         checking_game: "Проверяем игру...",
         connecting_to_friend: "Подключаемся к другу...",
+        startup_loading: "Загрузка…",
+        startup_connecting: "Подключение к столу…",
         game_against: "Игра против",
         remove_from_list: "Убрать из списка",
         stats_no_online_games: "Пока никто не сыграл ни одной партии",
@@ -537,6 +539,8 @@ const translations = {
         btn_cancel_offer: "Cancel offer",
         checking_game: "Checking game...",
         connecting_to_friend: "Connecting to friend...",
+        startup_loading: "Loading…",
+        startup_connecting: "Connecting to the table…",
         game_against: "Game against",
         remove_from_list: "Remove from list",
         stats_no_online_games: "No online games have been played yet",
@@ -666,6 +670,8 @@ const translations = {
         btn_cancel_offer: "Annulla offerta",
         checking_game: "Controllo della partita...",
         connecting_to_friend: "Connessione all'amico...",
+        startup_loading: "Caricamento…",
+        startup_connecting: "Connessione al tavolo…",
         game_against: "Partita contro",
         remove_from_list: "Rimuovi dall'elenco",
         stats_no_online_games: "Non è stata ancora giocata nessuna partita online",
@@ -1003,6 +1009,7 @@ function escapeHtml(name) {
 }
 
 function showScreen(screen) {
+    hideStartupCover();
     menuScreen.classList.add("hidden");
     timeControlScreen.classList.add("hidden");
     waitingScreen.classList.add("hidden");
@@ -6709,6 +6716,37 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
     infoModal.classList.remove("hidden");
 }
 
+// STARTUP COVER (invite-link/lobby flash fix). Существует в разметке видимым
+// по умолчанию без участия JS — эти два хелпера только УБИРАЮТ его; кто
+// именно вошёл (invite vs normal) решают checkForInviteLink()/bootstrapApp(),
+// сам cover никакого security-решения не принимает.
+function hideStartupCover() {
+    const cover = document.getElementById("startup-cover");
+    if (cover) cover.classList.add("hidden");
+}
+
+// Тот же прочитываемый признак, что использует checkForInviteLink() ниже —
+// намеренно НЕ переиспользуем classList "invite-launch-hint" из <head>: тот
+// читается раньше и предназначен только для выбора текста, здесь нужно
+// самостоятельное, более позднее чтение для функционального решения.
+function hasInviteIntent() {
+    return !!(window.Telegram &&
+        window.Telegram.WebApp &&
+        Telegram.WebApp.initDataUnsafe &&
+        Telegram.WebApp.initDataUnsafe.start_param);
+}
+
+// Late-detected invite: ранний <head>-hint мог не увидеть start_param (та же
+// причина, по которой у authenticateTelegramUser() есть защитная пауза), но
+// к ЭТОМУ моменту (после тех же 100мс) hasInviteIntent() уже надёжен. Если
+// early hint промахнулся, cover должен ДОГНАТЬ правильный текст, а не
+// остаться на нейтральном "Загрузка…" на весь auth+join lifecycle.
+// Переключаем ТОТ ЖЕ класс, что и early hint (идемпотентно — если он уже
+// стоит, действие не требуется), а не заводим отдельный CSS-путь.
+function markStartupCoverAsInvite() {
+    document.documentElement.classList.add("invite-launch-hint");
+}
+
 function checkForInviteLink() {
     // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
     // Локальная игра при этом продолжает работать.
@@ -9222,6 +9260,21 @@ async function bootstrapApp() {
     authPromise = (async function () {
         // Те же 100 мс, что были: Telegram успевает разложить initData.
         await new Promise(function (resolve) { setTimeout(resolve, 100); });
+
+        // Та же 100мс-защита касается и start_param: раньше этой отметки
+        // читать его так же рискованно, как и initData ниже (см. комментарий
+        // над задержкой). Обычный запуск снимает cover здесь, НЕ дожидаясь
+        // сетевого auth-раунда. Если это invite — переключаем визуальное
+        // состояние на "Подключение к столу…" ДАЖЕ если ранний <head>-hint
+        // его не увидел (late-detected invite): cover остаётся до настоящего
+        // разрешения checkForInviteLink(), но с ПРАВИЛЬНЫМ текстом весь
+        // остаток auth+join lifecycle, а не с нейтральным "Загрузка…".
+        if (hasInviteIntent()) {
+            markStartupCoverAsInvite();
+        } else {
+            hideStartupCover();
+        }
+
         const me = await authenticateTelegramUser();
         armPresenceReauthWatcher();
         queueOrStartFirebaseFlows(me);
@@ -9237,6 +9290,7 @@ async function bootstrapApp() {
         firebaseAuthReady = false;
         pendingFirebaseIdentity = null;
         authPhase = "failed";
+        hideStartupCover(); // auth failure не проходит через showScreen()
         showInfoModal(t("err_auth_required"), false);
     }
 }
@@ -9251,5 +9305,6 @@ if (window.Telegram && window.Telegram.WebApp) {
     // Интерфейс и партия с ботом работают, Firebase — нет.
     startApp();
     authPhase = "failed";
+    hideStartupCover(); // вне Telegram тоже не проходит через showScreen()
     showInfoModal(t("err_auth_required"), false);
 }

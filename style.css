@@ -1517,3 +1517,65 @@ h1 {
 .rematch-wait-note:empty {
     display: none;
 }
+
+/* ===== STARTUP COVER (invite-link/lobby flash fix) =====
+   Существует в разметке видимым по умолчанию, БЕЗ участия JS — единственный
+   способ гарантированно перекрыть #menu-screen ещё до того, как script.js
+   (лежащий в самом низу body) вообще начал скачиваться/исполняться. */
+#startup-cover {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background-color: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    animation: fadeInOverlay 0.15s ease;
+}
+
+.startup-cover-spinner {
+    width: 40px;
+    height: 40px;
+    border: 3px solid rgba(255, 255, 255, 0.25);
+    border-top-color: #ffffff;
+    border-radius: 50%;
+    animation: startupCoverSpin 0.8s linear infinite;
+}
+
+@keyframes startupCoverSpin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .startup-cover-spinner {
+        animation: none;
+        opacity: 0.7;
+    }
+}
+
+.startup-cover-text {
+    color: #ffffff;
+    font-size: 16px;
+    text-align: center;
+    margin: 0;
+    max-width: 80vw;
+}
+
+/* По умолчанию (обычный запуск) виден нейтральный текст; ранний
+   route-hint в <head> добавляет invite-launch-hint классу html ДО первого
+   paint, если start_param уже успел разложиться — это чистый CSS-свитч,
+   не зависящий от таймингов JS-исполнения. */
+.startup-cover-text-invite {
+    display: none;
+}
+html.invite-launch-hint .startup-cover-text-normal {
+    display: none;
+}
+html.invite-launch-hint .startup-cover-text-invite {
+    display: block;
+}

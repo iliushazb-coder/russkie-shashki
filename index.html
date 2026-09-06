@@ -9,13 +9,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Русские Шашки</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+        // Ранний UI route hint: ТОЛЬКО для выбора текста на startup-cover
+        // ("Подключение к столу…" vs "Загрузка…"), НЕ security-решение и НЕ
+        // замена checkForInviteLink() — та остаётся единственным реальным
+        // источником входа. Если start_param ещё не успел "разложиться"
+        // (задокументированная задержка Telegram, из-за которой у
+        // authenticateTelegramUser() есть отдельная защитная пауза) —
+        // здесь просто ничего не подставляем, cover покажет нейтральный
+        // текст "Загрузка…"; сам вход это никак не блокирует.
+        (function () {
+            try {
+                var tg = window.Telegram && window.Telegram.WebApp;
+                var p = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
+                if (p) document.documentElement.classList.add("invite-launch-hint");
+            } catch (e) {}
+        })();
+    </script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
-    <link rel="stylesheet" href="style.css?v=19">
+    <link rel="stylesheet" href="style.css?v=20">
 </head>
 <body>
+    <div id="startup-cover">
+        <div class="startup-cover-spinner" aria-hidden="true"></div>
+        <p class="startup-cover-text startup-cover-text-normal" data-i18n="startup_loading">Загрузка…</p>
+        <p class="startup-cover-text startup-cover-text-invite" data-i18n="startup_connecting">Подключение к столу…</p>
+    </div>
+
     <h1 data-i18n="h1_title">Русские Шашки 🎮</h1>
 
     <div id="menu-screen">
@@ -260,6 +283,6 @@
 
     <div id="credit-footer">Разработчик: <a href="https://t.me/yliusha" target="_blank" rel="noopener noreferrer">Telegram @yliusha</a></div>
 
-    <script src="script.js?v=198"></script>
+    <script src="script.js?v=199"></script>
 </body>
 </html>
