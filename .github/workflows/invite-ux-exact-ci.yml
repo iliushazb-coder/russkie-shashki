@@ -1,0 +1,42 @@
+name: invite-ux exact candidate CI
+
+on:
+  push:
+    branches:
+      - helper/invite-ux-exact-builder
+
+jobs:
+  exact-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 15264d1c449cd991447a40c8909dd7385b8f3775
+          fetch-depth: 0
+
+      - name: Verify identity and diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "15264d1c449cd991447a40c8909dd7385b8f3775"
+          test "$(git rev-parse HEAD^{tree})" = "647dc6beda60478294b32e71b4883a4c194e2d7a"
+          test "$(git rev-parse HEAD^)" = "ef661a01ded2f866b295db66db735a873fcfbc7f"
+          git diff --check ef661a01ded2f866b295db66db735a873fcfbc7f HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Frontend syntax
+        run: node --check script.js
+
+      - name: Project check
+        run: npm run check
+
+      - name: Frontend tests
+        run: npm test
