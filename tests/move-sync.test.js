@@ -97,18 +97,13 @@ try {
     eval(extractFunc('renderSyncRetryButton'));
     eval(extractFunc('runSyncRecovery'));
     eval(extractFunc('forceResyncFromServer'));
-    eval(extractFunc('pieceAt'));
-    eval(extractFunc('getCaptureJumps'));
-    eval(extractFunc('filterJumpsByMajorityRule'));
-    eval(extractFunc('canCaptureAt'));
-    eval(extractFunc('withPendingBlockers'));
-    eval(extractFunc('hasMandatoryCapture'));
-    eval(extractFunc('countPiecesOfColor'));
-    eval(extractFunc('canMoveNormally'));
-    eval(extractFunc('checkWinCondition'));
-    eval(extractFunc('hasAnyLegalMove'));
-    eval(extractFunc('attemptMove'));
+    const sharedEngine = require('../shared/game-engine.js');
+    ['pieceAt', 'getCaptureJumps', 'filterJumpsByMajorityRule', 'canCaptureAt',
+     'withPendingBlockers', 'hasMandatoryCapture', 'countPiecesOfColor', 'canMoveNormally',
+     'checkWinCondition', 'hasAnyLegalMove', 'attemptMove']
+        .forEach(function (n) { global[n] = sharedEngine[n]; });
     eval(extractFunc('computeGameSignature'));
+
 } catch (e) { loadError = e.message; }
 
 function reset() {
@@ -471,9 +466,11 @@ function chainRoom() {
         // префикс пробелами, чтобы не поймать существующий err_resync_failed
         return keys.every(function (k) { return countOf('        ' + k + ':') === 3; });
     })());
-    check('48. движок ходов и транзакция хода не тронуты',
-        /if \(turn !== actingColor\) return null;/.test(SRC) &&
-        /return database\.ref\("rooms\/" \+ roomCode\)\.transaction\(function \(room\)/.test(SRC));
+    check('48. движок ходов и транзакция хода не тронуты', (function () {
+        const sharedSrc = require('fs').readFileSync(__dirname + '/../shared/game-engine.js', 'utf8');
+        return /if \(turn !== actingColor\) return null;/.test(sharedSrc) &&
+            /return database\.ref\("rooms\/" \+ roomCode\)\.transaction\(function \(room\)/.test(SRC);
+    })());
 
     // =================================================================
     console.log('СОВМЕСТИМОСТЬ С UID-ФИКСОМ v175');
@@ -497,9 +494,13 @@ function chainRoom() {
     })());
     check('55. запрос расчёта не зависит от sync-состояния',
         /requestSettlement\(\)/.test(SRC) && !/updates\["eloMatches\//.test(SRC));
-    check('56. движок ходов и правила шашек не тронуты',
-        /if \(turn !== actingColor\) return null;/.test(SRC) &&
-        /mustContinueFrom\.row !== fromRow/.test(SRC));
+    check('56. движок ходов и правила шашек не тронуты', (function () {
+        // №22: attemptMove физически переехала в shared/game-engine.js —
+        // проверяем инвариант там же, не в script.js.
+        const sharedSrc = require('fs').readFileSync(__dirname + '/../shared/game-engine.js', 'utf8');
+        return /if \(turn !== actingColor\) return null;/.test(sharedSrc) &&
+            /mustContinueFrom\.row !== fromRow/.test(sharedSrc);
+    })());
     check('57. реванш не изменён: снимок рейтингов по-прежнему обнуляется',
         /updates\["ratingsAtStart"\] = null;/.test(SRC));
 

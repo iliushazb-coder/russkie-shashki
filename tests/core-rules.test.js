@@ -3,11 +3,19 @@
 const path = require('path');
 const { extractFunc } = require('./helpers/loader');
 
+const sharedEngine = require('../shared/game-engine.js');
 [
-  'canMoveNormally', 'hasAnyLegalMove', 'withPendingBlockers', 'canCaptureAt',
-  'filterJumpsByMajorityRule', 'getCaptureJumps', 'createInitialPieces', 'pieceAt',
-  'countPiecesOfColor', 'getLegalDestinations', 'hasMandatoryCapture',
-  'getAllLegalMovesForBot', 'isCaptureMove', 'attemptMove', 'checkWinCondition'
+  'createInitialPieces', 'pieceAt', 'countPiecesOfColor', 'canCaptureAt',
+  'getCaptureJumps', 'withPendingBlockers', 'filterJumpsByMajorityRule',
+  'canMoveNormally', 'hasMandatoryCapture', 'hasAnyLegalMove', 'checkWinCondition',
+  'attemptMove'
+].forEach(function (n) { global[n] = sharedEngine[n]; });
+
+// Остаются client-only (не входят в №22 shared core — bot/UI enumeration
+// поверх shared primitives, не отдельная rules-реализация): извлекаются
+// по-прежнему из script.js.
+[
+  'getLegalDestinations', 'getAllLegalMovesForBot', 'isCaptureMove'
 ].forEach(function (n) { try { eval(extractFunc(n)); global[n] = eval(n); } catch (e) {} });
 
 let passed = 0, failed = 0;

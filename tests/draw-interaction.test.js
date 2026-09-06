@@ -8,11 +8,9 @@ function extractFunc(name) {
     while (depth > 0) { if (scriptCode[i] === '{') depth++; else if (scriptCode[i] === '}') depth--; i++; }
     return scriptCode.slice(start, i);
 }
-eval(extractFunc('isOnLongRoad'));
-eval(extractFunc('analyzeLongRoadEnding'));
-eval(extractFunc('getDrawPositionKey'));
-eval(extractFunc('checkAutomaticDraw'));
-eval(extractFunc('computeNextDrawState'));
+const sharedEngine = require('../shared/game-engine.js');
+['isOnLongRoad', 'analyzeLongRoadEnding', 'getDrawPositionKey', 'checkAutomaticDraw', 'computeNextDrawState']
+    .forEach(function (n) { global[n] = sharedEngine[n]; });
 
 let passed = 0, failed = 0;
 function check(n, c, d) { console.log((c ? '✅ ' : '❌ ') + n + (!c && d ? ' — ' + d : '')); c ? passed++ : failed++; }
@@ -177,7 +175,10 @@ console.log('===== ЧАСТЬ 4: коды drawReason =====');
     check('4a. 2-3 фигуры / 5 ходов -> код "no_progress_5"', checkAutomaticDraw(p23, 0, 5, [], getDrawPositionKey(p23, 'light'), 0) === 'no_progress_5');
     const pLR = board([[7, 0, 1], [7, 2, 1], [7, 4, 1]], [[4, 3, 1]]);
     check('4b. 3 фигуры vs дамка на большаке / 5 собств. ходов -> код "long_road_5"', checkAutomaticDraw(pLR, 0, 0, [], getDrawPositionKey(pLR, 'light'), 5) === 'long_road_5');
-    check('4c. Старые коды не изменились', ['threefold_repetition', 'kings_only_15', 'no_progress_30', 'no_progress_60'].every(c => scriptCode.includes('"' + c + '"')));
+    // №22: checkAutomaticDraw физически переехала в shared/game-engine.js,
+    // вместе с ней и эти строковые коды — проверяем там же.
+    const sharedSrc = fs.readFileSync(require('path').join(__dirname, '..', 'shared', 'game-engine.js'), 'utf8');
+    check('4c. Старые коды не изменились', ['threefold_repetition', 'kings_only_15', 'no_progress_30', 'no_progress_60'].every(c => sharedSrc.includes('"' + c + '"')));
     check('4d. Шаг 3 в код НЕ внедрён (kings_vs_king_15 отсутствует)', !scriptCode.includes('kings_vs_king_15'));
 }
 

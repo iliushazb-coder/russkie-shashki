@@ -8,8 +8,9 @@ function ex(name) {
     while (d > 0) { if (scriptCode[i] === '{') d++; else if (scriptCode[i] === '}') d--; i++; }
     return scriptCode.slice(s, i);
 }
-eval(ex('isOnLongRoad')); eval(ex('analyzeLongRoadEnding')); eval(ex('getDrawPositionKey'));
-eval(ex('checkAutomaticDraw')); eval(ex('computeNextDrawState'));
+const sharedEngine = require('../shared/game-engine.js');
+['isOnLongRoad', 'analyzeLongRoadEnding', 'getDrawPositionKey', 'checkAutomaticDraw', 'computeNextDrawState']
+    .forEach(function (n) { global[n] = sharedEngine[n]; });
 eval(ex('serializeOwnerBotState')); eval(ex('deserializeOwnerBotState'));
 global.createInitialPieces = function () { return {}; };
 global.myTelegramName = 'Игрок';

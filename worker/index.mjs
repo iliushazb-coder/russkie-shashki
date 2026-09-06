@@ -12,6 +12,15 @@
  * - no stats.recentMatches marker is used.
  */
 
+// №22: тот же physical source, что и client (shared/game-engine.js), не
+// копия. Side-effect import + globalThis-инвариант — без функционального
+// использования: replay/event-log/settlement-integration остаются №23.
+import "../shared/game-engine.js";
+if (!globalThis.RussianCheckersEngine ||
+    typeof globalThis.RussianCheckersEngine.attemptMove !== "function") {
+    throw new Error("shared_game_engine_missing");
+}
+
 const SRV_UID = "srv_settlement";
 const ELO_K = 32;
 const ELO_START = 1000;

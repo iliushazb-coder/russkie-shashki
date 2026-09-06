@@ -104,8 +104,8 @@ console.log('=== 4b. JS CACHE-BUST ПОДНЯТ ВМЕСТЕ С COVER (publicati
   // когда-то менялась.
   check('4b.1 script.js НЕ ссылается на старую версию v=198 (ту, что была до этого fix)',
     !/script\.js\?v=198/.test(HTML));
-  check('4b.2 script.js поднят до v=199 в этом же patch',
-    /script\.js\?v=199/.test(HTML));
+  check('4b.2 script.js версия поднята относительно v=198 (текущая — v=200 после №22, механическая правка)',
+    /script\.js\?v=(19[9]|2\d\d)\b/.test(HTML));
 }
 
 console.log('');

@@ -101,7 +101,7 @@ global.getDrawPositionKey = function () { return 'initial'; };
 let realRenderCount = 0;
 global.renderBoard = function () { realRenderCount++; };
 global.triggerBotMove = function () {};
-eval(grab('createInitialPieces'));
+global.createInitialPieces = require('../shared/game-engine.js').createInitialPieces;
 eval(grab('startOfflineGame'));
 // startOwnerBotGameWithDifficulty уже загружена выше и теперь найдёт реальную
 // startOfflineGame в текущем scope.

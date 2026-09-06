@@ -26,12 +26,15 @@ function grab(n) {
     if (!m) throw new Error('не найдена функция ' + n);
     return m[0];
 }
-// Собираем исходники ОДНОЙ строкой и вычисляем на верхнем уровне модуля,
-// иначе объявления остались бы в области видимости колбэка.
-eval(['pieceAt', 'canMoveNormally', 'canCaptureAt', 'getCaptureJumps', 'withPendingBlockers',
- 'filterJumpsByMajorityRule', 'hasMandatoryCapture', 'hasAnyLegalMove', 'countPiecesOfColor',
- 'checkWinCondition', 'getDrawPositionKey', 'attemptMove', 'getLegalDestinations']
-    .map(grab).join('\n'));
+const sharedEngine = require('../shared/game-engine.js');
+[
+  'pieceAt', 'canMoveNormally', 'canCaptureAt', 'getCaptureJumps', 'withPendingBlockers',
+  'filterJumpsByMajorityRule', 'hasMandatoryCapture', 'hasAnyLegalMove', 'countPiecesOfColor',
+  'checkWinCondition', 'getDrawPositionKey', 'attemptMove'
+].forEach(function (n) { global[n] = sharedEngine[n]; });
+// getLegalDestinations остаётся client-only (№22: enumeration поверх shared
+// primitives, не отдельная rules-реализация) — по-прежнему извлекается из script.js.
+eval(grab('getLegalDestinations'));
 
 // доска из схемы: '.' пусто, l/d простая, L/D дамка
 function board(rows) {

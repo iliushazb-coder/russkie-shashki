@@ -9,11 +9,9 @@ function extractFunc(name) {
     return scriptCode.slice(start, i);
 }
 
-eval(extractFunc('isOnLongRoad'));
-eval(extractFunc('analyzeLongRoadEnding'));
-eval(extractFunc('getDrawPositionKey'));
-eval(extractFunc('checkAutomaticDraw'));
-eval(extractFunc('computeNextDrawState'));
+const sharedEngine = require('../shared/game-engine.js');
+['isOnLongRoad', 'analyzeLongRoadEnding', 'getDrawPositionKey', 'checkAutomaticDraw', 'computeNextDrawState']
+    .forEach(function (n) { global[n] = sharedEngine[n]; });
 
 let passed = 0, failed = 0;
 function check(name, cond, details) { console.log((cond ? '✅ ' : '❌ ') + name + (!cond && details ? ' — ' + details : '')); cond ? passed++ : failed++; }
@@ -209,7 +207,15 @@ console.log('===== РЕГРЕССИЯ (18-21) =====');
     check('20. 6-7 фигур при noProgress=30 -> ещё НЕ ничья', checkAutomaticDraw(p67, 0, 30, [], freshKey(p67), 0) === null);
 
     // 21. bot и online — одна и та же функция
-    check('21. Ровно ОДНО определение computeNextDrawState (общее для bot и online)', (scriptCode.match(/^function computeNextDrawState/gm) || []).length === 1);
+    // №22: computeNextDrawState физически переехала в shared/game-engine.js.
+    // Инвариант "ровно одно определение, общее для bot и online" теперь
+    // проверяется как "ноль локальных копий в script.js (не отросло
+    // заново) + ровно одна в shared" — сильнее прежнего, не слабее.
+    const sharedSrc = fs.readFileSync(require('path').join(__dirname, '..', 'shared', 'game-engine.js'), 'utf8');
+    check('21. НЕТ локальной копии computeNextDrawState в script.js (перенесена в shared)',
+        (scriptCode.match(/^function computeNextDrawState/gm) || []).length === 0);
+    check('21. Ровно ОДНО определение computeNextDrawState в shared/game-engine.js',
+        (sharedSrc.match(/function computeNextDrawState/g) || []).length === 1);
     check('21. Ровно 5 реальных call sites (те же, что и до правки)', (scriptCode.match(/const drawState = computeNextDrawState\(/g) || []).length === 5);
 }
 
