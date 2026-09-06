@@ -1,0 +1,72 @@
+name: n22 exact builder
+
+on:
+  push:
+    branches:
+      - helper/n22-exact-builder
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout helper
+        uses: actions/checkout@v5
+        with:
+          ref: helper/n22-exact-builder
+          fetch-depth: 0
+
+      - name: Reconstruct and verify exact patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .n22/part{01..10}.txt > /tmp/n22.patch.gz.b64
+          base64 -d /tmp/n22.patch.gz.b64 > /tmp/n22.patch.gz
+          gzip -dc /tmp/n22.patch.gz > /tmp/n22.patch
+          echo "eacc9c39b6351147436009253d8c0149142f27f2ffefd29f53d9161b263f3774  /tmp/n22.patch" | sha256sum -c -
+
+      - name: Apply exact patch to exact base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
+          git checkout --detach 15264d1c449cd991447a40c8909dd7385b8f3775
+          git am /tmp/n22.patch
+          test "$(git rev-parse HEAD^)" = "15264d1c449cd991447a40c8909dd7385b8f3775"
+          test "$(git rev-parse HEAD^{tree})" = "33adaa332fdc4612ccb730f705c36691244c4365"
+          git diff --check HEAD^
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run check
+          npm test
+          node --check shared/game-engine.js
+          node --check script.js
+          node --check worker/index.mjs
+          node --test tests/worker/worker-unit.test.mjs
+          node tests/settlement-behavior.test.js
+
+      - name: Push isolated candidate branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git branch -f candidate/n22-shared-engine HEAD
+          git push origin candidate/n22-shared-engine --force-with-lease
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)"
+          echo "TREE=$(git rev-parse HEAD^{tree})"
+          echo "PARENT=$(git rev-parse HEAD^)"
