@@ -1,0 +1,57 @@
+name: n22 v2 exact builder
+on:
+  push:
+    branches: [helper/n22-exact-builder]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout helper
+        uses: actions/checkout@v5
+        with:
+          ref: helper/n22-exact-builder
+          fetch-depth: 0
+      - name: Reconstruct and verify exact v2 patch
+        run: |
+          set -euo pipefail
+          cat .n22v2/part{01..03}.txt > /tmp/n22-v2.patch.gz.b64
+          base64 -d /tmp/n22-v2.patch.gz.b64 > /tmp/n22-v2.patch.gz
+          gzip -dc /tmp/n22-v2.patch.gz > /tmp/n22-v2.patch
+          echo "e8bd4df2b2095309fd9760bfbdf3129d3b2c61445558fc61ee4f6e8bb8c276c8  /tmp/n22-v2.patch" | sha256sum -c -
+      - name: Apply exact v2 patch to exact base
+        run: |
+          set -euo pipefail
+          BASE=15264d1c449cd991447a40c8909dd7385b8f3775
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
+          git checkout --detach "$BASE"
+          git am /tmp/n22-v2.patch
+          test "$(git rev-parse HEAD^)" = "$BASE"
+          test "$(git rev-parse HEAD^{tree})" = "d6a198f6c545d3c1aae067c3c5c2df113c239a70"
+          git diff --check "$BASE" HEAD
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Verify exact candidate v2
+        run: |
+          set -euo pipefail
+          BASE=15264d1c449cd991447a40c8909dd7385b8f3775
+          node --check shared/game-engine.js
+          node --check script.js
+          node --check worker/index.mjs
+          npm run check
+          npm test
+          node --test tests/worker/worker-unit.test.mjs
+          node tests/settlement-behavior.test.js
+          git diff --check "$BASE" HEAD
+          npx --yes wrangler deploy --dry-run --outdir /tmp/wrangler-dry-run-v2 --config worker/wrangler.toml --compatibility-date 2026-09-03
+          test -z "$(git status --short)"
+      - name: Push isolated candidate v2 branch
+        run: git push origin HEAD:refs/heads/candidate/n22-shared-engine-v2
