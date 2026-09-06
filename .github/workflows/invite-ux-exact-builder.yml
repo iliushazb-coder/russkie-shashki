@@ -21,7 +21,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          base64 -d .n21/invite-ux-exact.patch.gz.b64 | gzip -d > /tmp/invite-ux-exact.patch
+          cat \
+            .n21/invite-ux-exact.det.b64.part0 \
+            .n21/invite-ux-exact.det.b64.part1 \
+            .n21/invite-ux-exact.det.b64.part2 \
+            .n21/invite-ux-exact.det.b64.part3 \
+            .n21/invite-ux-exact.det.b64.part4 \
+            | base64 -d | gzip -d > /tmp/invite-ux-exact.patch
           echo "b950c811d24af03d526710b4d982ba90281a90b495cac0e6c8f3c7089b435f11  /tmp/invite-ux-exact.patch" | sha256sum -c -
 
       - name: Reproduce exact candidate commit
