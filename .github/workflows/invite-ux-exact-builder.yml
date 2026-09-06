@@ -33,11 +33,16 @@ jobs:
       - name: Reproduce exact candidate commit
         shell: bash
         env:
+          GIT_COMMITTER_NAME: "candidate-review"
+          GIT_COMMITTER_EMAIL: "candidate-review@local"
           GIT_COMMITTER_DATE: "2026-09-06T12:47:56+00:00"
         run: |
           set -euo pipefail
           git checkout --detach ef661a01ded2f866b295db66db735a873fcfbc7f
           git am /tmp/invite-ux-exact.patch
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "TREE=$(git rev-parse HEAD^{tree})"
+          echo "PARENT=$(git rev-parse HEAD^)"
           test "$(git rev-parse HEAD)" = "c4baa3b0fab5ff69a45c48b4db3b87be927e0ca9"
           test "$(git rev-parse HEAD^{tree})" = "647dc6beda60478294b32e71b4883a4c194e2d7a"
           test "$(git rev-parse HEAD^)" = "ef661a01ded2f866b295db66db735a873fcfbc7f"
