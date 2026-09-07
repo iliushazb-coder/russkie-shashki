@@ -1,0 +1,75 @@
+name: N23 v12 exact candidate
+
+on:
+  push:
+    branches:
+      - 'ci/n23-v12-exact'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-v12:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout CI harness
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct exact v12 patch
+        shell: bash
+        run: |
+          cat .ci/n23-v12/chunk00 .ci/n23-v12/chunk01 .ci/n23-v12/chunk02 .ci/n23-v12/chunk03 .ci/n23-v12/chunk04 .ci/n23-v12/chunk05 .ci/n23-v12/chunk06 \
+            | base64 -d > /tmp/n23-v12.patch.xz
+          xz -dc /tmp/n23-v12.patch.xz > /tmp/n23-v12.patch
+          echo '8f5662d3806c6dbca58c37a583789d545b222cdecd66061f39bcb3d94d688a49  /tmp/n23-v12.patch' | sha256sum -c -
+
+      - name: Apply and verify exact candidate
+        shell: bash
+        run: |
+          git config user.name 'candidate-review'
+          git config user.email 'candidate-review@local'
+          git reset --hard 7d48c75371bda0245ab63c012d578c78d592e4fd
+          git am --committer-date-is-author-date /tmp/n23-v12.patch
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "TREE=$(git rev-parse 'HEAD^{tree}')"
+          echo "PARENT=$(git rev-parse HEAD^)"
+          test "$(git rev-parse HEAD)" = '1150838fde5fdf6404739bf0e1653a7cb00a512f'
+          test "$(git rev-parse 'HEAD^{tree}')" = '16485cdd59f44ada191f0c2f90f956e5db268854'
+          test "$(git rev-parse HEAD^)" = '7d48c75371bda0245ab63c012d578c78d592e4fd'
+          git diff --check 7d48c75371bda0245ab63c012d578c78d592e4fd HEAD
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax checks
+        run: |
+          node --check script.js
+          node --check worker/index.mjs
+
+      - name: Full npm tests
+        run: npm test
+
+      - name: Worker replay tests
+        run: node --test tests/worker/worker-unit.test.mjs tests/worker/rated-replay-unit.test.mjs
+
+      - name: Settlement behavior tests
+        run: node tests/settlement-behavior.test.js
+
+      - name: Firebase Rules Emulator tests
+        run: npm run test:rules
