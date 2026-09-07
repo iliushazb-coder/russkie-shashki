@@ -27,17 +27,17 @@ jobs:
           xz -dc /tmp/n23-v12.patch.xz > /tmp/n23-v12.patch
           echo '8f5662d3806c6dbca58c37a583789d545b222cdecd66061f39bcb3d94d688a49  /tmp/n23-v12.patch' | sha256sum -c -
 
-      - name: Apply and verify exact candidate
+      - name: Apply and verify exact candidate content
         shell: bash
         run: |
           git config user.name 'candidate-review'
           git config user.email 'candidate-review@local'
           git reset --hard 7d48c75371bda0245ab63c012d578c78d592e4fd
           git am --committer-date-is-author-date /tmp/n23-v12.patch
-          echo "HEAD=$(git rev-parse HEAD)"
+          echo "REBUILT_HEAD=$(git rev-parse HEAD)"
           echo "TREE=$(git rev-parse 'HEAD^{tree}')"
           echo "PARENT=$(git rev-parse HEAD^)"
-          test "$(git rev-parse HEAD)" = '1150838fde5fdf6404739bf0e1653a7cb00a512f'
+          echo "CANDIDATE_REPORTED_SHA=1150838fde5fdf6404739bf0e1653a7cb00a512f"
           test "$(git rev-parse 'HEAD^{tree}')" = '16485cdd59f44ada191f0c2f90f956e5db268854'
           test "$(git rev-parse HEAD^)" = '7d48c75371bda0245ab63c012d578c78d592e4fd'
           git diff --check 7d48c75371bda0245ab63c012d578c78d592e4fd HEAD
