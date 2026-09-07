@@ -72,4 +72,15 @@ jobs:
         run: node tests/settlement-behavior.test.js
 
       - name: Firebase Rules Emulator tests
-        run: npm run test:rules
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:rules 2>&1 | tee /tmp/rules-emulator.log
+
+      - name: Upload Rules Emulator log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n23-v12-rules-emulator-log
+          path: /tmp/rules-emulator.log
+          if-no-files-found: error
