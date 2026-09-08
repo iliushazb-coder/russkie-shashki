@@ -1,0 +1,54 @@
+diff --git a/firebase/database.rules.json b/firebase/database.rules.json
+index f54ddd7..b48d3d5 100644
+--- a/firebase/database.rules.json
++++ b/firebase/database.rules.json
+@@ -195,7 +195,7 @@
+           "boardSeq": {
+             ".validate": "newData.isNumber() && newData.val() >= -1 && newData.val() < 540"
+           },
+-          ".validate": "(auth.uid === 'srv_settlement' ? (!newData.exists() || newData.child('matchId').val() !== data.child('matchId').val() || (newData.child('acceptedSeq').val() === data.child('acceptedSeq').val() && newData.child('boardSeq').val() === data.child('boardSeq').val()) || (newData.child('acceptedSeq').val() > data.child('acceptedSeq').val() && (!data.child('boardSeq').exists() || newData.child('boardSeq').val() >= data.child('boardSeq').val()))) : (newData.child('matchId').val() === data.child('matchId').val() && newData.child('acceptedSeq').val() === data.child('acceptedSeq').val() && newData.child('boardSeq').val() === data.child('boardSeq').val())) && (!newData.exists() || !newData.child('boardSeq').exists() || newData.child('boardSeq').val() <= newData.child('acceptedSeq').val())"
++          ".validate": "(auth.uid === 'srv_settlement' ? (!newData.exists() || (newData.child('matchId').val() === newData.parent().child('ratedMatchId').val() && (!data.exists() || newData.child('matchId').val() !== data.child('matchId').val() || (newData.child('acceptedSeq').val() > data.child('acceptedSeq').val() && (!data.child('boardSeq').exists() || newData.child('boardSeq').val() >= data.child('boardSeq').val()))))) : (newData.child('matchId').val() === data.child('matchId').val() && newData.child('acceptedSeq').val() === data.child('acceptedSeq').val() && newData.child('boardSeq').val() === data.child('boardSeq').val())) && (!newData.exists() || !newData.child('boardSeq').exists() || newData.child('boardSeq').val() <= newData.child('acceptedSeq').val())"
+         },
+         "ratedMatchId": {
+           ".write": "auth != null && auth.uid === 'srv_settlement'",
+diff --git a/tests/firebase-rules/rated-events.rules.test.mjs b/tests/firebase-rules/rated-events.rules.test.mjs
+index 8011626..9e4aa11 100644
+--- a/tests/firebase-rules/rated-events.rules.test.mjs
++++ b/tests/firebase-rules/rated-events.rules.test.mjs
+@@ -347,6 +347,36 @@ test("Worker rebinding ratedMatchId may instead just clear ratedReplay entirely
+   }));
+ });
+ 
++// ===== v17 (real Emulator on v16: tests at lines ~184/~204 FAILED) =====
++// v13's consolidated ratedReplay/.validate had dropped two invariants that
++// the original room-level Worker branches enforced: (a) strict monotonic
++// acceptedSeq (equal was re-allowed), and (b) ratedReplay.matchId must equal
++// the room's (new) ratedMatchId. Restored in v17. A third instance of (b)
++// found via targaryen while investigating: Worker rebinds ratedMatchId but
++// leaves ratedReplay.matchId at the OLD value while advancing acceptedSeq.
++
++test("Worker rebinding ratedMatchId while leaving ratedReplay.matchId at the OLD value is DENIED", async () => {
++  const OLD_MATCH_ID = "elo_ABC123_1700000000000_0";
++  const NEW_MATCH_ID = "elo_ABC123_1700000000000_1";
++  await seed("rooms/ABC123", ratedRoom({ matchId: OLD_MATCH_ID, acceptedSeq: 6, boardSeq: 5, matchNumber: 1 }));
++  await seed("matchIndex/ABC123", { matchId: NEW_MATCH_ID, createdAt: 1_700_000_000_000, lastMatchNumber: 1 });
++  const db = databaseFor("srv_settlement");
++  await assertFails(update(ref(db, "rooms/ABC123"), {
++    ratedMatchId: NEW_MATCH_ID,
++    "ratedReplay/acceptedSeq": 7
++  }));
++});
++
++test("Worker initial ratedReplay creation at acceptedSeq>0 (first successful sync after earlier failed syncs) is ALLOWED", async () => {
++  await seed("rooms/ABC123", ratedRoom());
++  const db = databaseFor("srv_settlement");
++  await assertSucceeds(update(ref(db, "rooms/ABC123"), {
++    "ratedReplay/matchId": MATCH_ID,
++    "ratedReplay/acceptedSeq": 5,
++    "ratedReplay/boardSeq": 4
++  }));
++});
++
+ test("Worker rebinding ratedMatchId is DENIED if it ALSO touches players/createdAt/matchNumber (generation-reset branch is not a general room-rewrite path)", async () => {
+   const OLD_MATCH_ID = "elo_ABC123_1700000000000_0";
+   const NEW_MATCH_ID = "elo_ABC123_1700000000000_1";
