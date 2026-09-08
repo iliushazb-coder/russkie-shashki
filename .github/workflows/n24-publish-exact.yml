@@ -20,6 +20,8 @@ jobs:
         run: |
           set -euo pipefail
           cp .n24-final.patch /tmp/n24-final.patch
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
           git reset --hard 351295d40844869b60615fef9cc7ddad6fc52cc6
           git am /tmp/n24-final.patch
           test "$(git rev-parse HEAD^)" = "351295d40844869b60615fef9cc7ddad6fc52cc6"
