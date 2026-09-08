@@ -3454,6 +3454,172 @@ function forceResyncFromServer(silent) {
     });
 }
 
+// №23: минимальный client claim для protected event log — Worker сам
+// server-stamp'ит actorUid/color/generation, сам вычисляет captured
+// squares/promotion/итоговую доску через shared engine. requestId
+// детерминирован от содержимого хода: повторная отправка ТОГО ЖЕ
+// логического хода (после сетевого сбоя) естественно порождает тот же
+// requestId без отдельного persistent-хранилища — Worker распознаёт retry
+// через idempotency lookup и возвращает уже принятый seq.
+function generateTurnRequestId(color, moveCount, path) {
+    const raw = color + "_" + moveCount + "_" + path.map(function (p) { return p.row + "-" + p.col; }).join("_");
+    return raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+}
+
+// №23: durable per-(matchId, type) "pending action" identity — переживает
+// reload. Найдено на review: чистая случайность (предыдущая версия) решала
+// cross-reload коллизию для НОВОГО действия, но ломала repair terminal-
+// действий (resign/draw_accept) — Worker'ов dup-branch, который повторяет
+// syncProjection при retry, срабатывает ТОЛЬКО если retry использует ТОТ ЖЕ
+// requestId, а terminal-события (once already durable) перехватываются
+// match_already_terminal РАНЬШЕ dup-проверки для НОВОГО id. Здесь —
+// localStorage-запись, переживающая reload: retry ТОГО ЖЕ логического
+// действия (неизвестно, дошёл ли предыдущий запрос) переиспользует ТОТ ЖЕ
+// requestId; marker снимается ТОЛЬКО когда исход действия ДОКАЗАН (успех
+// либо definitively отклонено сервером), никогда при неоднозначной сетевой
+// ошибке — тогда retry обязан сохранить идентичность попытки.
+function ratedPendingActionKey(matchId, type) {
+    return "ratedPendingAction:" + matchId + ":" + type;
+}
+function getPendingRatedActionId(matchId, type) {
+    try {
+        const raw = localStorage.getItem(ratedPendingActionKey(matchId, type));
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (parsed && typeof parsed.requestId === "string") return parsed.requestId;
+        }
+    } catch (e) {}
+    return null;
+}
+function setPendingRatedActionId(matchId, type, requestId) {
+    try { localStorage.setItem(ratedPendingActionKey(matchId, type), JSON.stringify({ requestId: requestId, ts: Date.now() })); } catch (e) {}
+}
+function clearPendingRatedActionId(matchId, type) {
+    try { localStorage.removeItem(ratedPendingActionKey(matchId, type)); } catch (e) {}
+}
+
+// Коды ошибок, ДОКАЗЫВАЮЩИЕ, что исход действия уже известен (успех либо
+// definitively отклонено сервером) — pending-marker можно снять. Любая
+// ДРУГАЯ ошибка (сеть/timeout/неизвестная) оставляет marker нетронутым: мы
+// не знаем, дошло ли действие до Worker'а, поэтому retry обязан
+// переиспользовать тот же requestId, а не создавать новую попытку.
+const RATED_ACTION_DEFINITIVE_ERRORS = [
+    "wrong_actor_turn", "illegal_segment", "incomplete_chain",
+    "extra_landing_after_completion", "match_already_terminal",
+    "not_a_participant", "self_accept_rejected", "stale_or_missing_offer",
+    "invalid_request_id", "invalid_event_type", "invalid_path",
+    "match_not_registered", "unknown_event_type", "stale_generation"
+];
+function isDefinitiveRatedActionOutcome(error) {
+    return RATED_ACTION_DEFINITIVE_ERRORS.indexOf(workerErrorCode(error)) !== -1;
+}
+
+function generateNonTurnRequestId(color, type, moveCount, matchId, extra) {
+    const existing = matchId ? getPendingRatedActionId(matchId, type) : null;
+    if (existing) return existing;
+    const randomPart = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    const raw = color + "_" + type + "_" + moveCount + "_" + randomPart + (extra ? "_" + extra : "");
+    const id = raw.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 64);
+    if (matchId) setPendingRatedActionId(matchId, type, id);
+    return id;
+}
+
+// №23: снимает текущий protected draw_offer для рейтинговой партии — общая
+// логика для decline (принимающая сторона) и cancel (предложившая сторона),
+// так как обе одинаково снимают единственный mutable drawProposal-слот.
+// Определена безусловно (не зависит от наличия конкретной кнопки в DOM).
+// ВАЖНО: protected draw_cancel подтверждается Worker'ом ПЕРВЫМ, UI-слот
+// "drawProposal" убирается только ПОСЛЕ успеха — иначе (найдено на review,
+// симметрично уже исправленному багу draw_offer) UI мог бы показывать
+// "предложение снято", пока protected log всё ещё считает старый offer
+// активным, и malicious/устаревший клиент мог бы успешно его принять.
+// №23 fix (round 9, review point 4): protected-событие уже durable, но
+// сама UI-запись drawProposal (.set()/.remove()) может независимо упасть
+// (сеть/квота/пр.) — раньше это никак не обрабатывалось (unguarded вызов),
+// оставляя UI навсегда рассинхронизированным с уже корректным protected
+// log. Один retry с небольшой задержкой закрывает подавляющее большинство
+// transient-случаев; если и ОН падает — молча смиряемся (Elo не зависит
+// от этого поля, а следующий естественный touch room — reload, ход
+// оппонента и т.п. — всё равно покажет актуальное состояние).
+// №23 fix (round 10, review IMPORTANT 1): один retry покрывал только САМЫЕ
+// короткие сетевые сбои. Заменено на bounded, детерминированную серию
+// попыток с растущей задержкой (immediate, 500ms, 2000ms — 3 попытки
+// суммарно) — покрывает значительно более широкий класс transient-сбоев,
+// оставаясь предсказуемо ограниченной (не бесконечный retry-loop). Если
+// ВСЕ попытки провалились — molча смиряемся (поле UI-only, никогда не
+// Elo-relevant; следующий естественный touch room всё равно покажет
+// актуальное состояние).
+// №23 fix (round 10): bounded, детерминированная серия попыток (immediate,
+// 500ms, 2000ms). round 11 (review Point 1): РАНЬШЕ финальный failure
+// проглатывался (resolve вместо reject) — это означало, что вызывающий код
+// не мог узнать, УДАЛОСЬ ли реально записать UI-состояние, и слепо снимал
+// pending-marker в любом случае. Теперь withBoundedRetry() ПРОБРАСЫВАЕТ
+// последнюю ошибку, если ВСЕ попытки провалились — вызывающий код обязан
+// сам решить, что делать (см. submitRatedDrawCancel/Offer ниже: marker
+// снимается ТОЛЬКО при реальном успехе записи, иначе остаётся для будущего
+// retry — единственный доказанный путь когда-либо восстановить UI, раз
+// сама projection никогда не пишет drawProposal).
+function withBoundedRetry(operation, label) {
+    const delaysMs = [0, 500, 2000];
+    function attempt(index) {
+        const run = index === 0 ? operation() : new Promise(function (resolve) { setTimeout(resolve, delaysMs[index]); }).then(operation);
+        return run.catch(function (error) {
+            if (index + 1 < delaysMs.length) return attempt(index + 1);
+            console.log(label + ": все попытки провалились", workerErrorCode(error));
+            throw error;
+        });
+    }
+    return attempt(0);
+}
+
+function removeDrawProposalWithRetry() {
+    return withBoundedRetry(function () {
+        return database.ref("rooms/" + roomCode + "/drawProposal").remove();
+    }, "drawProposal.remove()");
+}
+function setDrawProposalWithRetry() {
+    const value = { by: myColor, name: myTelegramName };
+    return withBoundedRetry(function () {
+        return database.ref("rooms/" + roomCode + "/drawProposal").set(value);
+    }, "drawProposal.set()");
+}
+
+function submitRatedDrawCancel() {
+    if (!currentState || !currentState.ratedMatchId) return Promise.resolve();
+    const matchId = currentState.ratedMatchId;
+    const requestId = generateNonTurnRequestId(myColor, "draw_cancel", currentState.moveCount, matchId);
+    return callWorker("/rated/event", {
+        roomCode: roomCode, matchId: matchId, requestId: requestId, type: "draw_cancel"
+    }).then(function () {
+        // №23 fix (round 11, review Point 1): marker снимается ТОЛЬКО после
+        // РЕАЛЬНОГО успеха UI-записи, не сразу после успеха Worker-вызова.
+        // syncProjection() НИКОГДА не пишет drawProposal (protected log не
+        // materialize'ит его) — единственный путь когда-либо восстановить
+        // застрявший UI это будущий retry ТОГО ЖЕ действия, а retry
+        // возможен только пока marker жив.
+        return removeDrawProposalWithRetry().then(function () {
+            clearPendingRatedActionId(matchId, "draw_cancel");
+        });
+    }).catch(function (error) {
+        if (isDefinitiveRatedActionOutcome(error)) clearPendingRatedActionId(matchId, "draw_cancel");
+        console.log("Rated draw_cancel submission failed, UI proposal intentionally left as-is", workerErrorCode(error));
+        showInfoModal(t("err_draw_connection"), false);
+    });
+}
+
+function submitRatedTurnEvent(matchId, path) {
+    const requestId = generateTurnRequestId(myColor, currentState.moveCount, path);
+    callWorker("/rated/event", {
+        roomCode: roomCode, matchId: matchId, requestId: requestId, type: "turn", path: path
+    }).then(function () {
+        pendingMoveStartedAt = null;
+    }).catch(function (error) {
+        pendingMoveStartedAt = null;
+        console.log("Rated event submission failed, resyncing...", workerErrorCode(error));
+        forceResyncFromServer();
+    });
+}
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame && !canUseFirebase()) { showInfoModal(t("err_auth_required"), false); return; }
     if (isOnlineGame) {
@@ -3528,6 +3694,17 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
         renderBoard();
 
+        // №23: завершающий сегмент рейтингового хода (mustContinueFrom===null)
+        // идёт через protected event log Worker'а, а НЕ через прямую
+        // room-транзакцию — room.turn переключает только Worker, после
+        // успешного CAS-append (Model 3-lite). Промежуточные jump-сегменты
+        // multi-capture цепочки (mustContinueFrom!==null) остаются НИЖЕ,
+        // без каких-либо изменений — та же прямая транзакция, что и раньше.
+        const isRatedCompletingSegment = !!currentState.ratedMatchId && optimisticResult.mustContinueFrom === null;
+
+        if (isRatedCompletingSegment) {
+            submitRatedTurnEvent(currentState.ratedMatchId, currentState.lastMovePath);
+        } else {
         pendingSyncChain = pendingSyncChain.then(function () {
             return database.ref("rooms/" + roomCode).transaction(function (room) {
                 // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
@@ -3605,7 +3782,9 @@ function performMove(fromRow, fromCol, toRow, toCol) {
             pendingMoveStartedAt = null;
             forceResyncFromServer();
         });
+        }
     } else {
+
         const result = attemptMove(currentState, fromRow, fromCol, toRow, toCol, currentState.turn);
         if (result) {
             const movingPieceWasKing = !!(currentState.pieces[fromRow + "_" + fromCol] && currentState.pieces[fromRow + "_" + fromCol].king);
@@ -5381,6 +5560,24 @@ btnResignYes.addEventListener("click", function () {
         // Локальный выход из партии этим guard'ом НЕ затрагивается —
         // защищается именно серверная транзакция сдачи.
         if (!isFirebaseConnected) return;
+        if (currentState.ratedMatchId) {
+            // №23: resign рейтинговой партии — protected event, не прямая
+            // room-запись. Worker сам определяет winner (opposite color),
+            // client НЕ передаёт trustworthy "winner". requestId durable
+            // (см. generateNonTurnRequestId) — retry после ambiguous failure
+            // переиспользует тот же id и попадает в Worker'ов repair-path.
+            const matchId = currentState.ratedMatchId;
+            const requestId = generateNonTurnRequestId(myColor, "resign", currentState.moveCount, matchId);
+            callWorker("/rated/event", {
+                roomCode: roomCode, matchId: matchId, requestId: requestId, type: "resign"
+            }).then(function () {
+                clearPendingRatedActionId(matchId, "resign");
+            }).catch(function (error) {
+                if (isDefinitiveRatedActionOutcome(error)) clearPendingRatedActionId(matchId, "resign");
+                showInfoModal(t("err_resign_failed"), false);
+            });
+            return;
+        }
         database.ref("rooms/" + roomCode).transaction(function (room) {
             // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
             // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
@@ -5422,9 +5619,41 @@ btnResignYes.addEventListener("click", function () {
 // ===== НИЧЬЯ =====
 
 if (btnOfferDraw) {
+// №23: protected-first, как и submitRatedDrawCancel — UI-слот "drawProposal"
+// выставляется ТОЛЬКО после подтверждения Worker'ом. Ранее (rollback-on-
+// failure подход) lost response оставлял durable pending-marker, но НЕ
+// восстанавливал UI на успешном retry — protected log и UI могли разойтись
+// навсегда (найдено на review). Protected-first устраняет этот класс
+// рассинхрона структурно: UI — прямое следствие подтверждённого успеха.
+function submitRatedDrawOffer() {
+    if (!currentState || !currentState.ratedMatchId) return Promise.resolve();
+    const matchId = currentState.ratedMatchId;
+    const requestId = generateNonTurnRequestId(myColor, "draw_offer", currentState.moveCount, matchId);
+    return callWorker("/rated/event", {
+        roomCode: roomCode, matchId: matchId, requestId: requestId, type: "draw_offer"
+    }).then(function () {
+        // №23 fix (round 11, review Point 1): marker снимается ТОЛЬКО после
+        // РЕАЛЬНОГО успеха UI-записи — см. submitRatedDrawCancel для
+        // полного обоснования (syncProjection никогда не пишет
+        // drawProposal, retry ТОГО ЖЕ действия — единственный путь
+        // когда-либо восстановить застрявший UI).
+        return setDrawProposalWithRetry().then(function () {
+            clearPendingRatedActionId(matchId, "draw_offer");
+        });
+    }).catch(function (error) {
+        if (isDefinitiveRatedActionOutcome(error)) clearPendingRatedActionId(matchId, "draw_offer");
+        console.log("Rated draw_offer submission failed", workerErrorCode(error));
+        showInfoModal(t("err_draw_connection"), false);
+    });
+}
+
     btnOfferDraw.addEventListener("click", function () {
         if (!isOnlineGame || !currentState || currentState.winner) return;
         if (!requireFirebaseAuth()) return;
+        if (currentState.ratedMatchId) {
+            submitRatedDrawOffer();
+            return;
+        }
         database.ref("rooms/" + roomCode + "/drawProposal").set({ by: myColor, name: myTelegramName });
     });
 }
@@ -5520,6 +5749,24 @@ if (btnDrawAccept) {
         // подтвердит его при актуальном серверном состоянии.
         if (!requireFirebaseAuth()) return;
         if (!isFirebaseConnected) return;
+        if (currentState.ratedMatchId) {
+            // №23: draw_accept рейтинговой партии — protected event. Worker
+            // сам находит текущий активный offer (client НЕ поставляет
+            // offerSeq) и отклоняет self-accept независимо от UI. requestId
+            // durable — retry после ambiguous failure переиспользует тот же
+            // id и попадает в Worker'ов repair-path.
+            const matchId = currentState.ratedMatchId;
+            const requestId = generateNonTurnRequestId(myColor, "draw_accept", currentState.moveCount, matchId);
+            callWorker("/rated/event", {
+                roomCode: roomCode, matchId: matchId, requestId: requestId, type: "draw_accept"
+            }).then(function () {
+                clearPendingRatedActionId(matchId, "draw_accept");
+            }).catch(function (error) {
+                if (isDefinitiveRatedActionOutcome(error)) clearPendingRatedActionId(matchId, "draw_accept");
+                showInfoModal(t("err_draw_failed"), false);
+            });
+            return;
+        }
         database.ref("rooms/" + roomCode).transaction(function (room) {
             // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
             // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
@@ -5548,7 +5795,11 @@ if (btnDrawDecline) {
     btnDrawDecline.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
         if (!requireFirebaseAuth()) return;
-        database.ref("rooms/" + roomCode + "/drawProposal").remove();
+        if (currentState && currentState.ratedMatchId) {
+            submitRatedDrawCancel();
+        } else {
+            database.ref("rooms/" + roomCode + "/drawProposal").remove();
+        }
     });
 }
 
@@ -5556,7 +5807,11 @@ if (btnDrawCancel) {
     btnDrawCancel.addEventListener("click", function () {
         drawOfferModal.classList.add("hidden");
         if (!requireFirebaseAuth()) return;
-        database.ref("rooms/" + roomCode + "/drawProposal").remove();
+        if (currentState && currentState.ratedMatchId) {
+            submitRatedDrawCancel();
+        } else {
+            database.ref("rooms/" + roomCode + "/drawProposal").remove();
+        }
     });
 }
 

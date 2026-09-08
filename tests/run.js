@@ -54,6 +54,8 @@ const FILES = [
   ['AA. STARTUP COVER: invite-link/lobby flash fix', 'startup-cover.test.js'],
   ['BB. №22: SHARED GAME ENGINE — structural/regression guards', 'shared-engine.test.js'],
   ['BB.1 №22: WORKER/NODE ESM INTEROP — execution proof', 'worker-shared-engine-smoke.test.js'],
+  ['BB.2 №23: draw_cancel requestId/ordering fixes (client-side)', 'rated-draw-cancel-ordering.test.js'],
+  ['BB.3 №23: Rules expression complexity budget (real-Emulator failure class guard)', 'rules-complexity-budget.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.
