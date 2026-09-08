@@ -1,0 +1,41 @@
+name: n25-publish-exact
+
+on:
+  push:
+    branches:
+      - ci-n25-publish
+
+permissions:
+  contents: write
+
+jobs:
+  build-exact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble and verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .n25-patch/chunk*.b64 | tr -d '[:space:]' | base64 -d > /tmp/n25.patch
+          echo "3522f06c4c0994f52add838613417a59824feb6e7369fa6f09fb0c7d038cab26  /tmp/n25.patch" | sha256sum -c -
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
+          git reset --hard 1729ac5be77c32182840b4112235386720a65742
+          git am /tmp/n25.patch
+          test "$(git rev-parse HEAD^)" = "1729ac5be77c32182840b4112235386720a65742"
+          test "$(git rev-parse HEAD^{tree})" = "eae1d7594b9b46056cd7ed7db9aa05865c8e8fa8"
+          node --check worker/index.mjs
+          node --check tests/worker/refresh-leaderboard-name-unit.test.mjs
+          node --check tests/worker/auth-telegram-name-refresh-integration.test.mjs
+          npm test
+          for f in tests/worker/*.test.mjs; do node "$f"; done
+          node tests/settlement-behavior.test.js
+          git diff --check HEAD^ HEAD
+      - name: Push exact transport candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/publish/n25-final-transport --force
