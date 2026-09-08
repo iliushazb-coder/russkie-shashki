@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .n26-patch/chunk*.b64 | tr -d '[:space:]' | base64 -d > /tmp/n26.patch
+          cat .n26-patch/fix00a.b64 .n26-patch/fix00b.b64 .n26-patch/chunk01.b64 .n26-patch/fix02a.b64 .n26-patch/fix02b.b64 .n26-patch/chunk03.b64 .n26-patch/chunk04.b64 .n26-patch/chunk05.b64 | tr -d '[:space:]' | base64 -d > /tmp/n26.patch
           echo "2fdf812f37930663cca1b7b8a2d2f6364533f19015a9d090136042d5cf8e2707  /tmp/n26.patch" | sha256sum -c -
           git config user.name "candidate-review"
           git config user.email "candidate-review@local"
