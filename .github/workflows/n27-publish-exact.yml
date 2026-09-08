@@ -1,0 +1,40 @@
+name: n27-publish-exact
+
+on:
+  push:
+    branches:
+      - ci-n27-publish
+
+permissions:
+  contents: write
+
+jobs:
+  build-exact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble and verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          tr -d '[:space:]' < .n27-patch/candidate.b64 | base64 -d > /tmp/n27.patch
+          echo "17d27251d0de5c50e099e11348f966d91b5e402b21748a64262a277d6ebb2210  /tmp/n27.patch" | sha256sum -c -
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
+          git reset --hard 09b654044116cedf174ae3ee6d859e924de2c4f7
+          git am /tmp/n27.patch
+          test "$(git rev-parse HEAD^)" = "09b654044116cedf174ae3ee6d859e924de2c4f7"
+          test "$(git rev-parse HEAD^{tree})" = "404347434a202d10cc0c5a2ea2d67a5a7e7c56d7"
+          node --check worker/index.mjs
+          node --check tests/worker/appcheck-backoff-unit.test.mjs
+          npm test
+          for f in tests/worker/*.test.mjs; do node "$f"; done
+          node tests/settlement-behavior.test.js
+          git diff --check HEAD^ HEAD
+      - name: Push exact transport candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/publish/n27-final-transport --force
