@@ -12,18 +12,534 @@
  * - no stats.recentMatches marker is used.
  */
 
-// №22: тот же physical source, что и client (shared/game-engine.js), не
-// копия. Side-effect import + globalThis-инвариант — без функционального
-// использования: replay/event-log/settlement-integration остаются №23.
+// №23: тот же physical source, что и client (shared/game-engine.js), не
+// копия. С №23 Worker функционально использует engine для authoritative
+// replay завершённых ходов (Model 3-lite) — см. commitRatedEvent/replayEvents
+// ниже. Промежуточные jump-сегменты multi-capture остаются client-side,
+// без изменений — Worker подтверждает только ЗАВЕРШЁННЫЙ ход целиком.
 import "../shared/game-engine.js";
 if (!globalThis.RussianCheckersEngine ||
     typeof globalThis.RussianCheckersEngine.attemptMove !== "function") {
     throw new Error("shared_game_engine_missing");
 }
+const {
+    createInitialPieces,
+    getDrawPositionKey,
+    attemptMove,
+    computeNextDrawState
+} = globalThis.RussianCheckersEngine;
 
 const SRV_UID = "srv_settlement";
 const ELO_K = 32;
 const ELO_START = 1000;
+
+// ===== №23: PROTECTED EVENT LOG + REPLAY (Model 3-lite) =====
+//
+// Инварианты (согласованная архитектура, 4 раунда reconciliation):
+// - Единственный писатель "ratedEvents/$matchId/events/$seq" — srv_settlement
+//   (Rules: create-only, без delete-ветки, даже для srv_settlement).
+// - "$seq" — fixed-width 6-значный числовой КЛЮЧ УЗЛА, единственный source of
+//   truth последовательности; отдельного "seq"-поля внутри события нет.
+// - "requestId" — client-generated idempotency identity, персистится внутри
+//   immutable-события; retry с тем же requestId возвращает существующий seq.
+// - Client НИКОГДА не поставляет authoritative actorUid/color/generation/seq —
+//   Worker server-stamps их из verified bearer UID + Worker-owned match card.
+// - Промежуточные multi-capture сегменты остаются прямой client-write в
+//   rooms/$room (без изменений); ТОЛЬКО завершающий сегмент хода (тот, где
+//   attemptMove локально даёт mustContinueFrom===null) идёт через
+//   POST /rated/event с ПОЛНЫМ path от начала хода.
+// - Draw-state (computeNextDrawState) вызывается Worker'ом РОВНО один раз на
+//   completed turn, с movingPieceWasKing, прочитанным из состояния ДО первого
+//   сегмента — доказано эмпирически эквивалентным per-segment клиентскому
+//   поведению (промоушен mid-chain не создаёт расхождения: wasCapture
+//   доминирует над movingPieceWasKing в обоих использующих его выражениях).
+// - "rooms/$room/ratedReplay/{matchId,acceptedSeq}" — Worker-owned, monotonic
+//   (Rules: acceptedSeq строго numeric > предыдущего), projection-marker;
+//   НИКОГДА не источник Elo-истины — только UX-синхронизация.
+// - "replayVersion" в match card — Worker-owned migration marker; для
+//   replayVersion>=1 "room.winner"/"room.result" НИКОГДА не Elo truth;
+//   technical result (timeout/disconnect) для таких матчей fail-closed
+//   unrated, пока не появится отдельный server-verifiable technical verifier.
+
+// №23 fix (round 10): найдено на review — round-9's "10-slot reserve"
+// доказуемо неполно: reserve ограничивал ТОЛЬКО draw_offer/draw_cancel от
+// входа в последние 10 слотов, но НИЧТО не мешало draw-спаму (490) +
+// обычным легитимным turn-событиям (10 ещё) вместе достичь потолка 500,
+// после чего терминальное событие (resign/final turn/draw_accept) всё
+// равно получало бы event_limit_exceeded. Единственный доказуемо
+// корректный дизайн — ПОЛНОСТЬЮ РАЗДЕЛЬНЫЕ бюджеты: draw_offer/draw_cancel
+// считаются в СВОЙ собственный, отдельный счётчик, который НИКОГДА не
+// влияет на счётчик turn/resign/draw_accept. Сколько бы draw-спама ни
+// было — он исчерпывает ТОЛЬКО свой бюджет, никогда не бюджет игры.
+const MAX_EVENTS_PER_MATCH = 500; // turn/resign/draw_accept — бюджет игры
+const MAX_DRAW_NEGOTIATION_EVENTS = 40; // draw_offer/draw_cancel — отдельный, независимый бюджет
+const MAX_TURN_PATH_POINTS = 16;
+
+function formatSeq(n) {
+    return String(n).padStart(6, "0");
+}
+
+function isValidRequestId(v) {
+    return typeof v === "string" && /^[a-zA-Z0-9_-]{1,64}$/.test(v);
+}
+
+function isValidCoord(p) {
+    return p && typeof p === "object" &&
+        Number.isInteger(p.row) && p.row >= 0 && p.row <= 7 &&
+        Number.isInteger(p.col) && p.col >= 0 && p.col <= 7;
+}
+
+function isValidPath(path) {
+    return Array.isArray(path) && path.length >= 2 && path.length <= MAX_TURN_PATH_POINTS &&
+        path.every(isValidCoord);
+}
+
+function trustedInitialState() {
+    return {
+        pieces: createInitialPieces(),
+        turn: "light",
+        mustContinueFrom: null,
+        capturedDark: 0,
+        capturedLight: 0,
+        moveCount: 0,
+        kingOnlyStreak: 0,
+        noProgressStreak: 0,
+        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+        longRoadAttacker: null,
+        longRoadStreak: 0
+    };
+}
+
+// Прогоняет ОДНО completed-turn событие (type="turn") через attemptMove-цепочку
+// целиком, затем ОДИН вызов computeNextDrawState после последнего сегмента.
+// Бросает на любую нелегальность/несоответствие actor/color/turn.
+function replayTurnEvent(state, actorColor, path) {
+    if (state.turn !== actorColor) throw new Error("wrong_actor_turn");
+    const movingFrom = path[0];
+    const movingPiece = state.pieces[movingFrom.row + "_" + movingFrom.col];
+    const movingPieceWasKing = !!(movingPiece && movingPiece.king);
+
+    let cur = state;
+    for (let i = 0; i < path.length - 1; i++) {
+        const from = path[i], to = path[i + 1];
+        const result = attemptMove(cur, from.row, from.col, to.row, to.col, actorColor);
+        if (!result) throw new Error("illegal_segment");
+        const isLast = (i === path.length - 2);
+        if (isLast && result.mustContinueFrom !== null) throw new Error("incomplete_chain");
+        if (!isLast && result.mustContinueFrom === null) throw new Error("extra_landing_after_completion");
+        cur = result;
+    }
+    const drawState = computeNextDrawState(state, cur, movingPieceWasKing);
+    return {
+        pieces: cur.pieces, turn: cur.turn, mustContinueFrom: cur.mustContinueFrom,
+        capturedDark: cur.capturedDark, capturedLight: cur.capturedLight, moveCount: cur.moveCount,
+        kingOnlyStreak: drawState.kingOnlyStreak, noProgressStreak: drawState.noProgressStreak,
+        positionHistory: drawState.positionHistory,
+        longRoadAttacker: drawState.longRoadAttacker, longRoadStreak: drawState.longRoadStreak,
+        winner: cur.winner || (drawState.drawReason ? "draw" : null),
+        winReason: cur.winReason || drawState.drawReason || null,
+        // UI/animation-only поля completed-turn projection (не влияют на
+        // легальность, но нужны, чтобы rooms/$room корректно отражал
+        // завершённый ход для animация/звука/подсказок следующего хода —
+        // найдено на review: syncProjection их не писал вовсе).
+        lastMove: cur.lastMove, lastMovePath: cur.lastMovePath,
+        lastCapturedSquares: cur.lastCapturedSquares, moveType: cur.moveType,
+        pendingRemovals: cur.pendingRemovals
+    };
+}
+
+// Прогоняет ОДИН resign/draw_offer/draw_accept event. Возвращает новое engine
+// state (только winner/winReason меняются относительно prevState; остальные
+// engine-поля переносятся без изменений — сама доска не двигается).
+// ВАЖНО: используется для REPLAY уже ПЕРСИСТЕНТНЫХ событий — "offerSeq" здесь
+// уже Worker-derived значение, зафиксированное в момент commit (см.
+// findAcceptableOffer ниже, используется ТОЛЬКО при валидации НОВОГО claim'а,
+// поскольку client НЕ поставляет offerSeq вовсе — это устраняет необходимость
+// клиенту знать Worker-assigned seq чужого события).
+function replayNonTurnEvent(state, actorColor, ev, priorEvents) {
+    if (ev.type === "resign") {
+        return Object.assign({}, state, {
+            winner: actorColor === "light" ? "dark" : "light",
+            winReason: "resign"
+        });
+    }
+    if (ev.type === "draw_offer" || ev.type === "draw_cancel") {
+        return state; // не terminal, engine state не меняется
+    }
+    if (ev.type === "draw_accept") {
+        const offer = priorEvents.find(function (e) { return e._seqStr === ev.offerSeq && e.type === "draw_offer"; });
+        if (!offer) throw new Error("stale_or_missing_offer");
+        if (offer.actorUid === ev.actorUid) throw new Error("self_accept_rejected");
+        return Object.assign({}, state, { winner: "draw", winReason: "draw" });
+    }
+    throw new Error("unknown_event_type");
+}
+
+// Определяет, к какому draw_offer относится НОВЫЙ (ещё не персистентный)
+// draw_accept claim. Текущий клиент хранит ОДИН mutable drawProposal-слот:
+// ЛЮБОЙ более поздний offer (с любой стороны) затирает предыдущий в UI, а
+// cancel/decline снимают его вовсе — поэтому "активный" offer это ПОСЛЕДНЕЕ
+// событие среди {draw_offer, draw_cancel}, и оно живое только если это
+// именно draw_offer (найдено на review: cancel/decline раньше не попадали
+// в protected log вовсе, что позволяло принять уже отменённое предложение).
+function findAcceptableOffer(priorEvents, acceptingActorUid) {
+    let latest = null;
+    for (const e of priorEvents) {
+        if (e.type === "draw_offer" || e.type === "draw_cancel") latest = e;
+    }
+    if (!latest || latest.type !== "draw_offer") throw new Error("stale_or_missing_offer");
+    if (latest.actorUid === acceptingActorUid) throw new Error("self_accept_rejected");
+    return latest;
+}
+
+// Полный replay всего протектед-лога от trusted initial state. Возвращает
+// {state, terminal, terminalOutcome}. terminal=true означает, что дальнейшие
+// события недопустимы (Worker должен отклонять append после этой точки).
+function replayEvents(sortedEvents, card) {
+    let state = trustedInitialState();
+    let terminal = false, terminalOutcome = null, lastTurnEventTs = null;
+    for (const ev of sortedEvents) {
+        if (terminal) throw new Error("event_after_terminal");
+        if (ev.type === "turn") {
+            const result = replayTurnEvent(state, ev.color, ev.path);
+            state = { pieces: result.pieces, turn: result.turn, mustContinueFrom: result.mustContinueFrom,
+                capturedDark: result.capturedDark, capturedLight: result.capturedLight, moveCount: result.moveCount,
+                kingOnlyStreak: result.kingOnlyStreak, noProgressStreak: result.noProgressStreak,
+                positionHistory: result.positionHistory,
+                longRoadAttacker: result.longRoadAttacker, longRoadStreak: result.longRoadStreak,
+                lastMove: result.lastMove, lastMovePath: result.lastMovePath,
+                lastCapturedSquares: result.lastCapturedSquares, moveType: result.moveType,
+                pendingRemovals: result.pendingRemovals };
+            lastTurnEventTs = ev.ts;
+            if (result.winner) { terminal = true; terminalOutcome = { winner: result.winner, winReason: result.winReason }; }
+        } else {
+            const result = replayNonTurnEvent(state, ev.color, ev, sortedEvents);
+            state = result;
+            if (result.winner) { terminal = true; terminalOutcome = { winner: result.winner, winReason: result.winReason }; }
+        }
+    }
+    return { state, terminal, terminalOutcome, lastTurnEventTs };
+}
+
+function canonicalClaimEquals(persisted, claim) {
+    if (persisted.type !== claim.type) return false;
+    if (claim.type === "turn") {
+        if (!Array.isArray(persisted.path) || !Array.isArray(claim.path)) return false;
+        if (persisted.path.length !== claim.path.length) return false;
+        for (let i = 0; i < claim.path.length; i++) {
+            if (persisted.path[i].row !== claim.path[i].row || persisted.path[i].col !== claim.path[i].col) return false;
+        }
+        return true;
+    }
+    if (claim.type === "draw_accept") return true; // offerSeq теперь Worker-derived, не часть client claim
+    return true; // resign/draw_offer не несут дополнительного claim-содержимого
+}
+
+function validateClaimShape(claim) {
+    if (!isValidRequestId(claim.requestId)) throw new Error("invalid_request_id");
+    if (claim.type !== "turn" && claim.type !== "resign" && claim.type !== "draw_offer" && claim.type !== "draw_accept" && claim.type !== "draw_cancel") {
+        throw new Error("invalid_event_type");
+    }
+    if (claim.type === "turn" && !isValidPath(claim.path)) throw new Error("invalid_path");
+    // draw_accept НЕ несёт offerSeq от клиента — Worker сам находит текущий
+    // активный offer через findAcceptableOffer() при commit (см. ниже).
+}
+
+// №23 fix (round 10, review Blocker 2): чистая функция подсчёта бюджета,
+// вынесенная отдельно для изолированного unit-тестирования (без
+// необходимости прогонять дорогой в построении legal-move replay для
+// синтетических тестовых логов). draw_offer/draw_cancel считаются в СВОЙ
+// собственный, полностью независимый счётчик — сколько бы их ни было, они
+// НИКОГДА не влияют на game-event бюджет (turn/resign/draw_accept), и
+// наоборот. Это доказуемо устраняет ранее найденный exploit: draw-спам
+// (490) + легитимные turn-события (10) = 500 суммарно в логе БОЛЬШЕ НЕ
+// блокирует терминальное событие, поскольку game-event счётчик считает
+// ТОЛЬКО turn/resign/draw_accept (в примере — 10, далеко от потолка 500).
+export function checkEventBudget(list, claimType) {
+    const isDrawNegotiation = claimType === "draw_offer" || claimType === "draw_cancel";
+    const drawNegotiationCount = list.filter(function (e) {
+        return e.type === "draw_offer" || e.type === "draw_cancel";
+    }).length;
+    const gameEventCount = list.length - drawNegotiationCount;
+    if (isDrawNegotiation) {
+        if (drawNegotiationCount >= MAX_DRAW_NEGOTIATION_EVENTS) throw new Error("draw_action_limit_exceeded");
+    } else {
+        if (gameEventCount >= MAX_EVENTS_PER_MATCH) throw new Error("event_limit_exceeded");
+    }
+}
+
+async function fetchAllEvents(env, deps, token, matchId) {
+    const raw = (await dbGet(env, deps, token, "ratedEvents/" + matchId + "/events")) || {};
+    const keys = Object.keys(raw).sort();
+    for (let i = 0; i < keys.length; i++) {
+        if (keys[i] !== formatSeq(i)) throw new Error("event_log_corrupt");
+    }
+    return keys.map(function (k) { const e = Object.assign({}, raw[k]); e._seqStr = k; return e; });
+}
+
+export async function commitRatedEvent(env, deps, token, matchId, card, callerUid, claim) {
+    validateClaimShape(claim);
+    const actorColor = card.participants[callerUid] && card.participants[callerUid].color;
+    if (!actorColor) throw new Error("not_a_participant");
+
+    // №23 fix (round 11, review Point 2): найдено на review — без этой
+    // проверки participant мог бы append'ить события (resign и т.п.) в
+    // СТАРЫЙ matchId ПОСЛЕ того, как матч уже закончился technical
+    // (timeout/disconnect, намеренно unrated по архитектуре) или после
+    // реванша — card остаётся валидным навсегда (immutable), а его
+    // protected log мог никогда не стать terminal (technical result не
+    // логируется как protected event). Без этой проверки artificial-
+    // terminal событие durable append'илось бы сразу, а позже
+    // settleMatch's room-missing путь мог бы settle'ить ЭТОТ artificial
+    // outcome как настоящий Elo — participant-controlled Elo gate вместо
+    // lifecycle-инварианта. Легитимный append ВСЕГДА происходит во время
+    // живой игры: комната обязана существовать и указывать именно на
+    // ЭТОТ matchId.
+    //
+    // №23 fix (round 15, review): изначально здесь ТАКЖЕ требовался
+    // liveRoom.status==='active' — найдено на review, что room.status
+    // ПОЛНОСТЬЮ participant-controlled: обычный (не technical, без
+    // валидного result) whole-room write легитимно переводит status в
+    // 'finished' безо всякого protected event/result (Rules это
+    // разрешают). Проигрывающий participant мог форджить ГОЛЫЙ
+    // status:'finished' (без winner/winReason/result) специально чтобы
+    // ЭТА проверка навсегда заблокировала будущие protected terminal
+    // события — и Elo settlement fail-closed unrated. Заменено на
+    // проверку ЗАЩИЩЁННОГО поля: room.result СТРОГО валидируется Rules
+    // (требует winReason==='disconnect', consistency с players/presence-
+    // таймингами) и создаётся ИСКЛЮЧИТЕЛЬНО через настоящий technical-
+    // disconnect путь — участник не может создать ВАЛИДНЫЙ result одной
+    // point-in-time записью. Легитимный protected-terminal исход (resign
+    // и т.п.) НИКОГДА не populate'ит room.result (syncProjection пишет
+    // только winner/winReason/status), поэтому эта проверка не мешает
+    // repair-механизму (round 6) уже после легитимного protected
+    // завершения — той случай отдельно и корректно обрабатывается через
+    // replay.terminal ниже.
+    const liveRoom = await dbGet(env, deps, token, "rooms/" + card.roomCode);
+    if (!liveRoom || liveRoom.ratedMatchId !== matchId || liveRoom.result) {
+        throw new Error("stale_generation");
+    }
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const list = await fetchAllEvents(env, deps, token, matchId);
+
+        // №23 fix (round 9): dup-check ПЕРЕД cap-check — legitimate retry
+        // уже существующего события (включая repair terminal-события) не
+        // должен зависеть от текущего заполнения лога; иначе исчерпанный
+        // бюджет заблокировал бы даже повтор УЖЕ принятого события.
+        const dup = list.find(function (e) { return e.requestId === claim.requestId; });
+        if (dup) {
+            if (canonicalClaimEquals(dup, claim)) {
+                // №23 fix: retry с тем же requestId — это единственный шанс
+                // повторить syncProjection, если предыдущая попытка успешно
+                // append'ила событие, но не успела/не смогла синхронизировать
+                // projection (см. ниже — при первом append та же проблема
+                // ЖЕ приведёт к throw, а не к silent success).
+                await syncProjection(env, deps, token, matchId, card);
+                return { seq: dup._seqStr, already: true };
+            }
+            throw new Error("idempotency_conflict");
+        }
+
+        // Cap-check ТОЛЬКО для генуинно НОВЫХ событий (дошли сюда — не dup).
+        // Полностью раздельные бюджеты (round 10 fix, см. комментарий у
+        // констант выше): draw_offer/draw_cancel считаются в СВОЙ, отдельный
+        // счётчик, никогда не влияющий на бюджет turn/resign/draw_accept.
+        // Вынесено в чистую функцию (checkEventBudget) специально для
+        // изолированного unit-тестирования логики подсчёта без
+        // необходимости прогонять полный (дорогой в построении для теста)
+        // legal-move replay.
+        checkEventBudget(list, claim.type);
+
+        const replay = replayEvents(list, card);
+        if (replay.terminal) {
+            // №23 fix (round 6): ЛЮБОЕ последующее касание матча (даже с
+            // ДРУГИМ requestId — retry с другого устройства/после reload без
+            // durable pending-marker, или просто попытка ДРУГОГО игрока)
+            // должно самолечить projection, если предыдущий append прошёл,
+            // но syncProjection тогда не удался. Не полагаемся ТОЛЬКО на
+            // dup-branch с совпадающим requestId — иначе retry терминального
+            // действия (resign/draw_accept) после ambiguous failure никогда
+            // не триггерит repair, потому что match_already_terminal
+            // перехватывается раньше dup-проверки для НОВОГО requestId.
+            //
+            // КРИТИЧНО (найдено на review): syncProjection() здесь НЕ
+            // swallow'ится. "Матч уже terminal" и "projection синхронизирована"
+            // — два РАЗНЫХ факта. Если repair только что реально провалился,
+            // client обязан увидеть эту (non-definitive) ошибку и оставить
+            // свой pending-marker для будущего retry — а не получить
+            // match_already_terminal, ошибочно счесть исход "доказанным" и
+            // снять marker, хотя repair мог просто не случиться. Только если
+            // syncProjection ЗДЕСЬ реально успела (включая "уже кто-то
+            // синхронизировал" no-op) — код доходит до throw ниже, и клиент
+            // корректно трактует match_already_terminal как definitive.
+            await syncProjection(env, deps, token, matchId, card);
+            throw new Error("match_already_terminal");
+        }
+
+        let derivedOfferSeq = null;
+        if (claim.type === "turn") {
+            replayTurnEvent(replay.state, actorColor, claim.path); // throws на illegal — не мутирует replay.state
+        } else if (claim.type === "resign") {
+            // всегда легален для участника, если матч не terminal (проверено выше)
+        } else if (claim.type === "draw_offer") {
+            // всегда легален для участника, если матч не terminal
+        } else if (claim.type === "draw_cancel") {
+            // всегда легален для участника, если матч не terminal — снимает
+            // текущий активный offer независимо от того, кто его предложил
+            // (соответствует текущему UI: и cancel своего, и decline чужого
+            // предложения одинаково снимают единственный mutable слот)
+        } else if (claim.type === "draw_accept") {
+            const offer = findAcceptableOffer(list, callerUid); // throws на self-accept/отсутствие активного offer
+            derivedOfferSeq = offer._seqStr;
+        }
+
+        const nextSeqStr = formatSeq(list.length);
+        const cur = await dbGetWithEtag(env, deps, token, "ratedEvents/" + matchId + "/events/" + nextSeqStr);
+        if (cur.value) continue; // занято параллельно — перечитать и повторить
+
+        const persisted = {
+            requestId: claim.requestId, type: claim.type,
+            actorUid: callerUid, color: actorColor, matchId,
+            roomCode: card.roomCode, createdAt: card.createdAt, matchNumber: card.matchNumber,
+            ts: serverTimestamp()
+        };
+        if (claim.type === "turn") persisted.path = claim.path;
+        if (claim.type === "draw_accept") persisted.offerSeq = derivedOfferSeq;
+
+        const put = await dbPutIfMatch(env, deps, token, "ratedEvents/" + matchId + "/events/" + nextSeqStr, cur.etag, persisted);
+        if (!put.ok) continue; // conflict => retry с начала
+
+        // №23 fix: НЕ проглатывать ошибку synchronization — событие уже
+        // durable, но клиент не должен получить SUCCESS, пока room либо
+        // реально синхронизирована, либо доказано, что она уже на этом/более
+        // позднем seq (сама syncProjection это проверяет перед тем как
+        // считать permission-denied безопасным no-op). Если синхронизация
+        // действительно не удалась — это пробрасывается как ошибка, и
+        // естественный client-side retry (тот же requestId) попадёт в ветку
+        // dup выше, которая тоже повторит syncProjection.
+        await syncProjection(env, deps, token, matchId, card);
+        return { seq: nextSeqStr, already: false };
+    }
+    throw new Error("append_conflict_retry_exhausted");
+}
+
+// Monotonic projection sync: чистая функция от protected log, безопасно
+// вызываемая повторно (после append, в начале следующего /rated/event, перед
+// settle). Rules гарантируют acceptedSeq строго возрастает — поздний writer
+// для более раннего seq получает permission_denied и корректно ничего не делает.
+export async function syncProjection(env, deps, token, matchId, card) {
+    const list = await fetchAllEvents(env, deps, token, matchId);
+    if (list.length === 0) return;
+    const replay = replayEvents(list, card);
+    const latestSeqNum = list.length - 1;
+    const roomCode = card.roomCode;
+
+    // Найти seq последнего "turn"-события в логе (если есть вообще) —
+    // именно ОНО определяет актуальное board-состояние. Промежуточные
+    // multi-capture сегменты (Model 3-lite) client-direct и никогда не
+    // логируются отдельно, поэтому "последнее turn-событие" может быть
+    // СТАРШЕ, чем latestSeqNum (если после него шли только non-turn
+    // события — resign/draw_offer/draw_cancel/draw_accept).
+    let lastTurnSeqNum = -1;
+    for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].type === "turn") { lastTurnSeqNum = i; break; }
+    }
+
+    // №23 fix (round 9, review point 1): "acceptedSeq" один сам по себе
+    // путал ДВА разных факта — "лог обработан до этой позиции" и "board
+    // материализована по последнему ходу". Non-turn событие (draw_offer)
+    // могло продвинуть acceptedSeq, не тронув board, и ПОСЛЕДУЮЩИЙ
+    // permission-denied repair-check видел acceptedSeq>=latest и ошибочно
+    // считал всё синхронизированным, хотя board всё ещё отражала более
+    // раннее (до упавшего turn-события) состояние. Отдельный "boardSeq" —
+    // seq последнего turn-события, чья board РЕАЛЬНО подтверждена
+    // записанной — читаем ТЕКУЩЕЕ значение, чтобы решить, нужно ли (пере)
+    // писать board СЕЙЧАС, независимо от того, что latest-событие non-turn.
+    const currentRatedReplay = await dbGet(env, deps, token, "rooms/" + roomCode + "/ratedReplay");
+    const currentBoardSeq = (currentRatedReplay && currentRatedReplay.matchId === matchId && typeof currentRatedReplay.boardSeq === "number")
+        ? currentRatedReplay.boardSeq : -1;
+    const needsBoardWrite = lastTurnSeqNum > currentBoardSeq;
+
+    const updates = {
+        ["rooms/" + roomCode + "/ratedReplay/matchId"]: matchId,
+        ["rooms/" + roomCode + "/ratedReplay/acceptedSeq"]: latestSeqNum
+    };
+    if (needsBoardWrite) {
+        updates["rooms/" + roomCode + "/ratedReplay/boardSeq"] = lastTurnSeqNum;
+        updates["rooms/" + roomCode + "/pieces"] = replay.state.pieces;
+        updates["rooms/" + roomCode + "/turn"] = replay.state.turn;
+        updates["rooms/" + roomCode + "/moveCount"] = replay.state.moveCount;
+        updates["rooms/" + roomCode + "/mustContinueFrom"] = replay.state.mustContinueFrom;
+        updates["rooms/" + roomCode + "/capturedDark"] = replay.state.capturedDark;
+        updates["rooms/" + roomCode + "/capturedLight"] = replay.state.capturedLight;
+        updates["rooms/" + roomCode + "/kingOnlyStreak"] = replay.state.kingOnlyStreak;
+        updates["rooms/" + roomCode + "/noProgressStreak"] = replay.state.noProgressStreak;
+        updates["rooms/" + roomCode + "/positionHistory"] = replay.state.positionHistory;
+        updates["rooms/" + roomCode + "/longRoadAttacker"] = replay.state.longRoadAttacker;
+        updates["rooms/" + roomCode + "/longRoadStreak"] = replay.state.longRoadStreak;
+        updates["rooms/" + roomCode + "/lastMove"] = replay.state.lastMove || null;
+        updates["rooms/" + roomCode + "/lastMovePath"] = replay.state.lastMovePath || null;
+        updates["rooms/" + roomCode + "/lastCapturedSquares"] = replay.state.lastCapturedSquares || null;
+        updates["rooms/" + roomCode + "/moveType"] = replay.state.moveType || null;
+        updates["rooms/" + roomCode + "/pendingRemovals"] = replay.state.pendingRemovals || null;
+        // №23 fix (round 9, review point 2): СВЕЖИЙ ServerValue.TIMESTAMP —
+        // РЕАЛЬНОЕ время материализации, не historical event.ts. Пишется
+        // РОВНО один раз для ДАННОГО хода (когда boardSeq именно СЕЙЧАС
+        // продвигается) — повторные вызовы (repair/idempotent retry) на
+        // ТОМ ЖЕ логе увидят currentBoardSeq >= lastTurnSeqNum и НЕ войдут
+        // в этот блок вовсе, так что turnStartedAt НЕ сдвигается повторно
+        // (Round 5 anti-abuse свойство сохранено), а игрок не теряет время
+        // из-за задержки МЕЖДУ commit события и УСПЕШНОЙ материализацией.
+        updates["rooms/" + roomCode + "/turnStartedAt"] = serverTimestamp();
+    }
+
+    if (replay.terminalOutcome) {
+        updates["rooms/" + roomCode + "/winner"] = replay.terminalOutcome.winner;
+        updates["rooms/" + roomCode + "/winReason"] = replay.terminalOutcome.winReason;
+        updates["rooms/" + roomCode + "/status"] = "finished";
+    }
+
+    try {
+        await dbPatchRoot(env, deps, token, updates);
+    } catch (error) {
+        if (!isPermissionDeniedError(error)) throw error;
+        // Permission denied МОЖЕТ означать "кто-то уже продвинул projection
+        // дальше" (безопасный no-op) — но может означать и настоящий баг
+        // (неверный matchId, испорченная card, реальная Rules-ошибка).
+        // Не доверяем самому факту 401/403 — перечитываем ratedReplay и
+        // подтверждаем ИМЕННО ожидаемый инвариант (включая boardSeq —
+        // review point 1 — не только acceptedSeq), прежде чем считать это
+        // безопасным no-op.
+        const current = await dbGet(env, deps, token, "rooms/" + roomCode + "/ratedReplay");
+        const currentSeq = current && typeof current.acceptedSeq === "number" ? current.acceptedSeq : -1;
+        const currentMatchIdCheck = current && current.matchId;
+        const currentBoardSeqCheck = current && typeof current.boardSeq === "number" ? current.boardSeq : -1;
+        const boardRequirementMet = lastTurnSeqNum <= currentBoardSeqCheck;
+        if (currentMatchIdCheck !== matchId || currentSeq < latestSeqNum || !boardRequirementMet) {
+            throw new Error("projection_sync_denied_unexpected");
+        }
+        // Подтверждено: room действительно уже на этом или более позднем
+        // seq той же generation, И board уже материализована минимум до
+        // lastTurnSeqNum — реальный, ожидаемый no-op.
+    }
+}
+
+function isPermissionDeniedError(error) {
+    // dbPatchRoot() всегда бросает Error("db_write_failed") с .status =
+    // исходный HTTP-код; текст message никогда не содержит причину, поэтому
+    // единственный надёжный сигнал — HTTP-статус, который RTDB REST API
+    // возвращает при отклонении записи Rules (401 или 403 в зависимости от
+    // конкретного случая).
+    return !!(error && (error.status === 401 || error.status === 403));
+}
+
+export async function verifiedReplayOutcome(env, deps, token, matchId, card) {
+    const list = await fetchAllEvents(env, deps, token, matchId);
+    const replay = replayEvents(list, card);
+    if (!replay.terminal || !replay.terminalOutcome) throw new Error("match_not_finished");
+    return replay.terminalOutcome.winner;
+}
 
 let cachedServerToken = null;
 
@@ -478,11 +994,24 @@ async function finalizePointer(env, deps, token, roomCode, matchId, card) {
   // receipt path; without the full snapshot they fall back to direct stats and
   // online_<...> идентификаторы, несовместимые с расчётом на сервере.
   const by = cardByColor(card);
-  await dbPatchRoot(env, deps, token, {
+  const updates = {
     ["rooms/" + roomCode + "/ratedMatchId"]: matchId,
     ["rooms/" + roomCode + "/ratingsAtStart/light"]: card.participants[by.light].ratingAtJoin,
     ["rooms/" + roomCode + "/ratingsAtStart/dark"]: card.participants[by.dark].ratingAtJoin
-  });
+  };
+  // №23 fix (round 9, уточнено в round 10): finalizePointer() вызывается
+  // БЕЗУСЛОВНО при КАЖДОМ /rated/join, включая idempotent retry для УЖЕ
+  // установленной, ongoing generation (reconnect и т.п.) — найдено на
+  // review. Сбрасываем leftover ratedReplay ТОЛЬКО когда ratedMatchId
+  // РЕАЛЬНО меняется (genuine новая generation — реванш/первый join);
+  // если это retry той же самой generation, ratedReplay уже может нести
+  // РЕАЛЬНЫЙ, полезный прогресс партии (acceptedSeq/boardSeq) — сброс его
+  // здесь был бы чистой тратой (следующий syncProjection всё равно
+  // восстановил бы то же самое), а не просто "безопасным no-op".
+  if (latestRoom.ratedMatchId !== matchId) {
+    updates["rooms/" + roomCode + "/ratedReplay"] = null;
+  }
+  await dbPatchRoot(env, deps, token, updates);
 }
 
 export async function joinRatedMatch(env, deps, callerUid, roomCode) {
@@ -520,6 +1049,7 @@ export async function joinRatedMatch(env, deps, callerUid, roomCode) {
     roomCode,
     createdAt: room.createdAt,
     matchNumber: verdict.matchNumber,
+    replayVersion: 1, // №23: Worker-owned migration marker, client-unspoofable (create-only card)
     participants: {
       [lightId]: { color: "light", ratingAtJoin: sl.rating, name: safeName(room.players.light.name, lightId) },
       [darkId]: { color: "dark", ratingAtJoin: sd.rating, name: safeName(room.players.dark.name, darkId) }
@@ -629,22 +1159,72 @@ export async function settleMatch(env, deps, callerUid, roomCode, knownMatchId) 
   const token = await getServerIdToken(env, deps);
   const room = await dbGet(env, deps, token, "rooms/" + roomCode);
 
+  let matchId, card;
   if (!room) {
     if (typeof knownMatchId !== "string" || !knownMatchId) throw new Error("room_not_found");
-    return await settleFromReceiptWithoutRoom(env, deps, token, knownMatchId, callerUid);
+    matchId = knownMatchId;
+    card = await dbGet(env, deps, token, "matches/" + matchId);
+    if (!card || !card.participants) throw new Error("match_not_registered");
+    if (!Object.prototype.hasOwnProperty.call(card.participants, callerUid)) throw new Error("not_a_participant");
+    if (!(card.replayVersion >= 1)) {
+      // Legacy (pre-№23) generation без protected log и без живой room:
+      // независимо проверить исход нечем — доверяем ТОЛЬКО уже
+      // существующему Worker-receipt (без изменений относительно до-№23
+      // поведения).
+      return await settleFromReceiptWithoutRoom(env, deps, token, matchId, callerUid);
+    }
+    // №23: room удалена ДО первого settlement, но protected log и card
+    // пережили cleanup — ровно ради этого лог физически вынесен из
+    // rooms/$room (§14 архитектуры). Первое settlement всё ещё возможно
+    // исключительно из card+ratedEvents, без какого-либо обращения к room
+    // ниже по функции.
+    //
+    // №23 fix (round 11, review Point 2): найдено на review — БЕЗ этой
+    // проверки knownMatchId мог бы указывать на СТАРУЮ, УЖЕ СУПЕРСЕДНУТУЮ
+    // generation (реванш случился, либо матч закончился technical/unrated
+    // и НИКОГДА не settle'ился, а комнату потом удалили или она успела
+    // уйти на реванш) — card остаётся валидным навсегда (immutable), и
+    // без явной проверки против matchIndex (который переживает удаление
+    // room — отдельный top-level узел) settlement мог бы конвертировать
+    // artificial/technical исход в настоящий Elo. matchIndex ВСЕГДА
+    // отражает САМУЮ ПОСЛЕДНЮЮ зарегистрированную generation для этого
+    // roomCode, независимо от того, жива ли сама room.
+    const index = await dbGet(env, deps, token, "matchIndex/" + roomCode);
+    if (!index || index.matchId !== matchId) {
+      throw new Error("stale_generation");
+    }
+  } else {
+    matchId = room.ratedMatchId;
+    if (typeof matchId !== "string" || !matchId) throw new Error("match_not_registered");
+    card = await dbGet(env, deps, token, "matches/" + matchId);
+    if (!card) throw new Error("match_not_registered");
+    if (!sameGeneration(card, roomCode, room)) throw new Error("stale_generation");
+    if (!cardMatchesRoomPlayers(card, room)) throw new Error("card_mismatch");
+    if (!Object.prototype.hasOwnProperty.call(card.participants || {}, callerUid)) throw new Error("not_a_participant");
+    // №23 fix (round 7): "room.status" — participant-controlled/потенциально
+    // stale UX-projection, а НЕ Elo evidence. Для replayVersion>=1 protected
+    // log уже authoritative: verifiedReplayOutcome() ниже сам определяет,
+    // завершён ли матч (и корректно бросает match_not_finished, если нет).
+    // Гейтить settlement по room.status ЗДЕСЬ означало бы, что participant
+    // (или просто ещё не отремонтированная projection после сбоя
+    // syncProjection) мог бы veto'ить server-verified Elo — найдено на
+    // review. Для legacy (без replayVersion) поведение не меняется: там
+    // room.status/winner — единственный доступный источник истины.
+    if (!(card.replayVersion >= 1) && room.status !== "finished") throw new Error("match_not_finished");
   }
 
-  const matchId = room.ratedMatchId;
-  if (typeof matchId !== "string" || !matchId) throw new Error("match_not_registered");
-  const card = await dbGet(env, deps, token, "matches/" + matchId);
-  if (!card) throw new Error("match_not_registered");
-  if (!sameGeneration(card, roomCode, room)) throw new Error("stale_generation");
-  if (!cardMatchesRoomPlayers(card, room)) throw new Error("card_mismatch");
-  if (!Object.prototype.hasOwnProperty.call(card.participants || {}, callerUid)) throw new Error("not_a_participant");
-
-  if (room.status !== "finished") throw new Error("match_not_finished");
-  const result = roomOutcome(room);
-  if (!result) throw new Error("match_not_finished");
+  let result;
+  if (card.replayVersion >= 1) {
+    // №23: room.winner/room.result НИКОГДА не Elo truth для replayVersion>=1.
+    // Technical result (timeout/disconnect) не логируется как protected event,
+    // поэтому verifiedReplayOutcome для такого матча корректно бросает
+    // match_not_finished — fail-closed unrated, а не молчаливый обход через
+    // room.result. Это следствие архитектуры, не отдельная спец-ветка.
+    result = await verifiedReplayOutcome(env, deps, token, matchId, card);
+  } else {
+    result = roomOutcome(room); // room существует гарантированно в этой ветке (legacy room-missing уже вернулся выше)
+    if (!result) throw new Error("match_not_finished");
+  }
 
   let existing = await dbGet(env, deps, token, "eloMatches/" + matchId);
   if (existing) {
@@ -1036,7 +1616,16 @@ function settlementPublicError(error) {
     "stale_generation", "match_not_registered", "match_not_rated",
     "not_a_participant", "match_not_finished", "card_mismatch",
     "receipt_mismatch", "nothing_to_resume", "legacy_receipt_room_missing",
-    "stats_init_conflict"
+    "stats_init_conflict",
+    // №23: protected event log / replay errors
+    "wrong_actor_turn", "illegal_segment", "incomplete_chain",
+    "extra_landing_after_completion", "match_already_terminal",
+    "idempotency_conflict", "event_limit_exceeded", "invalid_request_id",
+    "invalid_event_type", "invalid_path", "invalid_offer_seq",
+    "stale_or_missing_offer", "self_accept_rejected", "stale_offer",
+    "event_log_corrupt", "append_conflict_retry_exhausted",
+    "unknown_event_type", "match_id_invalid", "projection_sync_denied_unexpected",
+    "draw_action_limit_exceeded"
   ]);
   return allowed.has(code) ? code : "settlement_failed";
 }
@@ -1088,6 +1677,25 @@ async function handleSettlement(request, env, url) {
       const result = await settleMatch(env, settlementDeps(), callerUid, roomCode, knownMatchId || null);
       return jsonSettlementResponse(request, env, 200, { ok: true, ...result });
     }
+    if (url.pathname === "/rated/event") {
+      const matchId = body && body.matchId;
+      if (!validFirebasePathAtom(matchId, 149)) {
+        return jsonSettlementResponse(request, env, 400, { ok: false, error: "match_id_invalid" });
+      }
+      const token = await getServerIdToken(env, settlementDeps());
+      const card = await dbGet(env, settlementDeps(), token, "matches/" + matchId);
+      if (!card || card.roomCode !== roomCode) {
+        return jsonSettlementResponse(request, env, 409, { ok: false, error: "match_not_registered" });
+      }
+      const claim = {
+        requestId: body && body.requestId,
+        type: body && body.type,
+        path: body && body.path,
+        offerSeq: body && body.offerSeq
+      };
+      const result = await commitRatedEvent(env, settlementDeps(), token, matchId, card, callerUid, claim);
+      return jsonSettlementResponse(request, env, 200, { ok: true, ...result });
+    }
     return jsonSettlementResponse(request, env, 404, { ok: false, error: "not_found" });
   } catch (error) {
     const publicCode = settlementPublicError(error);
@@ -1113,7 +1721,7 @@ export default {
       return jsonResponse(request, env, 200, { ok: true });
     }
 
-    if (request.method === "POST" && (url.pathname === "/rated/join" || url.pathname === "/rated/settle")) {
+    if (request.method === "POST" && (url.pathname === "/rated/join" || url.pathname === "/rated/settle" || url.pathname === "/rated/event")) {
       return handleSettlement(request, env, url);
     }
 

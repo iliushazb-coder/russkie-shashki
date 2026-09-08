@@ -11,6 +11,7 @@ function grab(name){
   for(let i=brace;i<SRC.length;i++){
     const ch=SRC[i];
     if(str){ if(esc){esc=false;continue;} if(ch==='\\'){esc=true;continue;} if(ch===str)str=null; continue; }
+    if(ch==='/' && SRC[i+1]==='/'){ const nl=SRC.indexOf('\n', i); i=(nl===-1?SRC.length:nl); continue; }
     if(ch==='"'||ch==="'"||ch==='`'){str=ch;continue;}
     if(ch==='{') depth++; else if(ch==='}' && --depth===0) return SRC.slice(start,i+1);
   }

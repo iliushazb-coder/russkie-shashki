@@ -95,8 +95,8 @@ console.log('=== E. Worker импортирует ИМЕННО "../shared/game-e
     /import\s+["']\.\.\/shared\/game-engine\.js["'];/.test(WORKER_SRC));
   check('E.2 fail-fast invariant на globalThis.RussianCheckersEngine.attemptMove',
     /globalThis\.RussianCheckersEngine[\s\S]{0,80}attemptMove[\s\S]{0,40}function/.test(WORKER_SRC));
-  check('E.3 Worker НЕ вызывает engine функционально (нет const {..} = ... деструктуринга)',
-    !/const\s*\{[^}]*\}\s*=\s*globalThis\.RussianCheckersEngine/.test(WORKER_SRC));
+  check('E.3 Worker ИСПОЛЬЗУЕТ engine функционально (№23 закономерно меняет №22-era инвариант "no premature functional use" — destructuring теперь ожидаем)',
+    /const\s*\{[^}]*\}\s*=\s*globalThis\.RussianCheckersEngine/.test(WORKER_SRC));
   check('E.4 import — top-level statement (колонка 0), не внутри какого-либо handler/функции', (function () {
     return /^import "\.\.\/shared\/game-engine\.js";$/m.test(WORKER_SRC);
   })());
