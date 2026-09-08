@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   exact-rules:
@@ -44,7 +44,7 @@ jobs:
           git add -A
           git diff --cached --check
           git reset --soft "$BASE"
-          git commit -m "ci: reconstruct exact n23 v17"
+          git commit -m "feat: authoritative rated replay and protected event log (#23)"
           echo "HEAD=$(git rev-parse HEAD)"
           echo "PARENT=$(git rev-parse HEAD^)"
           echo "TREE=$(git rev-parse HEAD^{tree})"
@@ -68,3 +68,10 @@ jobs:
 
       - name: Firebase Rules Emulator tests
         run: npm run test:rules
+
+      - name: Publish exact candidate branch
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD^)" = "7d48c75371bda0245ab63c012d578c78d592e4fd"
+          test "$(git rev-parse HEAD^{tree})" = "d7fe3118b93083e5fe3b2f5f0c23970c5906bede"
+          git push --force origin HEAD:refs/heads/publish/n23-v17-exact
