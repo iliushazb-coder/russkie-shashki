@@ -615,21 +615,39 @@ const APPCHECK_TOKEN_EXCHANGE_AUD =
 
 // Пауза после неудачи: постоянная ошибка настройки не должна порождать
 // повторный сетевой обмен на КАЖДОЙ операции с базой.
-const APPCHECK_FAIL_COOLDOWN_MS = 60000;
+// №27: bounded exponential backoff вместо грубой фиксированной паузы.
+// MIN — задержка после первой одиночной неудачи (быстрее прежних 60с для
+// настоящего одноразового сбоя); рост ×2 за каждую ПОСЛЕДОВАТЕЛЬНУЮ
+// неудачу; MAX — тот же потолок, что и прежний фиксированный cooldown, так
+// что худший случай (устойчивый сбой) не хуже production-поведения до
+// №27. Пауза как явление не убирается вовсе — MIN>0 и MAX>0 всегда.
+const APPCHECK_BACKOFF_MIN_MS = 1000;
+const APPCHECK_BACKOFF_MAX_MS = 60000;
 
 let cachedAccessToken = null;     // { token, expiresAtMs }
 let cachedAppCheckToken = null;   // { token, expiresAtMs }
 let appCheckFailUntilMs = 0;
 let appCheckLastError = null;
+// №27: счётчик ПОСЛЕДОВАТЕЛЬНЫХ неудач для экспоненциального роста задержки.
+// "Последовательная" здесь означает "зафиксированная ПОСЛЕ истечения
+// предыдущего backoff-окна" — см. appCheckLog() ниже: пока now всё ещё
+// внутри уже активного окна, счётчик НЕ растёт (иначе несколько
+// конкурентных вызовов getAppCheckToken(), успевших стартовать ДО того как
+// окно появилось, но упавших ПОЧТИ одновременно, накрутили бы несколько
+// ступеней backoff за один и тот же логический outage — thundering herd
+// без какой-либо явной single-flight-координации между ними).
+let appCheckFailureCount = 0;
 
 // №26: экспортирован исключительно для сброса module-level кэша между
 // тестами — тот же паттерн, что уже принят для resetServerTokenCache().
-// Поведение самой функции не менялось.
+// Поведение самой функции не менялось (кроме №27: сбрасывает также новый
+// appCheckFailureCount).
 export function resetAppCheckCache() {
   cachedAccessToken = null;
   cachedAppCheckToken = null;
   appCheckFailUntilMs = 0;
   appCheckLastError = null;
+  appCheckFailureCount = 0;
 }
 
 function isTokenFresh(cache, nowMs) {
@@ -648,7 +666,24 @@ function appCheckLog(code, status, nowMs) {
     "oauth_malformed", "exchange_failed", "exchange_malformed", "sign_failed"];
   const safe = allowed.indexOf(code) !== -1 ? code : "unknown";
   appCheckLastError = safe;
-  if (typeof nowMs === "number") appCheckFailUntilMs = nowMs + APPCHECK_FAIL_COOLDOWN_MS;
+  if (typeof nowMs === "number") {
+    if (nowMs < appCheckFailUntilMs) {
+      // №27: уже внутри активного backoff-окна от РАНЕЕ зафиксированной
+      // неудачи -- это ещё один симптом ТОГО ЖЕ логического outage
+      // (в частности, конкурентный вызов getAppCheckToken(), стартовавший
+      // до появления окна, но упавший чуть позже другого). Диагностика
+      // (appCheckLastError выше) всё равно обновляется, но НЕ трогаем ни
+      // счётчик, ни само окно -- одна неудача не должна перескакивать
+      // несколько ступеней backoff и не должна продлевать уже идущее окно.
+    } else {
+      appCheckFailureCount += 1;
+      const delay = Math.min(
+        APPCHECK_BACKOFF_MIN_MS * Math.pow(2, appCheckFailureCount - 1),
+        APPCHECK_BACKOFF_MAX_MS
+      );
+      appCheckFailUntilMs = nowMs + delay;
+    }
+  }
   try {
     const prefix = (safe.indexOf("oauth") === 0) ? "OAUTH_DEBUG" : "APPCHECK_DEBUG";
     let line = prefix + " error=" + safe;
@@ -772,6 +807,7 @@ async function getAppCheckToken(env, deps) {
     cachedAppCheckToken = { token: data.token, expiresAtMs: now + ttlSec * 1000 };
     appCheckLastError = null;
     appCheckFailUntilMs = 0;
+    appCheckFailureCount = 0; // №27: точный reset backoff-ступени после успешного получения token
     return cachedAppCheckToken.token;
   } catch (e) {
     appCheckLog("sign_failed", null, now);
