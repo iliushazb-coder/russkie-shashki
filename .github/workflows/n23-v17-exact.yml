@@ -69,9 +69,13 @@ jobs:
       - name: Firebase Rules Emulator tests
         run: npm run test:rules
 
-      - name: Publish exact candidate branch
+      - name: Publish transport candidate branch
         shell: bash
         run: |
-          test "$(git rev-parse HEAD^)" = "7d48c75371bda0245ab63c012d578c78d592e4fd"
+          BASE=7d48c75371bda0245ab63c012d578c78d592e4fd
+          test "$(git rev-parse HEAD^)" = "$BASE"
           test "$(git rev-parse HEAD^{tree})" = "d7fe3118b93083e5fe3b2f5f0c23970c5906bede"
-          git push --force origin HEAD:refs/heads/publish/n23-v17-exact
+          git checkout "$BASE" -- .github/workflows/backend.yml
+          git add .github/workflows/backend.yml
+          git commit --amend --no-edit
+          git push --force origin HEAD:refs/heads/publish/n23-v17-transport
