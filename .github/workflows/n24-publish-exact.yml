@@ -1,0 +1,34 @@
+name: n24-publish-exact
+
+on:
+  push:
+    branches:
+      - ci-n24-publish
+
+permissions:
+  contents: write
+
+jobs:
+  build-exact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp .n24-final.patch /tmp/n24-final.patch
+          git reset --hard 351295d40844869b60615fef9cc7ddad6fc52cc6
+          git am /tmp/n24-final.patch
+          test "$(git rev-parse HEAD^)" = "351295d40844869b60615fef9cc7ddad6fc52cc6"
+          test "$(git rev-parse HEAD^{tree})" = "1a6e92a8e59d5c996b1db961a831e27db9dc8c5e"
+          node --check script.js
+          npm test
+          git diff --check HEAD^ HEAD
+      - name: Push transport candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/publish/n24-final-transport --force
