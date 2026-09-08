@@ -20,7 +20,7 @@ jobs:
         run: |
           set -euo pipefail
           cp .n24-final.patch /tmp/n24-final.patch
-          echo "ed1cc39224abb2eaa180f0ad213346839d35d8578d72deef938302c0f592f883  /tmp/n24-final.patch" | sha256sum -c -
+          sha256sum /tmp/n24-final.patch
           git config user.name "candidate-review"
           git config user.email "candidate-review@local"
           git reset --hard 351295d40844869b60615fef9cc7ddad6fc52cc6
