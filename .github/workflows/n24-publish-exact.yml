@@ -19,7 +19,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .n24carrier/part*.b64 > /tmp/n24.patch.b64
+          cat .n24carrier/part*.b64 | tr -d '[:space:]' > /tmp/n24.patch.b64
           base64 -d /tmp/n24.patch.b64 > /tmp/n24-final.patch
           echo "ed1cc39224abb2eaa180f0ad213346839d35d8578d72deef938302c0f592f883  /tmp/n24-final.patch" | sha256sum -c -
           git config user.name "candidate-review"
