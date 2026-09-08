@@ -375,6 +375,7 @@ const translations = {
         err_draw_failed: "Не удалось принять ничью. Возможно, игра уже завершена.",
         err_draw_connection: "Ошибка соединения при принятии ничьей.",
         err_rematch_failed: "Не удалось начать реванш. Возможно, потеряно соединение.",
+        err_room_create_failed: "Не удалось создать комнату. Проверьте соединение и попробуйте снова.",
         loading: "Загрузка...",
         lobby_empty: "Пока никто не играет",
         btn_back_bot: "👈 Назад",
@@ -506,6 +507,7 @@ const translations = {
         err_draw_failed: "Failed to accept draw. The game might be over.",
         err_draw_connection: "Connection error during draw acceptance.",
         err_rematch_failed: "Failed to start rematch. Connection might be lost.",
+        err_room_create_failed: "Failed to create the room. Check your connection and try again.",
         loading: "Loading...",
         lobby_empty: "Nobody is playing right now",
         btn_back_bot: "👈 Back",
@@ -637,6 +639,7 @@ const translations = {
         err_draw_failed: "Impossibile accettare il pareggio. La partita potrebbe essere finita.",
         err_draw_connection: "Errore di connessione durante il pareggio.",
         err_rematch_failed: "Impossibile avviare la rivincita. Connessione persa.",
+        err_room_create_failed: "Impossibile creare la stanza. Controlla la connessione e riprova.",
         loading: "Caricamento...",
         lobby_empty: "Nessuno sta giocando",
         btn_back_bot: "👈 Indietro",
@@ -4726,6 +4729,22 @@ function attemptOwnerHumanMove(fromRow, fromCol, toRow, toCol) {
         // Если abort — ничего не делаем: локальный currentState/selectedFrom
         // не менялись, listener (если что-то реально изменилось у другого
         // устройства) сам доставит актуальное состояние.
+    }).catch(function (error) {
+        // review fix (№24): раньше здесь не было .catch() вовсе — настоящая
+        // ошибка Firebase (не committed:false — тот случай обрабатывается
+        // ВЫШЕ, отдельно, внутри .then()) оставляла selectedFrom висеть на
+        // уже щёлкнутой клетке навсегда: подтверждения не было, сброса тоже,
+        // пользователь застревал с "залипшей" подсветкой. Тот же паттерн,
+        // что уже принят для симметричного пути хода бота
+        // (triggerOwnerSyncedBotMove -> commitBotMove: LOG, полагаемся на
+        // listener session'а для восстановления актуального состояния) —
+        // здесь дополнительно сбрасываем ИМЕННО selectedFrom (тем же
+        // updateSelectionDom, что и в success-ветке выше), поскольку это
+        // единственный локальный UI-концепт, которым управляет эта функция.
+        console.error("Owner human move (synced) failed:", error);
+        const oldSel = selectedFrom;
+        selectedFrom = null;
+        updateSelectionDom(oldSel, null);
     });
 }
 
@@ -5244,6 +5263,12 @@ function loadActiveRooms() {
                             e.stopPropagation();
                             database.ref("users/" + myTelegramId + "/rooms/" + item.code).remove().then(function () {
                                 loadActiveRooms();
+                            }).catch(function (error) {
+                                // №24: раньше без .catch() — при отказе клик "✕" не
+                                // давал никакой обратной связи, список молча не
+                                // обновлялся. LOG-only: список — не игровое
+                                // состояние, повторный клик решает то же самое.
+                                console.log("Remove from list failed:", error && error.message);
                             });
                         });
 
@@ -5269,77 +5294,190 @@ function createOnlineRoom() {
     // Если у меня уже была своя незавершённая комната ожидания (например, я
     // вышел и нажал "Играть онлайн" ещё раз) — сначала удаляем старую,
     // чтобы не копились "призраки" вроде "Илюша ждёт соперника" по пять раз.
+    // Независимо от activeMatch-preflight ниже (другой путь в RTDB).
     if (myPendingOnlineRoom) {
         database.ref("rooms/" + myPendingOnlineRoom).remove();
         database.ref("users/" + myTelegramId + "/rooms/" + myPendingOnlineRoom).remove();
         myPendingOnlineRoom = null;
     }
 
-    roomCode = generateRoomCode();
-    myColor = "light";
-    isOnlineGame = true;
-    isSpectator = false;
-
-    const initialState = {
-        status: "waiting",
-        turn: "light",
-        mustContinueFrom: null,
-        capturedDark: 0,
-        capturedLight: 0,
-        moveCount: 0,
-        matchNumber: 0,
-        kingOnlyStreak: 0,
-        noProgressStreak: 0,
-        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
-        longRoadAttacker: null,
-        longRoadStreak: 0,
-        lastMove: null,
-        lastMovePath: null,
-        lastCapturedSquares: null,
-        moveType: null,
-        pieces: createInitialPieces(),
-        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
-        timeControlSeconds: 0,
-        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
-        winner: null,
-        winReason: null,
-        // ELO: стабильная метка создания комнаты. Пишется РОВНО один раз,
-        // не трогается ни reconnect'ом, ни реваншем — входит в matchId,
-        // чтобы повторно выданный через месяцы тот же roomCode не столкнулся
-        // со старым receipt.
-        createdAt: firebase.database.ServerValue.TIMESTAMP,
-        groupId: GROUP_ID
-    };
-
-    database.ref("rooms/" + roomCode).set(initialState).then(function () {
+    // review fix (preflight clear, критичная гонка): ДО генерации нового
+    // roomCode, ДО rooms/{newCode}.set() и ДО подписки на listener'ы
+    // обязательно ДОЖИДАЕМСЯ успешного удаления любого leftover
+    // users/<uid>/activeMatch. Пока новая комната ещё НЕ создана — joiner
+    // физически не может узнать её код (единственный путь узнать код —
+    // showGroupLobby(), который читает rooms/), значит валидного НОВОГО
+    // activeMatch для неё сейчас существовать не может: любое значение,
+    // увиденное СЕЙЧАС, гарантированно leftover от прошлой сессии (в т.ч.
+    // если post-transition remove ниже когда-то отклонился или код до него
+    // не дошёл вовсе — краш/force-quit). Если preflight сам отклонится —
+    // ничего из state ниже ЕЩЁ не тронуто (не нужно ничего откатывать в
+    // буквальном смысле), просто не продолжаем.
+    database.ref("users/" + myTelegramId + "/activeMatch").remove().then(function () {
         if (!canUseFirebase()) return;
-        myPendingOnlineRoom = roomCode;
 
-        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
-            opponentName: "Ожидание соперника...",
-            myColor: "light"
-        });
-        setupPresence();
+        roomCode = generateRoomCode();
+        myColor = "light";
+        isOnlineGame = true;
+        isSpectator = false;
 
-        // Слушаем сигнал "тебя нашли" — сработает, когда кто-то нажмёт "Присоединиться"
-        activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
-        activeMatchRef.on("value", function (snapshot) {
-            const matchedRoomCode = snapshot.val();
-            if (matchedRoomCode) {
+        const initialState = {
+            status: "waiting",
+            turn: "light",
+            mustContinueFrom: null,
+            capturedDark: 0,
+            capturedLight: 0,
+            moveCount: 0,
+            matchNumber: 0,
+            kingOnlyStreak: 0,
+            noProgressStreak: 0,
+            positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+            longRoadAttacker: null,
+            longRoadStreak: 0,
+            lastMove: null,
+            lastMovePath: null,
+            lastCapturedSquares: null,
+            moveType: null,
+            pieces: createInitialPieces(),
+            players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+            timeControlSeconds: 0,
+            turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
+            winner: null,
+            winReason: null,
+            // ELO: стабильная метка создания комнаты. Пишется РОВНО один раз,
+            // не трогается ни reconnect'ом, ни реваншем — входит в matchId,
+            // чтобы повторно выданный через месяцы тот же roomCode не столкнулся
+            // со старым receipt.
+            createdAt: firebase.database.ServerValue.TIMESTAMP,
+            groupId: GROUP_ID
+        };
+
+        return database.ref("rooms/" + roomCode).set(initialState).then(function () {
+            if (!canUseFirebase()) return;
+            myPendingOnlineRoom = roomCode;
+
+            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+                opponentName: "Ожидание соперника...",
+                myColor: "light"
+            });
+            setupPresence();
+
+            // №24 review fix: activeMatch раньше был ЕДИНСТВЕННЫМ сигналом для
+            // creator'а — если users/<creator>/activeMatch.set() у joiner'а
+            // отклонялся, joiner всё равно входил в игру, а creator навсегда
+            // оставался в lobby (asymmetric join). guardedMatchTransition —
+            // общий exactly-once обработчик для ОБОИХ сигналов: какой бы ни
+            // сработал первым, снимает ОБА listener'а и переходит в игру ровно
+            // один раз; второй, опоздавший callback ничего не делает.
+            const myOwnRoomCode = roomCode;
+            let matchTransitionDone = false;
+            let roomStatusRef = null;
+            function guardedMatchTransition(targetRoomCode) {
+                if (matchTransitionDone) return;
+                // review fix: canUseFirebase() раньше проверялся ПОСЛЕ того, как
+                // matchTransitionDone уже становился true и оба listener'а уже
+                // снимались — если сигнал приходил в момент временной
+                // недоступности (auth/reconnect в процессе), переход навсегда
+                // прерывался: пометка "done" стояла, слушать было больше нечего,
+                // а startOnlineGame() так и не вызывался. Теперь при
+                // canUseFirebase()===false ничего необратимого не происходит —
+                // ни флаг, ни detach — так что следующее срабатывание ЛЮБОГО из
+                // двух listener'ов (Firebase переотправляет "value" при
+                // реконнекте, даже если сами данные не изменились) получает
+                // полноценный шанс завершить переход.
+                if (!canUseFirebase()) return;
+                matchTransitionDone = true;
                 activeMatchRef.off();
-                if (!canUseFirebase()) { activeMatchRef = null; return; }
-                activeMatchRef.remove();
+                roomStatusRef.off();
+                // review fix: post-transition cleanup — best-effort, bounded
+                // retry + LOG; переход в игру НИКОГДА не должен зависеть от
+                // его успеха (см. preflight-clear выше — именно он, а не этот
+                // .remove(), теперь гарантирует корректность БУДУЩЕЙ сессии).
+                //
+                // review fix (blocker): withBoundedRetry делает повторные
+                // попытки ПОЗЖЕ (через 500/2000ms), а activeMatchRef —
+                // mutable global, обнуляемый СРАЗУ ЖЕ ниже. Retry-замыкание,
+                // ссылавшееся на activeMatchRef напрямую, к моменту
+                // повторной попытки видело бы уже null и падало на
+                // null.remove(), а не реально повторяло запись на том же
+                // Firebase ref. Захватываем стабильную локальную ссылку ДО
+                // обнуления global — все попытки retry идут именно через неё.
+                const cleanupActiveMatchRef = activeMatchRef;
+                withBoundedRetry(function () { return cleanupActiveMatchRef.remove(); }, "activeMatch.remove()")
+                    .catch(function () {});
+                activeMatchRef = null;
+                roomStatusRef = null;
                 myPendingOnlineRoom = null;
-                roomCode = matchedRoomCode;
+                roomCode = targetRoomCode;
                 isOnlineGame = true;
                 pendingTimeControlSeconds = 0;
                 showScreen(gameScreen);
                 startOnlineGame();
             }
-        });
 
-        // Сразу показываем список "Кто играет?" — там видно и свою запись, и остальных
-        showGroupLobby();
+            // Слушаем сигнал "тебя нашли" — сработает, когда кто-то нажмёт "Присоединиться"
+            activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
+            activeMatchRef.on("value", function (snapshot) {
+                const matchedRoomCode = snapshot.val();
+                // review fix (blocker): preflight чистит ТЕКУЩЕЕ stale
+                // значение в момент создания комнаты, но не защищает от
+                // ПОЗДНЕЙ, задержанной/офлайн-очередной записи СТАРОГО
+                // activeMatch, долетевшей уже ПОСЛЕ создания новой комнаты —
+                // такое значение указывало бы на чужую/устаревшую партию.
+                // creator в этой функции всегда ждёт joiner'а именно в
+                // myOwnRoomCode, поэтому принимаем сигнал ТОЛЬКО если он на
+                // неё и ссылается; любой другой code игнорируем — rooms/
+                // {myOwnRoomCode}/status остаётся authoritative recovery
+                // путём независимо от этого.
+                if (matchedRoomCode === myOwnRoomCode) guardedMatchTransition(matchedRoomCode);
+            });
+
+            // Fallback (№24): слушаем СВОЮ ЖЕ комнату напрямую. joiner выставляет
+            // status:"active" через claimDarkSeatAndActivate() НЕЗАВИСИМО от
+            // activeMatch — этот сигнал доходит, даже если activeMatch.set() у
+            // joiner'а был отклонён. activeMatch как механизм НЕ убран — оставлен
+            // ради совместимости и как более быстрый путь в обычном случае.
+            roomStatusRef = database.ref("rooms/" + myOwnRoomCode + "/status");
+            roomStatusRef.on("value", function (snapshot) {
+                if (snapshot.val() === "active") guardedMatchTransition(myOwnRoomCode);
+            });
+
+            // Сразу показываем список "Кто играет?" — там видно и свою запись, и остальных
+            showGroupLobby();
+        }).catch(function (error) {
+            // rooms/<code>.set() reject: откатываем ТОЛЬКО то, что реально
+            // успело выставиться синхронно ДО этой записи (см. начало
+            // preflight-then выше); presence/activeMatchRef ещё не заведены
+            // на этом пути — их откатывать не нужно.
+            //
+            // review fix: canUseFirebase() ЗДЕСЬ проверялся ДО rollback и мог
+            // выйти раньше него — если к моменту catch canUseFirebase() уже
+            // false (например сессия сменилась), локальные флаги оставались
+            // указывать на несуществующую комнату. Rollback теперь безусловен;
+            // canUseFirebase() гейтит только показ модалки.
+            console.log("Room create failed:", error && error.message);
+            roomCode = null;
+            myColor = null;
+            isOnlineGame = false;
+            isSpectator = false;
+            if (canUseFirebase()) showInfoModal(t("err_room_create_failed"), false);
+        });
+    }).catch(function (error) {
+        // review fix: этот catch раньше был ОБЩИМ и для preflight-reject, и
+        // для rooms/<code>.set()-reject, и безусловно обнулял roomCode/
+        // myColor/isOnlineGame/isSpectator — комментарий утверждал, что это
+        // "honest no-op" для preflight-этапа, поскольку синхронное состояние
+        // якобы ещё не тронуто. Это верно ТОЛЬКО если оно было null/false ДО
+        // вызова createOnlineRoom() — если у ЭТИХ globals уже было какое-то
+        // значение (из любого предыдущего контекста), preflight-reject
+        // ложно ЗАТИРАЛ его, хотя по нашей же схеме до успешного preflight
+        // их вообще нельзя трогать. rooms/<code>.set()-reject обрабатывается
+        // ВНУТРЕННИМ catch выше (не долетает сюда — внутренний catch не
+        // прокидывает ошибку дальше), так что этот, внешний catch срабатывает
+        // ИСКЛЮЧИТЕЛЬНО на preflight-reject: LOG + USER ERROR, никаких
+        // присваиваний — состояние остаётся ровно таким, каким было до вызова.
+        console.log("Preflight activeMatch cleanup failed, room not created:", error && error.message);
+        if (canUseFirebase()) showInfoModal(t("err_room_create_failed"), false);
     });
 }
 
@@ -5445,6 +5583,20 @@ function createRoomAndShowWaiting() {
                 }, 1000);
             }
         });
+    }).catch(function (error) {
+        // №24: тот же класс дефекта, что в createOnlineRoom — см. комментарий
+        // там. Здесь ДО записи дополнительно вызваны detachRoomListener()/
+        // stopPresenceHeartbeat() (безопасно снять повторно нечего) и
+        // выставлен myPendingFriendRoomCode — откатываем и его.
+        //
+        // review fix: rollback безусловен (см. тот же комментарий в
+        // createOnlineRoom) — canUseFirebase() гейтит только модалку.
+        console.log("Room create failed:", error && error.message);
+        roomCode = null;
+        myPendingFriendRoomCode = null;
+        myColor = null;
+        isOnlineGame = false;
+        if (canUseFirebase()) showInfoModal(t("err_room_create_failed"), false);
     });
 }
 
@@ -6649,15 +6801,22 @@ function checkForInviteLink() {
             settled = true;
             clearTimeout(timeoutId);
 
+            // №24: LOG-only на reject — это только индекс лобби-списка
+            // (users/<uid>/rooms), партия ниже стартует безусловно и от
+            // успеха этих записей не зависит.
             database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
                 opponentName: creatorName,
                 myColor: "dark"
+            }).catch(function (error) {
+                console.log("User room index write failed:", error && error.message);
             });
 
             if (creatorId) {
                 database.ref("users/" + creatorId + "/rooms/" + roomCode).set({
                     opponentName: myTelegramName,
                     myColor: "light"
+                }).catch(function (error) {
+                    console.log("User room index write failed:", error && error.message);
                 });
             }
 
@@ -8710,13 +8869,24 @@ function joinGroupRoom(code) {
                 myPendingOnlineRoom = null;
             }
 
+            // №24: LOG-only на reject — те же основания, что в
+            // finishInviteSuccess выше: индекс лобби-списка, не игровое
+            // состояние; ниже игра стартует безусловно.
             database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
                 opponentName: creatorName,
                 myColor: "dark"
+            }).catch(function (error) {
+                console.log("User room index write failed:", error && error.message);
             });
             
-            // Отправляем сигнал создателю комнаты (если он ждал в матчмейкинге)
-            database.ref("users/" + creatorId + "/activeMatch").set(roomCode);
+            // Отправляем сигнал создателю комнаты (если он ждал в матчмейкинге).
+            // №24: LOG-only обоснован ИМЕННО тем, что у creator'а (см.
+            // createOnlineRoom) теперь есть fallback-listener на
+            // rooms/<code>/status — activeMatch больше не единственная точка
+            // отказа для входа creator'а в игру.
+            database.ref("users/" + creatorId + "/activeMatch").set(roomCode).catch(function (error) {
+                console.log("Active match signal write failed:", error && error.message);
+            });
 
             stopGroupLobbyListening();
             showScreen(gameScreen);
