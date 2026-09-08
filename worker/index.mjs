@@ -525,7 +525,9 @@ export async function syncProjection(env, deps, token, matchId, card) {
     }
 }
 
-function isPermissionDeniedError(error) {
+// №26: экспортирована для прямой проверки в тестах (что app_check_unavailable
+// не путается с настоящим Rules permission-denied). Поведение не менялось.
+export function isPermissionDeniedError(error) {
     // dbPatchRoot() всегда бросает Error("db_write_failed") с .status =
     // исходный HTTP-код; текст message никогда не содержит причину, поэтому
     // единственный надёжный сигнал — HTTP-статус, который RTDB REST API
@@ -620,7 +622,10 @@ let cachedAppCheckToken = null;   // { token, expiresAtMs }
 let appCheckFailUntilMs = 0;
 let appCheckLastError = null;
 
-function resetAppCheckCache() {
+// №26: экспортирован исключительно для сброса module-level кэша между
+// тестами — тот же паттерн, что уже принят для resetServerTokenCache().
+// Поведение самой функции не менялось.
+export function resetAppCheckCache() {
   cachedAccessToken = null;
   cachedAppCheckToken = null;
   appCheckFailUntilMs = 0;
@@ -774,10 +779,44 @@ async function getAppCheckToken(env, deps) {
   }
 }
 
+// №26: явный opt-in — обязательность App Check НИКОГДА не выводится из
+// FIREBASE_APP_ID или другого косвенного сигнала (namespace путался бы
+// "App Check намеренно не настроен для этого деплоя" с "настроен, но
+// временно недоступен"). Default = false (текущее поведение не меняется,
+// пока оператор явно не включит флаг). Одно точное значение "true"
+// (без учёта регистра) включает required-режим — любое другое значение,
+// включая отсутствие переменной, оставляет false.
+function isAppCheckRequired(env) {
+  return String(env && env.APP_CHECK_REQUIRED || "").toLowerCase() === "true";
+}
+
 async function dbHeaders(env, deps, extra) {
   const h = Object.assign({}, extra || {});
   const token = await getAppCheckToken(env, deps);
-  if (token) h["X-Firebase-AppCheck"] = token;
+  if (token) {
+    h["X-Firebase-AppCheck"] = token;
+    return h;
+  }
+  // №26 fail-closed: раньше здесь просто возвращались заголовки БЕЗ
+  // X-Firebase-AppCheck, и все 4 RTDB-helper'а (dbGet/dbGetWithEtag/
+  // dbPutIfMatch/dbPatchRoot) безусловно продолжали делать реальный
+  // deps.fetch() без какой-либо защиты App Check — единственная точка
+  // отказа для ВСЕХ Worker-RTDB-запросов разом. Если App Check обязателен
+  // (явный opt-in, см. isAppCheckRequired выше) — бросаем здесь, ДО
+  // возврата заголовков, а не молча уходим в сеть без защиты. Каждый из
+  // 4 helper'ов делает `await dbHeaders(...)` РАНЬШЕ своего собственного
+  // deps.fetch() — значит throw отсюда гарантированно останавливает
+  // запрос до того, как он физически уйдёт в RTDB.
+  //
+  // Намеренно НЕ выставляем .status на этой ошибке (и уж тем более не
+  // 401/403) — isPermissionDeniedError() проверяет ИСКЛЮЧИТЕЛЬНО
+  // error.status, и её собственная (тщательно спроектированная в №23)
+  // логика "уже ли догнали" рассчитана именно на настоящий Rules-отказ,
+  // а не на недоступность App Check — смешение привело бы к ложной
+  // повторной попытке repair-check, которая упрётся в ту же причину.
+  if (isAppCheckRequired(env)) {
+    throw new Error("app_check_unavailable");
+  }
   return h;
 }
 
@@ -1672,7 +1711,12 @@ function settlementPublicError(error) {
     "stale_or_missing_offer", "self_accept_rejected", "stale_offer",
     "event_log_corrupt", "append_conflict_retry_exhausted",
     "unknown_event_type", "match_id_invalid", "projection_sync_denied_unexpected",
-    "draw_action_limit_exceeded"
+    "draw_action_limit_exceeded",
+    // №26: App Check fail-closed — transient, клиент должен видеть именно
+    // этот код, а не generic "settlement_failed", чтобы корректно
+    // отличить его от terminal-ошибок (не входит ни в
+    // RATED_JOIN_TERMINAL_ERRORS, ни в RATED_ACTION_DEFINITIVE_ERRORS).
+    "app_check_unavailable"
   ]);
   return allowed.has(code) ? code : "settlement_failed";
 }

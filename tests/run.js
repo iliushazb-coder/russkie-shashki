@@ -58,6 +58,7 @@ const FILES = [
   ['BB.3 №23: Rules expression complexity budget (real-Emulator failure class guard)', 'rules-complexity-budget.test.js'],
   ['BB.4 №24 Step B: room-create reject handling (USER ERROR + rollback)', 'room-create-error-handling.test.js'],
   ['BB.5 №24: owner human move reject handling (LOG + UI/state recovery)', 'owner-human-move-error-handling.test.js'],
+  ['BB.6 №26: app_check_unavailable stays out of terminal/definitive allowlists', 'appcheck-error-not-terminal.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

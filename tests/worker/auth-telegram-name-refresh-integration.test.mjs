@@ -15,7 +15,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 
-import worker from "../../worker/index.mjs";
+import worker, { resetAppCheckCache } from "../../worker/index.mjs";
 
 const BOT_TOKEN = "123456:test-bot-token-for-integration-tests-only";
 
@@ -69,6 +69,20 @@ function installFetchMock(options) {
   const patchCalls = [];
   globalThis.fetch = async (url, opts) => {
     const u = String(url);
+    // №26: App Check machinery -- OAuth (для получения access token, нужного
+    // для самого exchange-запроса) и сам exchange у App Check. По умолчанию
+    // не задействуются вовсе (существующие №25-тесты не задают
+    // FIREBASE_APP_ID, поэтому isAppCheckRequired/getAppCheckToken туда даже
+    // не доходят); options.appCheckUnavailable явно валит именно exchange,
+    // чтобы genuinely воспроизвести "token получить не удалось", а не просто
+    // "не настроен".
+    if (u.indexOf("oauth2.googleapis.com") !== -1) {
+      return new Response(JSON.stringify({ access_token: "fake-access-token", expires_in: 3600 }), { status: 200 });
+    }
+    if (u.indexOf("firebaseappcheck.googleapis.com") !== -1) {
+      if (options.appCheckUnavailable) return new Response("{}", { status: 500 });
+      return new Response(JSON.stringify({ token: "fake-appcheck-token", ttl: "3600s" }), { status: 200 });
+    }
     if (u.indexOf("identitytoolkit.googleapis.com") !== -1) {
       if (options.identityFails) return new Response("{}", { status: 401 });
       return new Response(JSON.stringify({ idToken: "fake-server-id-token", expiresIn: 3600 }), { status: 200 });
@@ -166,6 +180,45 @@ test("the srv_settlement server id token is never present anywhere in the /auth/
     const body = JSON.parse(rawBody);
     assert.deepEqual(Object.keys(body).sort(), ["customToken", "name", "ok", "uid"].sort(), "response содержит только клиентские поля, ничего лишнего от srv_settlement");
     assert.notEqual(body.customToken, "fake-server-id-token");
+  } finally {
+    mock.restore();
+  }
+});
+
+// ===== №26: APP_CHECK_REQUIRED=true + App Check unavailable -- /auth/telegram остаётся успешным =====
+
+test("/auth/telegram: APP_CHECK_REQUIRED=true + App Check exchange genuinely unavailable -- still returns 200/ok:true/customToken, name refresh silently no-ops, no leak, no crash into the outer auth catch", async () => {
+  resetAppCheckCache(); // module-level кэш -- изоляция от других тестов в этом файле
+  const env = makeEnv({
+    APP_CHECK_REQUIRED: "true",
+    FIREBASE_APP_ID: "1:123456789012:web:abcdef0123456789abcdef" // валидный формат -- App Check реально пытается, не просто "not_configured"
+  });
+  const mock = installFetchMock({
+    seedStats: { tg_782: { rating: 1200, wins: 0, losses: 0, draws: 0, name: "Old" } },
+    appCheckUnavailable: true // exchange реально падает -- genuinely "получить не удалось", не просто отсутствие конфигурации
+  });
+  try {
+    const initData = buildValidInitData({ id: 782, first_name: "Fresh" }, BOT_TOKEN, Math.floor(Date.now() / 1000));
+    const res = await worker.fetch(makeRequest(initData), env);
+    const rawBody = await res.text();
+
+    // Основное требование: обычный успешный auth response, как будто
+    // App Check вообще ни при чём для клиента.
+    assert.equal(res.status, 200, "App Check failure не должен приводить к 401 -- refresh целиком best-effort, не влияет на внешний catch /auth/telegram");
+    const body = JSON.parse(rawBody);
+    assert.equal(body.ok, true);
+    assert.equal(typeof body.customToken, "string");
+    assert.ok(body.customToken.length > 0);
+    assert.equal(body.uid, "tg_782");
+    assert.equal(body.name, "Fresh");
+
+    // Никакой утечки -- ни srv_settlement id token, ни лишних полей.
+    assert.equal(rawBody.indexOf("fake-server-id-token"), -1, "srv_settlement id token не должен попасть в ответ клиенту даже в этом сценарии");
+    assert.deepEqual(Object.keys(body).sort(), ["customToken", "name", "ok", "uid"].sort(), "response не содержит ничего лишнего даже при App Check failure");
+
+    // Сам refresh реально не выполнился (RTDB PATCH не отправлялся) --
+    // App Check заблокировал именно RTDB-запрос, до него дело не дошло.
+    assert.equal(mock.patchCalls.length, 0, "name refresh должен был быть заблокирован App Check -- PATCH в RTDB не отправлялся вовсе");
   } finally {
     mock.restore();
   }
