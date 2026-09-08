@@ -828,6 +828,53 @@ export async function dbPatchRoot(env, deps, token, updates) {
   return true;
 }
 
+// №25 fix: держит leaderboard's stats/$uid/name синхронным с текущим
+// Telegram-именем. ensureStatsInitialized() (используется settlement'ом)
+// пишет name ТОЛЬКО при первом создании узла — при повторных settlement'ах
+// уже валидное имя больше никогда не трогается, и leaderboard навсегда
+// застревает на имени с первого рейтингового матча, даже если игрок сменил
+// его в Telegram.
+//
+// /auth/telegram уже криптографически проверяет initData на КАЖДОМ запуске
+// приложения и уже извлекает актуальное identity.name через
+// safeDisplayName() (Rules-совместимо: непусто, < 50 символов) — это
+// единственная точка, где сервер УЖЕ доверяет свежему имени без
+// дополнительной верификации, поэтому именно здесь и делается refresh, а
+// не отдельным механизмом.
+//
+// КРИТИЧНО (best-effort side effect, требование №25):
+// - refresh ТОЛЬКО существующего stats/$uid; отсутствующий узел не
+//   создаёт — инициализация остаётся исключительно за
+//   ensureStatsInitialized() (settlement flow), здесь узел не создаётся
+//   ни при каких обстоятельствах;
+// - при совпадении имени НЕ пишет вовсе (не лишняя запись на каждый
+//   запуск приложения);
+// - при различии — ЕДИНСТВЕННЫЙ targeted PATCH-путь
+//   "stats/<uid>/name" от srv_settlement; никакие другие
+//   stats-поля (rating/wins/losses/draws) физически не входят в payload,
+//   значит не могут быть задеты этим вызовом ни при каких условиях;
+// - ЛЮБАЯ ошибка на любом шаге (getServerIdToken/App Check/RTDB
+//   read/PATCH/Rules reject) ловится здесь целиком и только логируется —
+//   вызывающий /auth/telegram НИКОГДА не видит исключение отсюда и
+//   всегда возвращает обычный auth response с customToken, даже если
+//   refresh целиком провалился.
+// - srv_settlement id token существует и используется ИСКЛЮЧИТЕЛЬНО
+//   внутри этой функции (внутри Worker); он НИКОГДА не попадает в
+//   HTTP-ответ /auth/telegram и никак не расширяет права клиента —
+//   клиент получает customToken ДЛЯ СЕБЯ (identity.uid), не для
+//   srv_settlement.
+export async function refreshLeaderboardName(env, deps, uid, freshName) {
+  try {
+    const token = await getServerIdToken(env, deps);
+    const current = await dbGet(env, deps, token, "stats/" + uid);
+    if (!current || typeof current !== "object") return; // узла ещё нет — не создаём
+    if (current.name === freshName) return; // уже актуально — не пишем
+    await dbPatchRoot(env, deps, token, { ["stats/" + uid + "/name"]: freshName });
+  } catch (error) {
+    console.log("refreshLeaderboardName: best-effort refresh failed, ignoring", error && error.message);
+  }
+}
+
 function serverIncrement(delta) {
   return { ".sv": { increment: delta } };
 }
@@ -1765,6 +1812,14 @@ export default {
         env.FIREBASE_SERVICE_ACCOUNT_EMAIL,
         env.FIREBASE_SERVICE_ACCOUNT_PRIVATE_KEY
       );
+
+      // №25: best-effort side effect — см. полное обоснование у самой
+      // функции. Собственный try/catch внутри refreshLeaderboardName уже
+      // гарантирует, что она никогда не бросает исключение; await здесь
+      // просто ждёт её завершения (не важно, успешного или нет) перед
+      // ответом, не оборачивая её в дополнительный try/catch — она сама
+      // никогда не даёт ничего наружу.
+      await refreshLeaderboardName(env, settlementDeps(), identity.uid, identity.name);
 
       return jsonResponse(request, env, 200, {
         ok: true,

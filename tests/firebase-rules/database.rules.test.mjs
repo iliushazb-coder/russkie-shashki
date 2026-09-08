@@ -212,6 +212,46 @@ test("stats: unauthenticated write is denied", async () => {
   await assertFails(set(ref(databaseFor(), "stats/tg_1001"), stats()));
 });
 
+// ===== №25: targeted name-only refresh from srv_settlement =====
+
+test("stats: srv_settlement can apply a TARGETED name-only update on already-existing stats (leaderboard name refresh)", async () => {
+  await seed("stats/tg_1001", stats({ name: "OldName", rating: 1216, wins: 2, losses: 1, draws: 3 }));
+  await assertSucceeds(update(ref(databaseFor("srv_settlement"), "/"), {
+    "stats/tg_1001/name": "NewName"
+  }));
+  const after = await get(ref(databaseFor(), "stats/tg_1001"));
+  const val = after.val();
+  assert.equal(val.name, "NewName");
+  assert.equal(val.rating, 1216, "rating не должен измениться от targeted name-only записи");
+  assert.equal(val.wins, 2, "wins не должен измениться");
+  assert.equal(val.losses, 1, "losses не должен измениться");
+  assert.equal(val.draws, 3, "draws не должен измениться");
+});
+
+test("stats: an ordinary client uid CANNOT apply the same targeted name-only update (even to their own node)", async () => {
+  await seed("stats/tg_1001", stats({ name: "OldName" }));
+  await assertFails(update(ref(databaseFor("tg_1001"), "/"), {
+    "stats/tg_1001/name": "NewName"
+  }));
+});
+
+test("stats: safeDisplayName's own possible outputs (fallback 'Игрок', max-length-49 truncation, '@'+username) all pass name validation", async () => {
+  await seed("stats/tg_1001", stats({ name: "OldName" }));
+  const possibleOutputs = ["Игрок", "a".repeat(49), "@" + "b".repeat(47)];
+  for (const name of possibleOutputs) {
+    await assertSucceeds(update(ref(databaseFor("srv_settlement"), "/"), {
+      "stats/tg_1001/name": name
+    }));
+  }
+});
+
+test("stats: exactly 50 characters (one past safeDisplayName's own max of 49) is correctly DENIED by the Rules boundary itself", async () => {
+  await seed("stats/tg_1001", stats({ name: "OldName" }));
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    "stats/tg_1001/name": "c".repeat(50)
+  }));
+});
+
 test("stats: missing required fields are denied for settlement identity", async () => {
   await assertFails(set(
     ref(databaseFor("srv_settlement"), "stats/tg_1001"),
