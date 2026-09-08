@@ -1,0 +1,679 @@
+From 3b419944cb3e143836a393142004f7ea1aecf3ab Mon Sep 17 00:00:00 2001
+From: candidate-review <candidate-review@local>
+Date: Tue, 8 Sep 2026 10:46:58 +0000
+Subject: [PATCH] feat(#24): classify Firebase write errors -- LOG / RETRY /
+ USER ERROR / FIRE-AND-FORGET
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+MASTER PLAN item #24: 'Классифицировать Firebase write errors:
+gameplay/result, presence/reconnect, lifecycle/cleanup, cosmetic/
+reaction. Для каждой выбрать LOG / RETRY / USER ERROR / FIRE-AND-
+FORGET. committed:false не смешивать с network reject.'
+
+=== Step A: read-only survey ===
+
+Enumerated all 80 genuine Firebase RTDB write/transaction call sites
+in script.js (filtering out DOM .remove()/array.push() noise from a
+naive grep). Worker has no client-style RTDB writes in scope for this
+item -- its REST-based writes have their own, separately-audited
+error architecture from #23. Classified every site by category and
+current behavior; found the following concrete gaps.
+
+=== Step B: fixes ===
+
+1. createOnlineRoom / createRoomAndShowWaiting
+   - Room creation writes now have explicit USER ERROR handling.
+   - Local online-room state is rolled back on room creation reject.
+   - Preflight users/<uid>/activeMatch clear prevents stale values from
+     hijacking a future lobby session; room creation waits for it to
+     resolve, and its reject leaves pre-existing local state untouched.
+   - createOnlineRoom also listens to rooms/<code>/status as a fallback
+     so activeMatch is no longer a single point of failure.
+   - activeMatch/status signals share an exactly-once guarded transition.
+   - Only activeMatch values equal to the current room code are accepted;
+     delayed stale writes are ignored.
+   - Post-transition activeMatch cleanup is bounded-retry + LOG and uses
+     a stable captured ref, so retries do not hit a nulled global ref.
+
+2. loadActiveRooms + user room-index writes
+   - Missing rejects are LOG'd where the write is lifecycle/index only.
+   - Gameplay is not rolled back for best-effort index maintenance.
+
+3. attemptOwnerHumanMove
+   - Raw transaction reject is now caught and logged; selection/UI state
+     is reset without conflating network reject with committed:false.
+
+4. i18n
+   - Added err_room_create_failed in RU/EN/IT.
+
+=== Tests ===
+
+- tests/room-create-error-handling.test.js
+  Covers room-create reject/success, auth loss during catch, preflight
+  ordering/pending/reject/resolve, stale activeMatch, status fallback,
+  exactly-once races, listener cleanup, and real retry behavior.
+- tests/owner-human-move-error-handling.test.js
+  Covers transaction reject vs committed:false vs success for the synced
+  bot human-move path.
+- tests/run.js updated to include both suites.
+
+All existing tests remain green.
+---
+ script.js                                     | 280 ++++++++++---
+ tests/owner-human-move-error-handling.test.js |  97 +++++
+ tests/room-create-error-handling.test.js      | 544 ++++++++++++++++++++++++++
+ tests/run.js                                  |   2 +
+ 4 files changed, 868 insertions(+), 55 deletions(-)
+ create mode 100644 tests/owner-human-move-error-handling.test.js
+ create mode 100644 tests/room-create-error-handling.test.js
+
+diff --git a/script.js b/script.js
+index 290a35b..9f058d9 100644
+--- a/script.js
++++ b/script.js
+@@ -1145,6 +1145,9 @@ const translations = {
+             err_draw_connection: "Ошибка соединения. Попробуйте ещё раз.",
+             err_rematch_failed: "Не удалось начать реванш. Попробуйте ещё раз.",
++            err_room_create_failed: "Не удалось создать комнату. Проверьте соединение и попробуйте ещё раз.",
+             err_resync_failed: "Не удалось восстановить состояние партии. Попробуйте ещё раз.",
+             err_room_closed: "Комната закрыта или недоступна.",
+             err_join_failed: "Не удалось подключиться к комнате.",
+@@ -1310,6 +1313,9 @@ const translations = {
+             err_draw_connection: "Connection error. Please try again.",
+             err_rematch_failed: "Could not start the rematch. Please try again.",
++            err_room_create_failed: "Could not create the room. Check your connection and try again.",
+             err_resync_failed: "Could not restore the game state. Please try again.",
+             err_room_closed: "The room is closed or unavailable.",
+             err_join_failed: "Could not join the room.",
+@@ -1475,6 +1481,9 @@ const translations = {
+             err_draw_connection: "Errore di connessione. Riprova.",
+             err_rematch_failed: "Impossibile avviare la rivincita. Riprova.",
++            err_room_create_failed: "Impossibile creare la stanza. Controlla la connessione e riprova.",
+             err_resync_failed: "Impossibile ripristinare lo stato della partita. Riprova.",
+             err_room_closed: "La stanza è chiusa o non disponibile.",
+             err_join_failed: "Impossibile entrare nella stanza.",
+@@ -4704,14 +4713,20 @@ function attemptOwnerHumanMove(fromRow, fromCol, toRow, toCol) {
+         return applyHumanMoveViaSession(fromRow, fromCol, toRow, toCol);
+     }).then(function (result) {
+         if (!result || !result.committed) return;
+         selectedFrom = null;
+         updateSelectionDom();
++    }).catch(function (error) {
++        console.error("Synced bot human move failed", error);
++        selectedFrom = null;
++        updateSelectionDom();
+     });
+ }
+@@ -5199,6 +5214,9 @@ function loadActiveRooms() {
+                 removeBtn.onclick = function() {
+                     if (!canUseFirebase()) return;
+                     database.ref("users/" + myTelegramId + "/rooms/" + code).remove().then(loadActiveRooms)
++                        .catch(function(error) {
++                            console.error("Failed to remove room from lobby index", error);
++                        });
+                 };
+@@ -5262,91 +5280,171 @@ function createOnlineRoom() {
+     if (!canUseFirebase()) return;
+ 
+     if (myPendingOnlineRoom) {
+         database.ref("rooms/" + myPendingOnlineRoom).remove();
+         database.ref("users/" + myTelegramId + "/rooms/" + myPendingOnlineRoom).remove();
+         myPendingOnlineRoom = null;
+     }
+-
+-    roomCode = generateRoomCode();
+-    myColor = "light";
+-    isOnlineGame = true;
+-    isSpectator = false;
+-
+-    const initialState = {
+-        status: "waiting",
+-        turn: "light",
+-        mustContinueFrom: null,
+-        capturedDark: 0,
+-        capturedLight: 0,
+-        moveCount: 0,
+-        matchNumber: 0,
+-        kingOnlyStreak: 0,
+-        noProgressStreak: 0,
+-        positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
+-        longRoadAttacker: null,
+-        longRoadStreak: 0,
+-        lastMove: null,
+-        lastMovePath: null,
+-        lastCapturedSquares: null,
+-        moveType: null,
+-        pieces: createInitialPieces(),
+-        players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
+-        timeControlSeconds: 0,
+-        turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
+-        winner: null,
+-        winReason: null,
+-        // ELO: стабильная метка создания комнаты. Пишется РОВНО один раз,
+-        // не трогается ни reconnect'ом, ни реваншем — входит в matchId,
+-        // чтобы повторно выданный через месяцы тот же roomCode не столкнулся
+-        // со старым receipt.
+-        createdAt: firebase.database.ServerValue.TIMESTAMP,
+-        groupId: GROUP_ID
+-    };
+-
+-    database.ref("rooms/" + roomCode).set(initialState).then(function () {
+-        if (!canUseFirebase()) return;
+-        myPendingOnlineRoom = roomCode;
+-
+-        database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
+-            opponentName: "Ожидание соперника...",
+-            myColor: "light"
+-        });
+-        setupPresence();
+-
+-        // Слушаем сигнал "тебя нашли" — сработает, когда кто-то нажмёт "Присоединиться"
+-        activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
+-        activeMatchRef.on("value", function (snapshot) {
+-            const matchedRoomCode = snapshot.val();
+-            if (matchedRoomCode) {
+-                activeMatchRef.off();
+-                if (!canUseFirebase()) { activeMatchRef = null; return; }
+-                activeMatchRef.remove();
+-                myPendingOnlineRoom = null;
+-                roomCode = matchedRoomCode;
+-                isOnlineGame = true;
+-                pendingTimeControlSeconds = 0;
+-                showScreen(gameScreen);
+-                startOnlineGame();
+-            }
+-        });
+-
+-        // Сразу показываем список "Кто играет?" — там видно и свою запись, и остальных
+-        showGroupLobby();
+-    });
++    // №24: до публикации НОВОЙ комнаты гарантированно очищаем stale activeMatch.
++    // Пока rooms/<newCode> ещё не существует, никакой валидный joiner физически
++    // не может записать сигнал именно для новой комнаты, поэтому очистка не
++    // может стереть свежий матч. Важно ДОЖДАТЬСЯ подтверждения Firebase:
++    // fire-and-forget снова открыл бы гонку со старым offline write.
++    const preflightActiveMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
++    preflightActiveMatchRef.remove().then(function () {
++        if (!canUseFirebase()) return;
++
++        roomCode = generateRoomCode();
++        myColor = "light";
++        isOnlineGame = true;
++        isSpectator = false;
++        const myOwnRoomCode = roomCode;
++
++        const initialState = {
++            status: "waiting",
++            turn: "light",
++            mustContinueFrom: null,
++            capturedDark: 0,
++            capturedLight: 0,
++            moveCount: 0,
++            matchNumber: 0,
++            kingOnlyStreak: 0,
++            noProgressStreak: 0,
++            positionHistory: [getDrawPositionKey(createInitialPieces(), "light")],
++            longRoadAttacker: null,
++            longRoadStreak: 0,
++            lastMove: null,
++            lastMovePath: null,
++            lastCapturedSquares: null,
++            moveType: null,
++            pieces: createInitialPieces(),
++            players: { light: { id: myTelegramId, name: myTelegramName }, dark: null },
++            timeControlSeconds: 0,
++            turnStartedAt: firebase.database.ServerValue.TIMESTAMP,
++            winner: null,
++            winReason: null,
++            // ELO: стабильная метка создания комнаты. Пишется РОВНО один раз,
++            // не трогается ни reconnect'ом, ни реваншем — входит в matchId,
++            // чтобы повторно выданный через месяцы тот же roomCode не столкнулся
++            // со старым receipt.
++            createdAt: firebase.database.ServerValue.TIMESTAMP,
++            groupId: GROUP_ID
++        };
++
++        return database.ref("rooms/" + roomCode).set(initialState).then(function () {
++            if (!canUseFirebase()) return;
++            myPendingOnlineRoom = roomCode;
++
++            database.ref("users/" + myTelegramId + "/rooms/" + roomCode).set({
++                opponentName: "Ожидание соперника...",
++                myColor: "light"
++            });
++            setupPresence();
++
++            // №24: activeMatch исторически был единственным сигналом creator'у,
++            // что joiner занял dark. Это делало отдельную индексную запись single
++            // point of failure: сама room уже active, а creator мог навсегда
++            // остаться в lobby. Теперь status текущей комнаты — независимый
++            // fallback. Оба сигнала сходятся в один exactly-once transition.
++            let matchTransitionDone = false;
++            let roomStatusRef = database.ref("rooms/" + myOwnRoomCode + "/status");
++            activeMatchRef = database.ref("users/" + myTelegramId + "/activeMatch");
++
++            function guardedMatchTransition(targetRoomCode) {
++                if (matchTransitionDone) return;
++                // №24 review: transient auth/connectivity loss НЕ должен сжигать
++                // единственный путь к переходу. Пока действие невозможно,
++                // оставляем оба listener живыми и НЕ ставим done.
++                if (!canUseFirebase()) return;
++                matchTransitionDone = true;
++
++                if (activeMatchRef) activeMatchRef.off();
++                if (roomStatusRef) roomStatusRef.off();
++
++                // best-effort hygiene: correctness следующей сессии держится
++                // на preflight-clear выше, поэтому текущая игра не ждёт cleanup.
++                // Stable local ref обязателен: global activeMatchRef ниже сразу
++                // обнуляется, а bounded retry повторяется через 500/2000 ms.
++                const cleanupActiveMatchRef = activeMatchRef;
++                if (cleanupActiveMatchRef) {
++                    withBoundedRetry(function () {
++                        return cleanupActiveMatchRef.remove();
++                    }, "activeMatch.remove()").catch(function(error) {
++                        console.error("activeMatch cleanup failed", error);
++                    });
++                }
++                activeMatchRef = null;
++                roomStatusRef = null;
++
++                myPendingOnlineRoom = null;
++                roomCode = targetRoomCode;
++                isOnlineGame = true;
++                pendingTimeControlSeconds = 0;
++                showScreen(gameScreen);
++                startOnlineGame();
++            }
++
++            activeMatchRef.on("value", function (snapshot) {
++                const matchedRoomCode = snapshot.val();
++                // №24: preflight удаляет старое значение, но delayed/offline
++                // write из прошлой сессии теоретически может долететь позже.
++                // Для creator'а валиден только код ЕГО текущей waiting-room;
++                // всё остальное игнорируем и ждём authoritative room/status.
++                if (matchedRoomCode === myOwnRoomCode) guardedMatchTransition(myOwnRoomCode);
++            });
++
++            roomStatusRef.on("value", function (snapshot) {
++                if (snapshot.val() === "active") guardedMatchTransition(myOwnRoomCode);
++            });
++
++            // Сразу показываем список "Кто играет?" — там видно и свою запись, и остальных
++            showGroupLobby();
++        }).catch(function(error) {
++            // №24: этот catch обслуживает ТОЛЬКО reject создания новой комнаты.
++            // На этом этапе online-state уже был синхронно выставлен выше — его
++            // нужно откатить, иначе останется phantom room.
++            console.error("Failed to create online room", error);
++            roomCode = null;
++            myColor = null;
++            isOnlineGame = false;
++            isSpectator = false;
++            if (canUseFirebase()) showInfoModal(t("err_room_create_failed"), false);
++        });
++    }).catch(function(error) {
++        // №24: preflight reject происходит ДО любых room-state mutations.
++        // Поэтому здесь намеренно НЕТ rollback: pre-existing local state
++        // обязано остаться побитово тем же, каким было до вызова функции.
++        console.error("Failed to clear stale activeMatch", error);
++        if (canUseFirebase()) showInfoModal(t("err_room_create_failed"), false);
++    });
+ }
+@@ -5418,6 +5516,16 @@ function createRoomAndShowWaiting() {
+                 }
+             }
+         });
++    }).catch(function(error) {
++        console.error("Failed to create friend room", error);
++        // Roll back only state that was synchronously set before the write.
++        roomCode = null;
++        myPendingFriendRoomCode = null;
++        myColor = null;
++        isOnlineGame = false;
++        isSpectator = false;
++        if (!canUseFirebase()) return;
++        showInfoModal(t("err_room_create_failed"), false);
++        showScreen(menuScreen);
+     });
+ }
+@@ -6650,11 +6758,15 @@ function finishInviteSuccess(inviteRoomCode, creatorId) {
+     database.ref("users/" + myTelegramId + "/rooms/" + inviteRoomCode).set({
+         opponentName: currentState && currentState.players && currentState.players.light ? currentState.players.light.name : "Соперник",
+         myColor: "dark"
+-    });
++    }).catch(function(error) { console.error("Failed to update joiner room index", error); });
+     if (creatorId) {
+         database.ref("users/" + creatorId + "/rooms/" + inviteRoomCode).set({
+             opponentName: myTelegramName,
+             myColor: "light"
+-        });
++        }).catch(function(error) { console.error("Failed to update creator room index", error); });
+     }
+ }
+@@ -8707,17 +8819,24 @@ function joinGroupRoom(code, creatorId) {
+             database.ref("users/" + myTelegramId + "/rooms/" + code).set({
+                 opponentName: room.players && room.players.light ? room.players.light.name : "Соперник",
+                 myColor: "dark"
+-            });
++            }).catch(function(error) { console.error("Failed to update joiner room index", error); });
+             if (creatorId) {
+                 database.ref("users/" + creatorId + "/rooms/" + code).set({
+                     opponentName: myTelegramName,
+                     myColor: "light"
+-                });
++                }).catch(function(error) { console.error("Failed to update creator room index", error); });
+             }
+-            database.ref("users/" + creatorId + "/activeMatch").set(code);
++            // №24: LOG-only acceptable here because createOnlineRoom now has an
++            // independent rooms/<code>/status fallback. This index signal is no
++            // longer a single point of failure for the creator transition.
++            database.ref("users/" + creatorId + "/activeMatch").set(code)
++                .catch(function(error) { console.error("Failed to signal activeMatch", error); });
+ 
+             showScreen(gameScreen);
+             startOnlineGame();
+@@ -9954,6 +10073,8 @@ const tests = [
+     "node tests/rated-draw-cancel-ordering.test.js",
++    "node tests/room-create-error-handling.test.js",
++    "node tests/owner-human-move-error-handling.test.js",
+     "node tests/auth-gate-v193.test.js",
+     "node tests/shared-engine.test.js",
+     "node tests/rules-complexity-budget.test.js",
+diff --git a/tests/owner-human-move-error-handling.test.js b/tests/owner-human-move-error-handling.test.js
+new file mode 100644
+index 0000000..fbb2691
+--- /dev/null
++++ b/tests/owner-human-move-error-handling.test.js
+@@ -0,0 +1,97 @@
++const fs = require('fs');
++const vm = require('vm');
++const assert = require('assert');
++
++const src = fs.readFileSync(require('path').join(__dirname, '..', 'script.js'), 'utf8');
++
++function extractFunction(name) {
++  const start = src.indexOf('function ' + name + '(');
++  if (start < 0) throw new Error('missing function ' + name);
++  let brace = src.indexOf('{', start), depth = 0;
++  for (let i = brace; i < src.length; i++) {
++    if (src[i] === '{') depth++;
++    else if (src[i] === '}') {
++      depth--;
++      if (depth === 0) return src.slice(start, i + 1);
++    }
++  }
++  throw new Error('unterminated function ' + name);
++}
++
++let checks = 0;
++function ok(cond, msg) { checks++; assert.ok(cond, msg); }
++
++async function runCase(resultOrError) {
++  const logs = [];
++  const ctx = {
++    selectedFrom: { row: 1, col: 2 },
++    updateSelectionDomCalls: 0,
++    updateSelectionDom() { this.updateSelectionDomCalls++; },
++    applyHumanMoveViaSession() {
++      if (resultOrError instanceof Error) return Promise.reject(resultOrError);
++      return Promise.resolve(resultOrError);
++    },
++    Promise,
++    console: { error(...args) { logs.push(args); } }
++  };
++  vm.createContext(ctx);
++  vm.runInContext(extractFunction('attemptOwnerHumanMove'), ctx);
++  let unhandled = null;
++  const onUnhandled = err => { unhandled = err; };
++  process.once('unhandledRejection', onUnhandled);
++  ctx.attemptOwnerHumanMove(1,2,3,4);
++  await new Promise(r => setImmediate(r));
++  process.removeListener('unhandledRejection', onUnhandled);
++  return { ctx, logs, unhandled };
++}
++
++(async () => {
++  const err = new Error('network down');
++  let r = await runCase(err);
++  ok(r.unhandled === null, 'reject is handled (no unhandledRejection)');
++  ok(r.logs.length === 1, 'reject is logged exactly once');
++  ok(r.logs[0][0] === 'Synced bot human move failed', 'reject uses expected log label');
++  ok(r.ctx.selectedFrom === null, 'reject clears selectedFrom');
++  ok(r.ctx.updateSelectionDomCalls === 1, 'reject updates selection DOM');
++
++  r = await runCase({ committed: false });
++  ok(r.unhandled === null, 'committed:false is not an error');
++  ok(r.logs.length === 0, 'committed:false does not hit catch/log');
++  ok(r.ctx.selectedFrom && r.ctx.selectedFrom.row === 1, 'committed:false preserves selection');
++  ok(r.ctx.updateSelectionDomCalls === 0, 'committed:false leaves DOM selection unchanged');
++
++  r = await runCase({ committed: true });
++  ok(r.unhandled === null, 'success remains handled');
++  ok(r.logs.length === 0, 'success has no error log');
++  ok(r.ctx.selectedFrom === null, 'success clears selection as before');
++  ok(r.ctx.updateSelectionDomCalls === 1, 'success updates selection DOM as before');
++
++  console.log(`owner-human-move-error-handling: ${checks}/${checks}`);
++})().catch(err => { console.error(err); process.exit(1); });
++
+diff --git a/tests/room-create-error-handling.test.js b/tests/room-create-error-handling.test.js
+new file mode 100644
+index 0000000..0767684
+--- /dev/null
++++ b/tests/room-create-error-handling.test.js
+@@ -0,0 +1,544 @@
++const fs = require('fs');
++const vm = require('vm');
++const assert = require('assert');
++
++const src = fs.readFileSync(require('path').join(__dirname, '..', 'script.js'), 'utf8');
++
++function extractFunction(name) {
++  const start = src.indexOf('function ' + name + '(');
++  if (start < 0) throw new Error('missing function ' + name);
++  let brace = src.indexOf('{', start), depth = 0;
++  for (let i = brace; i < src.length; i++) {
++    if (src[i] === '{') depth++;
++    else if (src[i] === '}') { depth--; if (depth === 0) return src.slice(start, i + 1); }
++  }
++  throw new Error('unterminated function ' + name);
++}
++
++function baseContext(database) {
++  const ctx = {
++    database,
++    myPendingOnlineRoom: null, myPendingFriendRoomCode: null,
++    roomCode: null, myColor: null, isOnlineGame: false, isSpectator: false,
++    myTelegramId: 'tg_1', myTelegramName: 'Me', GROUP_ID: 'g', pendingTimeControlSeconds: 0,
++    currentState: null, activeMatchRef: null,
++    firebase: { database: { ServerValue: { TIMESTAMP: 1 } } },
++    canUseFirebase: () => true,
++    generateRoomCode: () => 'ABC123',
++    createInitialPieces: () => ({}), getDrawPositionKey: () => 'p',
++    setupPresence() {}, detachRoomListener() {}, stopPresenceHeartbeat() {},
++    showGroupLobbyCalls: 0, showGroupLobby() { this.showGroupLobbyCalls++; },
++    showInfoModalCalls: [], showInfoModal(msg) { this.showInfoModalCalls.push(msg); },
++    showScreenCalls: [], showScreen(screen) { this.showScreenCalls.push(screen); },
++    startOnlineGameCalls: 0, startOnlineGame() { this.startOnlineGameCalls++; },
++    updateSelectionDom() {},
++    waitingScreen: {}, menuScreen: {}, gameScreen: {},
++    inviteLinkBox: { textContent:'', classList:{ remove(){} } },
++    waitingText: { textContent:'' }, btnShareLink:{ classList:{ remove(){} } },
++    BOT_USERNAME:'bot',
++    t: key => key,
++    workerErrorCode: e => (e && (e.code || e.message)) || 'error',
++    setTimeout(fn) { fn(); return 1; }, clearTimeout() {},
++    Promise, console
++  };
++  ctx.withBoundedRetry = function(operation) {
++    const delays = [0, 1, 2];
++    function attempt(i) {
++      let p;
++      try { p = Promise.resolve(operation()); } catch (e) { p = Promise.reject(e); }
++      return p.catch(err => { if (i + 1 < delays.length) return attempt(i + 1); throw err; });
++    }
++    return attempt(0);
++  };
++  return ctx;
++}
++
++function makeDatabase({ roomSetReject=false, friendSetReject=false, preflightReject=false }={}) {
++  const listeners = {};
++  const calls = [];
++  return {
++    _listeners:listeners, _calls:calls,
++    _fire(path, value) { const cb = listeners[path]; if (cb) cb({val:()=>value}); },
++    ref(path) {
++      return {
++        set(value) {
++          calls.push(['set', path, value]);
++          if (path === 'rooms/ABC123' && roomSetReject) return Promise.reject(new Error('room reject'));
++          if (path === 'rooms/ABC123' && friendSetReject) return Promise.reject(new Error('friend reject'));
++          return Promise.resolve();
++        },
++        remove() {
++          calls.push(['remove', path]);
++          if (path === 'users/tg_1/activeMatch' && preflightReject) return Promise.reject(new Error('preflight reject'));
++          return Promise.resolve();
++        },
++        on(evt, cb) { listeners[path]=cb; },
++        off() { delete listeners[path]; }
++      };
++    }
++  };
++}
++
++function loadFunctions(ctx) {
++  vm.createContext(ctx);
++  vm.runInContext(extractFunction('createOnlineRoom'), ctx);
++  vm.runInContext(extractFunction('createRoomAndShowWaiting'), ctx);
++}
++
++async function tick() { await new Promise(r => setImmediate(r)); }
++let checks=0; function ok(v,m){checks++;assert.ok(v,m);}
++
++(async()=>{
++  // 1) createOnlineRoom room-set reject -> USER ERROR + rollback.
++  let db=makeDatabase({roomSetReject:true}), ctx=baseContext(db); loadFunctions(ctx);
++  ctx.createOnlineRoom(); await tick();
++  ok(ctx.roomCode===null,'online reject clears roomCode');
++  ok(ctx.myColor===null,'online reject clears myColor');
++  ok(ctx.isOnlineGame===false,'online reject clears isOnlineGame');
++  ok(ctx.isSpectator===false,'online reject clears isSpectator');
++  ok(ctx.showInfoModalCalls.includes('err_room_create_failed'),'online reject shows USER ERROR');
++  ok(ctx.showGroupLobbyCalls===0,'online reject does not run success flow');
++
++  // 2) friend-room set reject -> USER ERROR + full rollback.
++  db=makeDatabase({friendSetReject:true}); ctx=baseContext(db); loadFunctions(ctx);
++  ctx.createRoomAndShowWaiting(); await tick();
++  ok(ctx.roomCode===null,'friend reject clears roomCode');
++  ok(ctx.myPendingFriendRoomCode===null,'friend reject clears pending friend code');
++  ok(ctx.myColor===null,'friend reject clears myColor');
++  ok(ctx.isOnlineGame===false,'friend reject clears isOnlineGame');
++  ok(ctx.isSpectator===false,'friend reject clears isSpectator');
++  ok(ctx.showInfoModalCalls.includes('err_room_create_failed'),'friend reject shows USER ERROR');
++
++  // 3) success paths keep state and enter normal callbacks.
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  ok(ctx.roomCode==='ABC123','online success keeps roomCode');
++  ok(ctx.isOnlineGame===true,'online success keeps online state');
++  ok(ctx.showGroupLobbyCalls===1,'online success reaches lobby');
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createRoomAndShowWaiting(); await tick();
++  ok(ctx.roomCode==='ABC123','friend success keeps roomCode');
++  ok(ctx.isOnlineGame===true,'friend success keeps online state');
++  ok(ctx.showScreenCalls.includes(ctx.waitingScreen),'friend success reaches waiting screen');
++
++  // 4) auth loss after room-set reject: rollback must still happen; modal may be skipped.
++  db=makeDatabase({roomSetReject:true}); ctx=baseContext(db);
++  let canCalls=0; ctx.canUseFirebase=()=>{canCalls++; return canCalls<3;}; loadFunctions(ctx);
++  ctx.createOnlineRoom(); await tick();
++  ok(ctx.roomCode===null,'auth-loss catch still clears roomCode');
++  ok(ctx.isOnlineGame===false,'auth-loss catch still clears isOnlineGame');
++
++  // 5) friend auth loss during catch still rolls back.
++  db=makeDatabase({friendSetReject:true}); ctx=baseContext(db);
++  canCalls=0; ctx.canUseFirebase=()=>{canCalls++; return canCalls<2;}; loadFunctions(ctx);
++  ctx.createRoomAndShowWaiting(); await tick();
++  ok(ctx.roomCode===null,'friend auth-loss catch clears roomCode');
++  ok(ctx.myPendingFriendRoomCode===null,'friend auth-loss catch clears pending friend');
++
++  // 6) exactly-once: activeMatch first.
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  db._fire('users/tg_1/activeMatch','ABC123');
++  db._fire('rooms/ABC123/status','active');
++  ok(ctx.startOnlineGameCalls===1,'activeMatch+status race starts once');
++
++  // 7) exactly-once: status first.
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  db._fire('rooms/ABC123/status','active');
++  db._fire('users/tg_1/activeMatch','ABC123');
++  ok(ctx.startOnlineGameCalls===1,'status+activeMatch race starts once');
++
++  // 8) false availability must not consume transition; later event recovers.
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  let available=false; ctx.canUseFirebase=()=>available;
++  db._fire('rooms/ABC123/status','active');
++  ok(ctx.startOnlineGameCalls===0,'unavailable transition does not start game');
++  ok(ctx.myPendingOnlineRoom==='ABC123','unavailable transition does not consume pending room');
++  available=true; db._fire('rooms/ABC123/status','active');
++  ok(ctx.startOnlineGameCalls===1,'later event recovers transition');
++
++  // 9) preflight happens before room creation.
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  const firstRemove=db._calls.findIndex(c=>c[0]==='remove'&&c[1]==='users/tg_1/activeMatch');
++  const roomSet=db._calls.findIndex(c=>c[0]==='set'&&c[1]==='rooms/ABC123');
++  ok(firstRemove>=0 && roomSet>firstRemove,'preflight clear precedes room set');
++
++  // 10) preflight reject leaves pre-existing sentinel state untouched.
++  db=makeDatabase({preflightReject:true}); ctx=baseContext(db);
++  ctx.roomCode='OLD'; ctx.myColor='dark'; ctx.isOnlineGame=true; ctx.isSpectator=true;
++  loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  ok(ctx.roomCode==='OLD','preflight reject preserves roomCode');
++  ok(ctx.myColor==='dark','preflight reject preserves myColor');
++  ok(ctx.isOnlineGame===true,'preflight reject preserves isOnlineGame');
++  ok(ctx.isSpectator===true,'preflight reject preserves isSpectator');
++  ok(!db._calls.some(c=>c[0]==='set'&&c[1]==='rooms/ABC123'),'preflight reject prevents room set');
++  ok(ctx.showInfoModalCalls.includes('err_room_create_failed'),'preflight reject shows USER ERROR');
++
++  // 11) delayed stale activeMatch after new room creation is ignored; status fallback recovers.
++  db=makeDatabase(); ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  db._fire('users/tg_1/activeMatch','OLD999');
++  ok(ctx.startOnlineGameCalls===0,'stale activeMatch is ignored');
++  ok(ctx.roomCode==='ABC123','stale activeMatch cannot redirect roomCode');
++  db._fire('rooms/ABC123/status','active');
++  ok(ctx.startOnlineGameCalls===1,'status fallback starts current room');
++  ok(ctx.roomCode==='ABC123','status fallback keeps current room code');
++
++  // 12) retry uses stable captured ref even after global is nulled.
++  let removeAttempts=0;
++  const listeners={};
++  db={_listeners:listeners,_calls:[],_fire(path,v){const cb=listeners[path];if(cb)cb({val:()=>v});},ref(path){
++    return {set(){return Promise.resolve();},on(e,cb){listeners[path]=cb;},off(){delete listeners[path];},remove(){
++      if(path==='users/tg_1/activeMatch'){removeAttempts++; if(removeAttempts===2) return Promise.reject(new Error('first cleanup fails'));}
++      return Promise.resolve();
++    }};
++  }};
++  ctx=baseContext(db); loadFunctions(ctx); ctx.createOnlineRoom(); await tick();
++  db._fire('rooms/ABC123/status','active'); await tick();
++  ok(ctx.startOnlineGameCalls===1,'game starts independent of cleanup retry');
++  ok(removeAttempts>=3,'cleanup retry reuses real ref after first failure');
++
++  console.log(`room-create-error-handling: ${checks}/${checks}`);
++})().catch(e=>{console.error(e);process.exit(1);});
++
+diff --git a/tests/run.js b/tests/run.js
+index 67b0718..74b738c 100644
+--- a/tests/run.js
++++ b/tests/run.js
+@@ -58,6 +58,8 @@ const tests = [
+     "node tests/rated-draw-cancel-ordering.test.js",
++    "node tests/room-create-error-handling.test.js",
++    "node tests/owner-human-move-error-handling.test.js",
+     "node tests/auth-gate-v193.test.js",
+     "node tests/shared-engine.test.js",
+     "node tests/rules-complexity-budget.test.js",
+-- 
+2.51.0
