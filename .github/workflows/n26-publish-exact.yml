@@ -1,0 +1,42 @@
+name: n26-publish-exact
+
+on:
+  push:
+    branches:
+      - ci-n26-publish
+
+permissions:
+  contents: write
+
+jobs:
+  build-exact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble and verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .n26-patch/chunk*.b64 | tr -d '[:space:]' | base64 -d > /tmp/n26.patch
+          echo "2fdf812f37930663cca1b7b8a2d2f6364533f19015a9d090136042d5cf8e2707  /tmp/n26.patch" | sha256sum -c -
+          git config user.name "candidate-review"
+          git config user.email "candidate-review@local"
+          git reset --hard c107d6ecb87912c8b968f83f038e89135ddccabb
+          git am /tmp/n26.patch
+          test "$(git rev-parse HEAD^)" = "c107d6ecb87912c8b968f83f038e89135ddccabb"
+          test "$(git rev-parse HEAD^{tree})" = "97ca7592193dcb17025823292701edd1ec171c55"
+          node --check worker/index.mjs
+          node --check tests/worker/appcheck-fail-closed-unit.test.mjs
+          node --check tests/worker/auth-telegram-name-refresh-integration.test.mjs
+          node --check tests/appcheck-error-not-terminal.test.js
+          npm test
+          for f in tests/worker/*.test.mjs; do node "$f"; done
+          node tests/settlement-behavior.test.js
+          git diff --check HEAD^ HEAD
+      - name: Push exact transport candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/publish/n26-final-transport --force
