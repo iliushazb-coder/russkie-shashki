@@ -26,8 +26,9 @@ jobs:
               .ci/n23-v16/b00 .ci/n23-v16/b01 .ci/n23-v16/b02 .ci/n23-v16/b03 \
               .ci/n23-v16/b04 .ci/n23-v16/b05 .ci/n23-v16/b06 .ci/n23-v16/b07 \
             | base64 -d | gzip -d > /tmp/n23-v16.patch
+          cp .ci/n23-v17/v16-to-v17.patch /tmp/v16-to-v17.patch
           test "$(sha256sum /tmp/n23-v16.patch | awk '{print $1}')" = "6099a3da71504dcbaf9f133126320bfd45f013477759c7fc1074c147a336b49d"
-          test "$(sha256sum .ci/n23-v17/v16-to-v17.patch | awk '{print $1}')" = "2023da5568a19098bedbe538596eda88c3e6c4a444bebfbd96a1cec284576fa6"
+          test "$(sha256sum /tmp/v16-to-v17.patch | awk '{print $1}')" = "2023da5568a19098bedbe538596eda88c3e6c4a444bebfbd96a1cec284576fa6"
 
       - name: Assemble exact v17
         shell: bash
@@ -38,8 +39,8 @@ jobs:
           git config user.name ci-review
           git config user.email ci-review@local
           git am /tmp/n23-v16.patch
-          git apply --check .ci/n23-v17/v16-to-v17.patch
-          git apply .ci/n23-v17/v16-to-v17.patch
+          git apply --check /tmp/v16-to-v17.patch
+          git apply /tmp/v16-to-v17.patch
           git add -A
           git diff --cached --check
           git reset --soft "$BASE"
