@@ -1,0 +1,55 @@
+name: n23-v16-exact
+
+on:
+  push:
+    branches: [ci-n23-v16]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout CI carrier
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Reconstruct exact v16 patch
+        shell: bash
+        run: |
+          cat .ci/n23-v16/part00 .ci/n23-v16/part01 .ci/n23-v16/part02 .ci/n23-v16/part03 .ci/n23-v16/part04 \
+              .ci/n23-v16/rem00 .ci/n23-v16/rem01 \
+              .ci/n23-v16/b00 .ci/n23-v16/b01 .ci/n23-v16/b02 .ci/n23-v16/b03 \
+              .ci/n23-v16/b04 .ci/n23-v16/b05 .ci/n23-v16/b06 .ci/n23-v16/b07 \
+            | base64 -d | gzip -d > /tmp/n23-v16.patch
+          test "$(sha256sum /tmp/n23-v16.patch | awk '{print $1}')" = "6099a3da71504dcbaf9f133126320bfd45f013477759c7fc1074c147a336b49d"
+      - name: Assemble exact v16
+        shell: bash
+        run: |
+          git reset --hard 7d48c75371bda0245ab63c012d578c78d592e4fd
+          git clean -fdx
+          git config user.name ci-review
+          git config user.email ci-review@local
+          git am /tmp/n23-v16.patch
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "PARENT=$(git rev-parse HEAD^)"
+          echo "TREE=$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD^)" = "7d48c75371bda0245ab63c012d578c78d592e4fd"
+          test "$(git rev-parse HEAD^{tree})" = "ab60251fb62c58bed01c9f784be60654d8962ffe"
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install
+        run: npm ci
+      - name: Firebase Rules Emulator tests
+        run: npm run test:rules
