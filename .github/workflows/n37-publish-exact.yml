@@ -13,6 +13,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,12 +33,38 @@ jobs:
           git add worker/index.mjs
           test "$(git write-tree)" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
 
-      - name: Commit exact candidate
-        run: |
-          git config user.name "iliushazb-coder"
-          git config user.email "iliushazb@gmail.com"
-          git commit -m "docs(#37): clarify Worker deployment-state header"
-          test "$(git rev-parse HEAD^{tree})" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
+      - name: Setup Node 20 for frontend suite
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      - name: Publish transport branch
-        run: git push origin HEAD:refs/heads/publish/n37-final-transport
+      - name: Run tests workflow commands on exact candidate
+        run: |
+          npm run check
+          npm test
+
+      - name: Setup Node 22 for backend suite
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Run backend workflow commands on exact candidate
+        run: |
+          npm ci
+          node --check worker/index.mjs
+          node --test tests/worker/worker-unit.test.mjs tests/worker/rated-replay-unit.test.mjs
+          node tests/settlement-behavior.test.js
+          npm run test:rules
+
+      - name: Verify published transport commit identity
+        run: |
+          git fetch origin publish/n37-final-transport
+          test "$(git rev-parse origin/publish/n37-final-transport^{tree})" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
+          test "$(git rev-parse origin/publish/n37-final-transport^)" = "6085e90ee0df12360dc6167e9a6bbe3d685b0fa7"
