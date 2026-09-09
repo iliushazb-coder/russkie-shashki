@@ -1,0 +1,42 @@
+# Раскладка панели в НАСТОЯЩИХ браузерных движках: Chromium и WebKit.
+#
+# Отдельный workflow, а не шаг в tests.yml: движки весят сотни мегабайт и
+# требуют системных зависимостей, а основной прогон намеренно остаётся
+# лёгким и быстрым.
+#
+# Fail-closed по построению. Сюита импортирует движки жёстко и не
+# перехватывает ошибку запуска, поэтому отсутствующий пакет, не
+# установленный движок или упавшая проверка одинаково дают ненулевой код
+# возврата. Никаких continue-on-error здесь быть не должно: браузерная
+# проверка, которая «прошла», не запустив браузер, хуже её отсутствия.
+#
+# WebKit -- ближайшее автоматизируемое приближение к Safari/iOS, но это НЕ
+# Telegram WKWebView на реальном iPhone. Ручной smoke он не заменяет.
+name: browser
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Поставить Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Зависимости
+        run: npm ci
+
+      - name: Поставить браузерные движки
+        run: npx playwright install --with-deps chromium webkit
+
+      - name: Раскладка панели в Chromium и WebKit
+        run: npm run test:browser

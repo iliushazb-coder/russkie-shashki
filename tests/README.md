@@ -22,7 +22,7 @@ npm test      # основной набор (node tests/run.js)
 |---|---|
 | `npm test` | Основной набор из `tests/run.js` |
 | `npm run check` | `node --check script.js` — только синтаксис клиента |
-| `npm run test:browser` | Браузерный layout-набор, **в `npm test` не входит** |
+| `npm run test:browser` | Layout в Chromium и WebKit, **в `npm test` не входит** |
 | `npm run test:rules` | Firebase Rules через настоящий Emulator |
 | `node --test tests/worker/*.test.mjs` | Все наборы Worker'а |
 | `node --check worker/index.mjs` | Синтаксис Worker'а |
@@ -96,8 +96,26 @@ Node 20 для клиентских тестов и Node 22 для backend.
 ## Браузерный набор
 
 ```bash
+npm ci
+npx playwright install --with-deps chromium webkit
 npm run test:browser
 ```
+
+`panel-browser-layout.test.js` меряет раскладку панели в **настоящих**
+движках — Chromium и WebKit — на ширинах 320/360/390/430. Playwright
+теперь обычная devDependency проекта, а движки ставятся отдельной
+командой выше (сотни мегабайт, поэтому не при каждом `npm ci`).
+
+Набор **fail-closed**: движки импортируются жёстко и ошибка запуска не
+перехватывается. Отсутствующий пакет, неустановленный движок и упавшая
+проверка одинаково дают ненулевой код возврата. Раньше здесь был
+try/catch, печатавший «ИТОГ: 0/0» с кодом 0 — то есть непроведённая
+проверка выглядела как успешная; для CI это неприемлемо.
+
+**WebKit — не iPhone.** Это ближайшее автоматизируемое приближение к
+Safari, но Telegram на iOS использует системный WKWebView со своим
+viewport, клавиатурой и жестами. Ручной smoke на реальном устройстве
+этот набор не заменяет.
 
 `panel-browser-layout.test.js` — единственный **корневой**
 `tests/*.test.js`, намеренно не зарегистрированный в `tests/run.js`.
@@ -147,6 +165,11 @@ node --test tests/worker/*.test.mjs
 
 **`tests.yml`** (Node 20) — `npm run check`, затем `npm test`. Ни
 браузерный набор, ни Worker, ни Rules Emulator сюда не входят.
+
+**`browser.yml`** (Node 20) — `npm ci`, установка движков
+(`npx playwright install --with-deps chromium webkit`), затем
+`npm run test:browser`. Отдельный workflow, чтобы не утяжелять основной
+прогон загрузкой движков.
 
 **`backend.yml`** (Node 22, Java 21) — `npm ci`, затем:
 
