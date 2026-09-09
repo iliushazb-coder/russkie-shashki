@@ -1,0 +1,47 @@
+name: n29-publish-exact
+on:
+  push:
+    branches: [ci-n29-publish]
+permissions:
+  contents: write
+jobs:
+  build-exact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Assemble and verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > /tmp/n29.b64
+          for i in 00 01 02 03 04 05 06 07; do
+            git show "$GITHUB_SHA:.github/n29-parts/part$i" >> /tmp/n29.b64
+          done
+          base64 -d /tmp/n29.b64 > /tmp/n29.patch
+          echo '91b3b0df649848cdfa1be20822bc0c381dbc9ec4622e18f1552f9b14531e7f7b  /tmp/n29.patch' | sha256sum -c -
+          git checkout --detach d1bd4101ae1b107429e1906773ff9b4dbd73082a
+          git apply --check /tmp/n29.patch
+          git apply /tmp/n29.patch
+          git diff --check
+          git add worker/index.mjs tests/worker/request-body-limit-unit.test.mjs tests/worker/auth-telegram-name-refresh-integration.test.mjs
+          tree=$(git write-tree)
+          test "$tree" = '824f388cadfecc74ac3c13c4b312d0ad49f45e9b'
+          npm test
+          for f in tests/worker/*.test.mjs; do node "$f"; done
+          node tests/settlement-behavior.test.js
+          node --check worker/index.mjs
+          node --check tests/worker/request-body-limit-unit.test.mjs
+          node --check tests/worker/auth-telegram-name-refresh-integration.test.mjs
+          git diff --cached --check
+          git config user.name 'candidate-review'
+          git config user.email 'candidate-review@local'
+          git commit -m 'feat(#29): bounded streaming request body limit (32 KiB)'
+          test "$(git rev-parse HEAD^)" = 'd1bd4101ae1b107429e1906773ff9b4dbd73082a'
+          test "$(git rev-parse HEAD^{tree})" = '824f388cadfecc74ac3c13c4b312d0ad49f45e9b'
+      - name: Push exact transport candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force origin HEAD:refs/heads/publish/n29-final-transport
