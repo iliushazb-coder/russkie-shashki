@@ -59,6 +59,7 @@ const FILES = [
   ['BB.4 №24 Step B: room-create reject handling (USER ERROR + rollback)', 'room-create-error-handling.test.js'],
   ['BB.5 №24: owner human move reject handling (LOG + UI/state recovery)', 'owner-human-move-error-handling.test.js'],
   ['BB.6 №26: app_check_unavailable stays out of terminal/definitive allowlists', 'appcheck-error-not-terminal.test.js'],
+  ['BB.7 №32: user-facing strings localized; persisted RTDB fallbacks left neutral', 'i18n-user-facing-strings.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

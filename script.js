@@ -376,6 +376,11 @@ const translations = {
         err_draw_connection: "Ошибка соединения при принятии ничьей.",
         err_rematch_failed: "Не удалось начать реванш. Возможно, потеряно соединение.",
         err_room_create_failed: "Не удалось создать комнату. Проверьте соединение и попробуйте снова.",
+        // №32: user-facing строки, ранее захардкоженные вне t().
+        err_opponent_left: "Соперник покинул игру.",
+        err_room_unavailable: "Комната уже занята, удалена или не существует.",
+        friend_connected: "Друг подключился! Начинаем игру.",
+        waiting_for_opponent: "Ожидание соперника...",
         loading: "Загрузка...",
         lobby_empty: "Пока никто не играет",
         btn_back_bot: "👈 Назад",
@@ -508,6 +513,10 @@ const translations = {
         err_draw_connection: "Connection error during draw acceptance.",
         err_rematch_failed: "Failed to start rematch. Connection might be lost.",
         err_room_create_failed: "Failed to create the room. Check your connection and try again.",
+        err_opponent_left: "Your opponent left the game.",
+        err_room_unavailable: "This room is already taken, deleted or does not exist.",
+        friend_connected: "Your friend joined! Starting the game.",
+        waiting_for_opponent: "Waiting for an opponent...",
         loading: "Loading...",
         lobby_empty: "Nobody is playing right now",
         btn_back_bot: "👈 Back",
@@ -640,6 +649,10 @@ const translations = {
         err_draw_connection: "Errore di connessione durante il pareggio.",
         err_rematch_failed: "Impossibile avviare la rivincita. Connessione persa.",
         err_room_create_failed: "Impossibile creare la stanza. Controlla la connessione e riprova.",
+        err_opponent_left: "L'avversario ha lasciato la partita.",
+        err_room_unavailable: "Questa stanza è già occupata, eliminata o non esiste.",
+        friend_connected: "Il tuo amico si è unito! Inizio della partita.",
+        waiting_for_opponent: "In attesa di un avversario...",
         loading: "Caricamento...",
         lobby_empty: "Nessuno sta giocando",
         btn_back_bot: "👈 Indietro",
@@ -691,6 +704,7 @@ const translations = {
 function t(key) {
     return (translations[currentLang] && translations[currentLang][key]) || (translations['ru'] && translations['ru'][key]) || key;
 }
+
 
 // Функция применения переводов к HTML-элементам с атрибутом data-i18n
 function applyTranslationsToDOM() {
@@ -3922,7 +3936,7 @@ function startOnlineGame() {
             // Показываем сообщение, только если игра ещё не была завершена нормально, 
             // либо если мы ждали реванша. Если игра завершена и мы не ждём реванша — просто выходим.
             if (!currentState || !currentState.winner || currentState.rematchProposal) {
-                showInfoModal("Соперник покинул игру.", false);
+                showInfoModal(t("err_opponent_left"), false);
             }
             return;
         }
@@ -5223,10 +5237,37 @@ function loadActiveRooms() {
                 const isDarkStale = !darkPresence || darkPresence.online === false || (Date.now() - (darkPresence.lastSeen || 0)) > STALE_MS;
                 const isSomeoneOffline = isLightStale || isDarkStale;
 
-                const isValidActiveGame = room && bothPlayersExist && differentPlayers && room.status !== "finished" && !room.winner && !isStaleRoom && !isSomeoneOffline;
+                // review fix: явный membership-инвариант. Остальные условия
+                // доказывают, что комната валидна и активна, но НЕ то, что
+                // текущий пользователь вообще её участник: stale/испорченная
+                // запись users/<myUid>/rooms/<code> (например, код комнаты
+                // переиспользован после удаления) могла указывать на живую
+                // партию двух ДРУГИХ игроков. Без этой проверки выбор
+                // соперника по UID вырождался бы в "взять lightP", показав в
+                // "моих играх" карточку с настоящим именем постороннего
+                // человека. Такая запись считается устаревшей и уходит в уже
+                // существующий cleanup-path (ветка else ниже).
+                const isCurrentUserParticipant = bothPlayersExist && (lightP.id === myTelegramId || darkP.id === myTelegramId);
+
+                const isValidActiveGame = room && bothPlayersExist && differentPlayers && isCurrentUserParticipant && room.status !== "finished" && !room.winner && !isStaleRoom && !isSomeoneOffline;
 
                 if (isValidActiveGame) {
-                    items.push({ code: code, opponent: data[code].opponentName || "Соперник", color: data[code].myColor });
+                    // review fix: имя соперника берётся из room.players -- это
+                    // ЕДИНСТВЕННЫЙ надёжный source of truth. Раньше бралось
+                    // persisted users/<uid>/rooms/<code>/opponentName, куда наш
+                    // код пишет И waiting-заглушки, И настоящие имена
+                    // (myTelegramName / creatorName), поэтому отличить их по
+                    // ТЕКСТУ невозможно в принципе: пользователь Telegram с
+                    // display name "Ожидание соперника..." неотличим от
+                    // заглушки. Здесь же isValidActiveGame уже доказал, что оба
+                    // игрока существуют, их id непусты и различны -- значит
+                    // соперник определяется по UID (надёжнее myColor, который
+                    // берётся из того же persisted-индекса и может
+                    // рассинхронизироваться). Persisted opponentName остаётся
+                    // нетронутым (backward compatibility), просто UI больше не
+                    // угадывает его смысл по содержимому.
+                    const opponentPlayer = (lightP.id === myTelegramId) ? darkP : lightP;
+                    items.push({ code: code, opponent: opponentPlayer.name || t("opponent_default"), color: data[code].myColor });
                 } else {
                     database.ref("users/" + myTelegramId + "/rooms/" + code).remove();
                 }
@@ -5567,7 +5608,7 @@ function createRoomAndShowWaiting() {
 
         const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + myPendingFriendRoomCode;
         inviteLinkBox.textContent = link;
-        waitingText.textContent = "Ожидание подключения друга...";
+        waitingText.textContent = t("waiting_friend");
         inviteLinkBox.classList.remove("hidden");
         btnShareLink.classList.remove("hidden");
         
@@ -5576,7 +5617,7 @@ function createRoomAndShowWaiting() {
         database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
             if (snapshot.val() === "active") {
                 database.ref("rooms/" + roomCode + "/status").off();
-                waitingText.textContent = "Друг подключился! Начинаем игру.";
+                waitingText.textContent = t("friend_connected");
                 setTimeout(function () {
                     showScreen(gameScreen);
                     startOnlineGame();
@@ -6691,7 +6732,7 @@ function checkForInviteLink() {
 
                 const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + roomCode;
                 inviteLinkBox.textContent = link;
-                waitingText.textContent = "Ожидание подключения друга...";
+                waitingText.textContent = t("waiting_friend");
                 inviteLinkBox.classList.remove("hidden");
                 btnShareLink.classList.remove("hidden");
 
@@ -6702,7 +6743,7 @@ function checkForInviteLink() {
                 database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
                     if (snapshot.val() === "active") {
                         database.ref("rooms/" + roomCode + "/status").off();
-                        waitingText.textContent = "Друг подключился! Начинаем игру.";
+                        waitingText.textContent = t("friend_connected");
                         setTimeout(function () {
                             showScreen(gameScreen);
                             startOnlineGame();
@@ -8499,8 +8540,18 @@ function renderLobbyListFromCache() {
             continue;
         }
 
-        let lightName = (room.players && room.players.light && room.players.light.name) || "Ожидание...";
-        let darkName = (room.players && room.players.dark && room.players.dark.name) || "Ожидание...";
+        // review fix: players.*.name -- это ВСЕГДА реальное имя игрока
+        // (проверено по всем write-site'ам: туда пишется myTelegramName /
+        // humanName / botName, и по git-истории: waiting-sentinel в
+        // players.*.name не писался никогда). До №32 здесь стоял
+        // render-time literal-fallback `... || "Ожидание..."`, то есть
+        // "Ожидание..." кодировало ОТСУТСТВИЕ имени, а не сохранённое
+        // значение. Поэтому непустое имя НЕЛЬЗЯ интерпретировать по тексту:
+        // иначе реальный пользователь Telegram с display name "Ожидание..."
+        // увидел бы его подменённым переводом. Локализуется только сам факт
+        // пустого слота.
+        let lightName = (room.players && room.players.light && room.players.light.name) || t("waiting_for_opponent");
+        let darkName = (room.players && room.players.dark && room.players.dark.name) || t("waiting_for_opponent");
         lightName = escapeHtml(lightName);
         darkName = escapeHtml(darkName);
         // v182: code — это КЛЮЧ УЗЛА Firebase, а не наш сгенерированный код.
@@ -8894,7 +8945,7 @@ function joinGroupRoom(code) {
         }).catch(function(error) {
             if (!canUseFirebase()) return;
             if (error && error.code === "PERMISSION_DENIED") {
-                showInfoModal("Комната уже занята, удалена или не существует.", false);
+                showInfoModal(t("err_room_unavailable"), false);
                 return;
             }
             console.error("Join room update failed:", error);

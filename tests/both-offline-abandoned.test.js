@@ -109,7 +109,12 @@ global.getMonotonicNow = global.getMonotonicNow || function () { return 999999; 
 eval(grab('canJudgeStaleByServerTime'));
 eval(grab('canDeleteStaleRoomFromLobby'));
 eval(grab('isRoomPlayerStale'));
-eval(grab('renderLobbyListFromCache'));
+// №32: см. комментарий в invite-privacy.test.js -- тот же helper.
+// №32: см. комментарий в invite-privacy.test.js -- только helper, без
+// подмены существующего echo-стаба t().
+eval([
+  grab('renderLobbyListFromCache')
+].join('\n'));
 function render(rooms) { renderedHtml = ''; global.lobbyRoomsByCode = rooms; renderLobbyListFromCache(); return renderedHtml; }
 
 const dead = room({ p: { lOn: false, lAbs: NOW - 3 * MIN, dOn: false, dAbs: NOW - 2 * MIN } });

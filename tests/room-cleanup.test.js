@@ -152,7 +152,11 @@ try {
     eval(extractFunc('detachMyPresence'));
     eval(extractFunc('setupPresence'));
     eval(extractFunc('startOnlineGame'));
-    eval(extractFunc('loadActiveRooms'));
+    // №32: loadActiveRooms теперь локализует подпись соперника на рендере --
+    // подгружаем только helper, не подменяя существующий стаб t().
+    eval([
+      extractFunc('loadActiveRooms')
+    ].join('\n'));
 } catch (e) { loadError = e.message; }
 
 // Реальный top-level блок .info/connected — вырезаем из исходника как есть.

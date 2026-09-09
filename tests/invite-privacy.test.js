@@ -79,7 +79,16 @@ global.getEstimatedServerNow = global.getEstimatedServerNow || function () { ret
 global.RECONNECT_GRACE_MS = global.RECONNECT_GRACE_MS || 60000;
 global.isFirebaseConnected = (typeof isFirebaseConnected !== 'undefined') ? isFirebaseConnected : true;
 eval(grab('isRoomAbandonedNow'));
-eval(grab('renderLobbyListFromCache'));
+// №32: renderLobbyListFromCache теперь вызывает render-time локализацию
+// подписей соперника -- подтягиваем helper (и его зависимости t/словарь)
+// в песочницу, иначе изолированный eval падает на ReferenceError.
+// №32: renderLobbyListFromCache теперь локализует подписи соперника на
+// рендере. Подгружаем ТОЛЬКО helper и его список sentinel'ов -- намеренно
+// НЕ настоящий t()/словарь: в этой песочнице выше уже стоит echo-стаб
+// (global.t = k => k), на котором построены ассерты вида /lobby_empty/.
+eval([
+  grab('renderLobbyListFromCache')
+].join('\n'));
 
 const NOW = Date.now();
 function waitingRoom(creatorId) {
