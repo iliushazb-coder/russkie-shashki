@@ -1705,6 +1705,89 @@ function extractBearer(request) {
   return m[1];
 }
 
+// №29: единый application-level предел на размер тела запроса.
+//
+// 32 KiB выбраны по РЕАЛЬНЫМ payload'ам, а не наугад. Самый крупный
+// легитимный запрос из всех четырёх POST-эндпоинтов -- /rated/event:
+// roomCode (<=50) + matchId (<=149) + requestId (<=64) + type + offerSeq +
+// path из максимум MAX_TURN_PATH_POINTS=16 точек {row,col} -- вместе это
+// заметно меньше 1 KiB даже с JSON-overhead. /auth/telegram's initData --
+// несколько KiB в худшем случае (Telegram сам ограничивает длины имён).
+// 32 KiB даёт запас более чем на порядок к самому большому реальному
+// случаю, оставаясь при этом в тысячи раз ниже implicit-потолка
+// платформы (100 MB на Free/Pro при memory limit самого Worker'а 128 MB --
+// то есть до этого фикса одно тело у границы платформенного лимита
+// физически не помещалось в память вместе с overhead парсинга).
+// Экспортированы для прямого тестирования (тот же паттерн, что у
+// resetAppCheckCache/isPermissionDeniedError из №26).
+export const MAX_REQUEST_BODY_BYTES = 32768;
+
+// №29: читает тело ПОТОКОВО и отклоняет превышение ДО того, как всё тело
+// будет получено и распарсено.
+//
+// Ключевое отличие от request.json()/text()/arrayBuffer(): те читают поток
+// до EOF целиком, а значит гигантское тело будет полностью вычитано в
+// память ещё до любой возможности его отвергнуть. Здесь предел проверяется
+// после КАЖДОГО чанка, и при превышении чтение немедленно прекращается
+// (reader.cancel()), не дожидаясь хвоста потока.
+//
+// Считаются РЕАЛЬНЫЕ полученные байты (value.byteLength каждого
+// Uint8Array), а не string.length (который для многобайтового UTF-8 дал бы
+// заниженную оценку) и не Content-Length, которому доверять нельзя в
+// принципе: заголовок -- лишь подсказка, поток читается до EOF независимо
+// от него, поэтому chunked-передача, отсутствующий заголовок и заведомо
+// заниженный Content-Length при большом реальном теле дают ОДИН И ТОТ ЖЕ
+// результат -- предел срабатывает по фактически полученным байтам.
+//
+// Content-Length НЕ используется даже как early-reject оптимизация:
+// корректность от него всё равно не зависит, а отдельная ветка на
+// недоверенном заголовке -- это лишний путь исполнения и лишняя
+// поверхность для ошибок ради экономии на запросах, которые и так
+// отвергаются после первого же чанка. Простота здесь ценнее.
+//
+// Память: накопленные чанки хранятся списком и склеиваются РОВНО ОДИН РАЗ
+// после успешного завершения; при превышении лимита склейки не происходит
+// вовсе. Пик потребления ограничен лимитом плюс один текущий чанк.
+export async function readJsonBodyLimited(request) {
+  if (!request.body) throw new Error("invalid_json"); // нет тела -- нечего парсить, семантика та же, что у request.json() на пустом теле
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MAX_REQUEST_BODY_BYTES) {
+        try { await reader.cancel(); } catch (_) {}
+        throw new Error("request_body_too_large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch (_) {}
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
+
+  let text;
+  try {
+    // fatal:true -- невалидный UTF-8 обязан стать ошибкой, а не молча
+    // превратиться в U+FFFD и дойти до JSON.parse искажённым.
+    text = new TextDecoder("utf-8", { fatal: true }).decode(merged);
+  } catch (_) {
+    throw new Error("invalid_json");
+  }
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    throw new Error("invalid_json");
+  }
+}
+
 export async function verifyCallerFirebaseIdToken(env, idToken, fetchFn = fetch) {
   if (!env.FIREBASE_WEB_API_KEY) throw new Error("server_not_configured");
   const res = await fetchFn(
@@ -1783,8 +1866,16 @@ async function handleSettlement(request, env, url) {
   }
 
   let body;
-  try { body = await request.json(); }
-  catch { return jsonSettlementResponse(request, env, 400, { ok: false, error: "invalid_json" }); }
+  try { body = await readJsonBodyLimited(request); }
+  catch (error) {
+    // №29: request_body_too_large -- новый, отдельный код (413); всё
+    // остальное (включая невалидный UTF-8 и malformed JSON) сохраняет
+    // ровно прежнюю семантику: 400 + invalid_json.
+    if (error && error.message === "request_body_too_large") {
+      return jsonSettlementResponse(request, env, 413, { ok: false, error: "request_body_too_large" });
+    }
+    return jsonSettlementResponse(request, env, 400, { ok: false, error: "invalid_json" });
+  }
 
   try {
     const roomCode = body && body.roomCode;
@@ -1869,8 +1960,13 @@ export default {
 
     let body;
     try {
-      body = await request.json();
-    } catch {
+      body = await readJsonBodyLimited(request);
+    } catch (error) {
+      // №29: см. комментарий в handleSettlement -- та же семантика,
+      // но через jsonResponse (собственные CORS-заголовки этого пути).
+      if (error && error.message === "request_body_too_large") {
+        return jsonResponse(request, env, 413, { ok: false, error: "request_body_too_large" });
+      }
       return jsonResponse(request, env, 400, { ok: false, error: "invalid_json" });
     }
 

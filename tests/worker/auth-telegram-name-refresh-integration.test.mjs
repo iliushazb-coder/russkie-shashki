@@ -85,6 +85,14 @@ function installFetchMock(options) {
     }
     if (u.indexOf("identitytoolkit.googleapis.com") !== -1) {
       if (options.identityFails) return new Response("{}", { status: 401 });
+      // №29: accounts:lookup -- это verifyCallerFirebaseIdToken (проверка
+      // Bearer-токена ВЫЗЫВАЮЩЕГО на rated-путях), отдельно от
+      // signInWithCustomToken ниже, который получает СЕРВЕРНЫЙ токен.
+      // Нужно именно для того, чтобы rated-тест реально ДОШЁЛ до
+      // body reader, а не отвалился на 401 раньше и ничего не доказал.
+      if (u.indexOf("accounts:lookup") !== -1) {
+        return new Response(JSON.stringify({ users: [{ localId: options.callerUid || "tg_555", disabled: false }] }), { status: 200 });
+      }
       return new Response(JSON.stringify({ idToken: "fake-server-id-token", expiresIn: 3600 }), { status: 200 });
     }
     if (u.indexOf("stats%2F") !== -1 || u.indexOf("stats/") !== -1) {
@@ -236,6 +244,91 @@ test("/auth/telegram with an INVALID Telegram signature still fails auth normall
     assert.equal(res.status, 401);
     const body = await res.json();
     assert.equal(body.ok, false);
+  } finally {
+    mock.restore();
+  }
+});
+
+// ===== №29: request body limit -- контракт РЕАЛЬНЫХ HTTP call-site'ов =====
+//
+// Unit-тесты в request-body-limit-unit.test.mjs доказывают сам
+// readJsonBodyLimited(); эти тесты доказывают, что он действительно
+// подключён к обоим реальным путям и что HTTP-контракт (413 vs 400) на
+// них именно такой. Ключевое требование к rated-тесту ниже: он обязан
+// РЕАЛЬНО дойти до body reader, а не отвалиться на 401/403 раньше --
+// иначе он ничего не доказывал бы.
+
+const OVERSIZED_BODY = '{"initData":"' + "x".repeat(40000) + '"}'; // 40000+ реальных байт > 32768
+
+function makeRawRequest(pathname, bodyString, extraHeaders = {}) {
+  return new Request("https://worker.example.com" + pathname, {
+    method: "POST",
+    headers: Object.assign({ "Content-Type": "application/json" }, extraHeaders),
+    body: bodyString
+  });
+}
+
+// Bearer длиной в допустимых extractBearer() пределах (20..10000).
+const VALID_SHAPE_BEARER = "Bearer " + "t".repeat(120);
+
+test("#29 real HTTP: /auth/telegram with an oversized body -> 413 request_body_too_large", async () => {
+  const env = makeEnv();
+  const mock = installFetchMock({});
+  try {
+    const res = await worker.fetch(makeRawRequest("/auth/telegram", OVERSIZED_BODY), env);
+    assert.equal(res.status, 413);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.error, "request_body_too_large");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("#29 real HTTP: /auth/telegram with malformed JSON within the limit -> unchanged 400 invalid_json", async () => {
+  const env = makeEnv();
+  const mock = installFetchMock({});
+  try {
+    const res = await worker.fetch(makeRawRequest("/auth/telegram", "{not valid json"), env);
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.error, "invalid_json");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("#29 real HTTP: /rated/join with an oversized body -> 413 request_body_too_large (execution genuinely reaches the body reader, not a 401 short-circuit)", async () => {
+  const env = makeEnv();
+  const mock = installFetchMock({ callerUid: "tg_555" });
+  try {
+    const res = await worker.fetch(
+      makeRawRequest("/rated/join", OVERSIZED_BODY, { Authorization: VALID_SHAPE_BEARER }),
+      env
+    );
+    assert.notEqual(res.status, 401, "тест обязан пройти auth и дойти до body reader, иначе он ничего не доказывает");
+    assert.notEqual(res.status, 403, "и не должен быть отвергнут по origin");
+    assert.equal(res.status, 413);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.error, "request_body_too_large");
+  } finally {
+    mock.restore();
+  }
+});
+
+test("#29 real HTTP: /rated/join with malformed JSON within the limit -> unchanged 400 invalid_json (also proves auth was passed)", async () => {
+  const env = makeEnv();
+  const mock = installFetchMock({ callerUid: "tg_555" });
+  try {
+    const res = await worker.fetch(
+      makeRawRequest("/rated/join", "{not valid json", { Authorization: VALID_SHAPE_BEARER }),
+      env
+    );
+    assert.notEqual(res.status, 401, "должен был пройти auth");
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.error, "invalid_json");
   } finally {
     mock.restore();
   }
