@@ -1,5 +1,9 @@
 /**
- * Dark settlement candidate. Not deployed.
+ * Cloudflare Worker source for authentication and rated settlement.
+ *
+ * This file is the version-controlled source. Repository state does not
+ * establish which Worker version is currently deployed in production.
+ * See worker/PRODUCTION.md for the last recorded production evidence.
  *
  * Invariants:
  * - caller UID comes from a Firebase ID token verified by the Worker entrypoint;
