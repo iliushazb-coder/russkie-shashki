@@ -1,0 +1,52 @@
+name: n33-publish-exact
+
+on:
+  push:
+    branches: [ci-n33-publish]
+
+permissions:
+  contents: write
+
+jobs:
+  build-exact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout carrier branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct exact reviewed candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, gzip, hashlib, pathlib
+          src = pathlib.Path('.ci/n33.patch.gz.b64').read_text().strip()
+          patch = gzip.decompress(base64.b64decode(src))
+          got = hashlib.sha256(patch).hexdigest()
+          exp = 'a95bcab5f3d2f6c79fb4286b44e9c8072440ef0158a8758aece35e5a666a3f7b'
+          if got != exp:
+              raise SystemExit(f'patch sha mismatch: {got} != {exp}')
+          pathlib.Path('/tmp/n33.patch').write_bytes(patch)
+          PY
+          git config user.name candidate-review
+          git config user.email candidate-review@local
+          git checkout --detach 2a3b05809d2559bf37e30d9f4b9582fd4e75712b
+          git am /tmp/n33.patch
+          test "$(git rev-parse HEAD^)" = "2a3b05809d2559bf37e30d9f4b9582fd4e75712b"
+          test "$(git rev-parse HEAD^{tree})" = "0a72cec4215e9333aef5257a9a560f22af769e44"
+          git diff --check HEAD^
+          node --check script.js
+          node --check worker/index.mjs
+          npm ci
+          npm test
+          node --test tests/worker/worker-unit.test.mjs tests/worker/rated-replay-unit.test.mjs
+          node tests/settlement-behavior.test.js
+
+      - name: Push exact transport candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/publish/n33-final-transport --force
