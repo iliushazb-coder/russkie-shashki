@@ -29,13 +29,13 @@ jobs:
           git diff --check
           test "$(git diff --name-only)" = "worker/index.mjs"
           test "$(sha256sum worker/index.mjs | awk '{print $1}')" = "89cccf5b1c8ff33fc195a222ac85430cb763be881fdcde599f3da6b9c1398f8b"
+          git add worker/index.mjs
           test "$(git write-tree)" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
 
       - name: Commit exact candidate
         run: |
           git config user.name "iliushazb-coder"
           git config user.email "iliushazb@gmail.com"
-          git add worker/index.mjs
           git commit -m "docs(#37): clarify Worker deployment-state header"
           test "$(git rev-parse HEAD^{tree})" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
 
