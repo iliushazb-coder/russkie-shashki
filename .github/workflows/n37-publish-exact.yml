@@ -1,0 +1,43 @@
+name: n37-publish-exact
+
+on:
+  push:
+    branches:
+      - ci-n37-publish
+    paths:
+      - .github/workflows/n37-publish-exact.yml
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Preserve exact patch
+        run: cp .ci/n37.patch /tmp/n37.patch
+
+      - name: Build exact candidate from frozen parent
+        run: |
+          git checkout --detach 6085e90ee0df12360dc6167e9a6bbe3d685b0fa7
+          git apply --check /tmp/n37.patch
+          git apply /tmp/n37.patch
+          git diff --check
+          test "$(git diff --name-only)" = "worker/index.mjs"
+          test "$(sha256sum worker/index.mjs | awk '{print $1}')" = "89cccf5b1c8ff33fc195a222ac85430cb763be881fdcde599f3da6b9c1398f8b"
+          test "$(git write-tree)" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
+
+      - name: Commit exact candidate
+        run: |
+          git config user.name "iliushazb-coder"
+          git config user.email "iliushazb@gmail.com"
+          git add worker/index.mjs
+          git commit -m "docs(#37): clarify Worker deployment-state header"
+          test "$(git rev-parse HEAD^{tree})" = "7939d2c35980298abb7fe16aa9e48d2e3aca21cc"
+
+      - name: Publish transport branch
+        run: git push origin HEAD:refs/heads/publish/n37-final-transport
