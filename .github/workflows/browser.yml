@@ -35,6 +35,11 @@ jobs:
       - name: Зависимости
         run: npm ci
 
+      - name: Исключить сломанный Google Chrome APT source
+        run: |
+          grep -RIl "dl.google.com/linux/chrome" /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null \
+            | xargs -r sudo rm -f
+
       - name: Поставить браузерные движки
         run: npx playwright install --with-deps chromium webkit
 
