@@ -627,7 +627,6 @@ const APPCHECK_BACKOFF_MAX_MS = 60000;
 let cachedAccessToken = null;     // { token, expiresAtMs }
 let cachedAppCheckToken = null;   // { token, expiresAtMs }
 let appCheckFailUntilMs = 0;
-let appCheckLastError = null;
 // №27: счётчик ПОСЛЕДОВАТЕЛЬНЫХ неудач для экспоненциального роста задержки.
 // "Последовательная" здесь означает "зафиксированная ПОСЛЕ истечения
 // предыдущего backoff-окна" — см. appCheckLog() ниже: пока now всё ещё
@@ -646,7 +645,6 @@ export function resetAppCheckCache() {
   cachedAccessToken = null;
   cachedAppCheckToken = null;
   appCheckFailUntilMs = 0;
-  appCheckLastError = null;
   appCheckFailureCount = 0;
 }
 
@@ -665,14 +663,13 @@ function appCheckLog(code, status, nowMs) {
   const allowed = ["not_configured", "oauth_sign_failed", "oauth_failed",
     "oauth_malformed", "exchange_failed", "exchange_malformed", "sign_failed"];
   const safe = allowed.indexOf(code) !== -1 ? code : "unknown";
-  appCheckLastError = safe;
   if (typeof nowMs === "number") {
     if (nowMs < appCheckFailUntilMs) {
       // №27: уже внутри активного backoff-окна от РАНЕЕ зафиксированной
       // неудачи -- это ещё один симптом ТОГО ЖЕ логического outage
       // (в частности, конкурентный вызов getAppCheckToken(), стартовавший
-      // до появления окна, но упавший чуть позже другого). Диагностика
-      // (appCheckLastError выше) всё равно обновляется, но НЕ трогаем ни
+      // до появления окна, но упавший чуть позже другого). Строка
+      // диагностики ниже всё равно логируется, но НЕ трогаем ни
       // счётчик, ни само окно -- одна неудача не должна перескакивать
       // несколько ступеней backoff и не должна продлевать уже идущее окно.
     } else {
@@ -805,7 +802,6 @@ async function getAppCheckToken(env, deps) {
     }
     const ttlSec = parseInt(String(data.ttl || "3600"), 10) || 3600;
     cachedAppCheckToken = { token: data.token, expiresAtMs: now + ttlSec * 1000 };
-    appCheckLastError = null;
     appCheckFailUntilMs = 0;
     appCheckFailureCount = 0; // №27: точный reset backoff-ступени после успешного получения token
     return cachedAppCheckToken.token;

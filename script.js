@@ -783,9 +783,7 @@ const spectatorInterruptedModal = document.getElementById("spectator-interrupted
 const btnSpectatorInterruptedOk = document.getElementById("btn-spectator-interrupted-ok");
 const btnShowStats = document.getElementById("btn-show-stats");
 const statsModal = document.getElementById("stats-modal");
-const statsMySummary = document.getElementById("stats-my-summary");
 const statsLeaderboard = document.getElementById("stats-leaderboard");
-const statsLeaderboardLosses = document.getElementById("stats-leaderboard-losses");
 const btnStatsClose = document.getElementById("btn-stats-close");
 const offlineOpponentModal = document.getElementById("offline-opponent-modal");
 const botDifficultyModal = document.getElementById("bot-difficulty-modal");
@@ -825,14 +823,6 @@ let lastReactionTs = 0;
 // массовой миграции базы сознательно нет, отсутствующее поле
 // доинициализируется лениво, при первой же рейтинговой партии.
 const ELO_START_RATING = 1000;
-// Сколько раз пытаться записать receipt одной партии. Отказ — ШТАТНАЯ
-// ситуация: из двух клиентов receipt успевает записать ровно один, второй
-// получает permission denied от Rules (!data.exists()). Отличить "соперник
-// уже записал" от настоящей ошибки нельзя: eloMatches сознательно закрыт на
-// чтение (.read: false), чтобы не публиковать связку id↔id↔время. Поэтому
-// ограничиваем число попыток вместо бесконечного повтора.
-const ELO_MAX_WRITE_ATTEMPTS = 3;
-
 // Уникальный ID текущей партии с ботом.
 // Для онлайн-игры ID будет строиться из roomCode + matchNumber.
 let currentBotMatchId = null;
@@ -886,16 +876,12 @@ const BOT_USERNAME = "russkie_shashki_bot";
 
 let myPendingOnlineRoom = null; // код комнаты, которую я создал через "Играть онлайн" и ещё жду соперника
 let activeMatchRef = null;
-let matchmakingDecisionMade = false; // защита от гонки условий: решение "создать/присоединиться" принимается один раз
 let isBotGame = false;
 let botColor = "dark"; // Больше не константа, меняется от игры к игре
 // Уровень сложности текущей партии с ботом. Устанавливается заново при
 // каждом новом запуске (см. promptBotDifficultyThenStart) — намеренно НЕ
 // сохраняется ни в localStorage, ни в Firebase, ни между партиями.
 let botDifficulty = "hard";
-
-// Флаг для защиты от гонки условий в матчмейкинге
-let isMatchmakingResolved = false;
 
 // ПЕРЕМЕННЫЕ ДЛЯ ЛОББИ ГРУППЫ:
 let groupLobbyListener = null;
@@ -4507,18 +4493,6 @@ function recordBotGameResultIdempotent(matchId, didIWin, level) {
         result.recentMatchIds = newRecent;
         return result;
     });
-}
-
-// --- "Кто играет": определить, что комната — это МОЯ собственная bot-игра,
-// а не чужая (для которой поведение зрителя остаётся прежним). ---
-function isMyOwnBotGameRoom(room) {
-    if (!room || !room.players) return false;
-    const lightP = room.players.light;
-    const darkP = room.players.dark;
-    const botSlot = (lightP && lightP.id === "bot") ? lightP : ((darkP && darkP.id === "bot") ? darkP : null);
-    if (!botSlot) return false;
-    const humanSlot = (lightP && lightP.id !== "bot") ? lightP : darkP;
-    return !!(humanSlot && humanSlot.id === myTelegramId);
 }
 
 // --- Единственная точка, пишущая/обновляющая публичную spectate room из
