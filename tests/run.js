@@ -67,6 +67,7 @@ const FILES = [
   ['BB.12 №42-B2c: info-modal focus management, dynamic return-focus from real handler parameters', 'modal-dialog-focus-b2c.test.js'],
   ['BB.13 №43 slice 1: escapeHtml extracted to shared/string-utils.js (same pattern as game-engine.js)', 'shared-string-utils.test.js'],
   ['BB.14 №43 slice 2: audio-effects cluster extracted to shared/audio-effects.js (structural + behavioral fake AudioContext)', 'shared-audio-effects.test.js'],
+  ['BB.15 №43 slice 3: formatTime extracted to shared/format-utils.js (pure function, no fakes needed)', 'shared-format-utils.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

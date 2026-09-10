@@ -1150,6 +1150,12 @@ const {
 document.addEventListener("touchstart", unlockAudioContext, { once: true });
 document.addEventListener("click", unlockAudioContext, { once: true });
 
+// ===== №43 slice 3: FORMAT UTILS (вынесены в shared/format-utils.js) =====
+if (!window.RussianCheckersFormatUtils || typeof window.RussianCheckersFormatUtils.formatTime !== "function") {
+    throw new Error("RussianCheckersFormatUtils failed to load");
+}
+const { formatTime } = window.RussianCheckersFormatUtils;
+
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
 
 let currentState = null;
@@ -2655,12 +2661,6 @@ function showMoveHints(sel) {
     });
 }
 
-function formatTime(seconds) {
-    const s = Math.max(0, Math.ceil(seconds));
-    const m = Math.floor(s / 60);
-    const rem = s % 60;
-    return m + ":" + (rem < 10 ? "0" : "") + rem;
-}
 
 function updateTimerDisplay() {
     if (!currentState || currentState.winner) {
