@@ -353,10 +353,12 @@ check('нет отдельного monkey-patch поверх applyTranslationsTo
   && !/applyTranslationsToDOM\s*=\s*function/.test(src));
 
 console.log('=== 16. explicit scope guard: №42-A не включает более рискованные accessibility срезы ===');
-check('нет aria-modal (появится в №42-B вместе с focus management, не в этом срезе)',
-  !/aria-modal/.test(html) && !/aria-modal/.test(src));
-check('нет role="dialog" (появится в №42-B вместе с focus management, не в этом срезе)',
-  !/role="dialog"/.test(html) && !/role="dialog"/.test(src));
+// review fix (№42-B1): guard'ы на aria-modal/role="dialog" были намеренно
+// временными -- их собственный текст в №42-A прямо предупреждал "появится
+// в №42-B". Теперь появились, ровно как и предполагалось; guard'ы retired
+// в этом же коммите, а не оставлены ломать сюиту. aria-pressed остаётся:
+// он относится к ДРУГОМУ, всё ещё не запланированному срезу (состояние
+// активной языковой кнопки), которого №42-B1 не касается.
 check('нет aria-pressed (отдельный будущий срез: состояние активной языковой кнопки, не №42-B)',
   !/aria-pressed/.test(html) && !/aria-pressed/.test(src));
 

@@ -1042,6 +1042,106 @@ function escapeHtml(name) {
     return name.replace(/[&<>"']/g, function (ch) { return chars[ch]; });
 }
 
+// №42-B1: общий helper для локально-управляемых confirm-диалогов (никакой
+// Firebase/async-логики внутри самого helper'а -- он занимается ТОЛЬКО
+// фокусом и клавиатурой; открывать/закрывать что показывать по-прежнему
+// решает вызывающий код каждой конкретной модалки).
+//
+// data-modal-initial-focus и data-modal-escape -- НЕЗАВИСИМЫЕ declarative-
+// атрибуты на кнопках внутри модалки. Они не обязаны совпадать: например,
+// в continue-or-new-modal безопасный дефолт фокуса -- "Продолжить текущую"
+// (ничего не теряет), а Escape логичнее мапить на "Назад" (явный выход из
+// момента выбора), а не молча продолжать сессию нажатием Escape.
+//
+// Одна WeakMap на модалку хранит и triggerEl (для return focus), и
+// ССЫЛКУ НА КОНКРЕТНЫЙ keydown-listener этого открытия -- без этого
+// повторное открытие/закрытие копило бы слушатели один на другим.
+const modalFocusState = new WeakMap();
+
+function getFocusableInModal(modal) {
+    return Array.from(modal.querySelectorAll("button, [href], input, select, textarea, [tabindex]"))
+        .filter(function (el) {
+            // offsetParent === null покрывает display:none (в том числе
+            // через класс .hidden) без привязки к конкретному имени класса.
+            // el.tabIndex (IDL-свойство, не атрибут) отсекает
+            // programmatically-нефокусируемые через tabindex="-1" -- ни
+            // один из 4 текущих B1-диалогов такого не использует, но
+            // helper общий и переиспользуется дальше в №42-B2, где такой
+            // паттерн реалистичен (например, вкладки в stats-modal).
+            return !el.disabled && el.offsetParent !== null && el.tabIndex >= 0;
+        });
+}
+
+function openModal(modal) {
+    if (!modal) return;
+    // Сам helper владеет переключением видимости: раньше эту роль играл
+    // classList.remove/add("hidden") на каждом call-site по отдельности,
+    // и вынести её сюда обязательно -- иначе .focus() ниже молча не
+    // сработает на элементе внутри ещё скрытого (display:none) блока.
+    modal.classList.remove("hidden");
+
+    // Идемпотентность: повторный openModal() до closeModal() (например,
+    // двойной клик на кнопку, запускающую асинхронную проверку перед
+    // показом) не должен копить второй keydown-listener поверх первого.
+    const existing = modalFocusState.get(modal);
+    if (existing) {
+        modal.removeEventListener("keydown", existing.onKeydown);
+        modalFocusState.delete(modal);
+    }
+
+    // review fix: если это повторный openModal() до closeModal() (например,
+    // асинхронная проверка перед показом отработала дважды подряд), фокус
+    // на этот момент уже ВНУТРИ модалки -- document.activeElement дал бы
+    // внутреннюю кнопку вместо настоящего внешнего триггера, и при close
+    // возвращаться было бы уже некуда (внутренняя кнопка сама станет
+    // скрытой вместе с модалкой). Настоящий внешний триггер сохраняем
+    // ТОЛЬКО с первого открытия.
+    const trigger = existing ? existing.trigger : document.activeElement;
+    const focusable = getFocusableInModal(modal);
+    const initial = modal.querySelector("[data-modal-initial-focus]") || focusable[0] || null;
+    const escapeBtn = modal.querySelector("[data-modal-escape]");
+
+    function onKeydown(e) {
+        if (e.key === "Escape" || e.key === "Esc") {
+            e.preventDefault();
+            if (escapeBtn) escapeBtn.click();
+            return;
+        }
+        if (e.key !== "Tab") return;
+        const items = getFocusableInModal(modal);
+        if (items.length === 0) return;
+        const first = items[0], last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    }
+
+    modal.addEventListener("keydown", onKeydown);
+    modalFocusState.set(modal, { trigger: trigger, onKeydown: onKeydown });
+    if (initial) initial.focus();
+}
+
+function closeModal(modal) {
+    if (!modal) return;
+    modal.classList.add("hidden");
+    const state = modalFocusState.get(modal);
+    if (state) {
+        modal.removeEventListener("keydown", state.onKeydown);
+        modalFocusState.delete(modal);
+        // Триггер мог исчезнуть из DOM или сам стать невидимым между
+        // открытием и закрытием (например, если в это время сменился
+        // экран) -- offsetParent-проверка защищает от .focus() на
+        // элементе, вернуть фокус на который уже бессмысленно.
+        if (state.trigger && document.body.contains(state.trigger) && state.trigger.offsetParent !== null) {
+            state.trigger.focus();
+        }
+    }
+}
+
 function showScreen(screen) {
     hideStartupCover();
     menuScreen.classList.add("hidden");
@@ -4890,16 +4990,16 @@ function getMaxDepthForDifficulty(difficulty) {
 // партия стартует только после выбора одной из трёх кнопок; ничего не
 // сохраняется между вызовами — botDifficulty выставляется заново каждый раз.
 function promptBotDifficultyThenStart() {
-    if (!canUseFirebase()) { pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null; botDifficultyModal.classList.remove("hidden"); return; }
+    if (!canUseFirebase()) { pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null; openModal(botDifficultyModal); return; }
     // Перед показом выбора уровня — проверяем, нет ли уже АКТИВНОЙ общей
     // сессии (например, партия начата на другом устройстве). Молча
     // уничтожать её нельзя — предлагаем явный выбор.
-    if (!myTelegramId) { botDifficultyModal.classList.remove("hidden"); return; }
+    if (!myTelegramId) { openModal(botDifficultyModal); return; }
     database.ref("botSessions/" + myTelegramId).once("value").then(function (snapshot) {
         const existing = snapshot.val();
         if (existing && existing.status === "active") {
             pendingExistingSessionForResume = existing;
-            continueOrNewModal.classList.remove("hidden");
+            openModal(continueOrNewModal);
         } else {
             // Сессии нет вообще, либо она уже FINISHED — пойдём через
             // createOwnerBotSession() напрямую. Но если это именно
@@ -4909,10 +5009,10 @@ function promptBotDifficultyThenStart() {
             // предположение) — запоминаем заранее, чтобы аккуратно
             // подчистить ПОСЛЕ успешного создания новой сессии.
             pendingOldSpectateCodeForCleanup = (existing && existing.spectateRoomCode) ? existing.spectateRoomCode : null;
-            botDifficultyModal.classList.remove("hidden");
+            openModal(botDifficultyModal);
         }
     }).catch(function () {
-        botDifficultyModal.classList.remove("hidden"); // офлайн/ошибка — не блокируем игру
+        openModal(botDifficultyModal); // офлайн/ошибка — не блокируем игру
     });
 }
 
@@ -4922,7 +5022,7 @@ let pendingExistingSessionForResume = null;
 let pendingReplaceExistingSession = null;
 
 btnContinueExistingSession.addEventListener("click", function () {
-    continueOrNewModal.classList.add("hidden");
+    closeModal(continueOrNewModal);
     const existing = pendingExistingSessionForResume;
     pendingExistingSessionForResume = null;
     if (!existing) return;
@@ -4930,33 +5030,33 @@ btnContinueExistingSession.addEventListener("click", function () {
 });
 
 btnStartNewSession.addEventListener("click", function () {
-    continueOrNewModal.classList.add("hidden");
+    closeModal(continueOrNewModal);
     pendingReplaceExistingSession = pendingExistingSessionForResume;
     pendingExistingSessionForResume = null;
-    botDifficultyModal.classList.remove("hidden");
+    openModal(botDifficultyModal);
 });
 
 btnContinueOrNewBack.addEventListener("click", function () {
-    continueOrNewModal.classList.add("hidden");
+    closeModal(continueOrNewModal);
     pendingExistingSessionForResume = null;
     showScreen(menuScreen);
     loadActiveRooms();
 });
 
 btnDifficultyEasy.addEventListener("click", function () {
-    botDifficultyModal.classList.add("hidden");
+    closeModal(botDifficultyModal);
     startOwnerBotGameWithDifficulty("easy");
 });
 btnDifficultyMedium.addEventListener("click", function () {
-    botDifficultyModal.classList.add("hidden");
+    closeModal(botDifficultyModal);
     startOwnerBotGameWithDifficulty("medium");
 });
 btnDifficultyHard.addEventListener("click", function () {
-    botDifficultyModal.classList.add("hidden");
+    closeModal(botDifficultyModal);
     startOwnerBotGameWithDifficulty("hard");
 });
 btnDifficultyBack.addEventListener("click", function () {
-    botDifficultyModal.classList.add("hidden");
+    closeModal(botDifficultyModal);
     isBotGame = false;
     // Отменённый flow не должен переживать себя: если пользователь дошёл
     // сюда через "Начать новую" (pendingReplaceExistingSession уже
@@ -5665,28 +5765,28 @@ btnPlayBot.addEventListener("click", function () {
 // ===== СДАТЬСЯ =====
 
 btnResign.addEventListener("click", function () {
-    resignConfirmModal.classList.remove("hidden");
+    openModal(resignConfirmModal);
 });
 
 btnResignNo.addEventListener("click", function () {
-    resignConfirmModal.classList.add("hidden");
+    closeModal(resignConfirmModal);
 });
 
 if (btnBackBot) {
     btnBackBot.addEventListener("click", function() {
-        if (backConfirmModal) backConfirmModal.classList.remove("hidden");
+        if (backConfirmModal) openModal(backConfirmModal);
     });
 }
 if (btnBackBotNo) {
     btnBackBotNo.addEventListener("click", function() {
-        if (backConfirmModal) backConfirmModal.classList.add("hidden");
+        if (backConfirmModal) closeModal(backConfirmModal);
     });
 }
 function finishLocalOnlyBotSeries() { const wasLocalOnly = localOnlyBotGame; localOnlyBotGame = false; if (wasLocalOnly) activatePendingFirebaseFlows(); }
 
 if (btnBackBotYes) {
     btnBackBotYes.addEventListener("click", function() {
-        if (backConfirmModal) backConfirmModal.classList.add("hidden");
+        if (backConfirmModal) closeModal(backConfirmModal);
         // Ветвим по типу активной owner-сессии — synced (текущий основной
         // путь, ownerSessionAttached===true) и legacy используют РАЗНЫЙ
         // cleanup: detachFromOwnerBotSessionLocally() останавливает
@@ -5743,7 +5843,7 @@ if (btnSpectatorInterruptedOk) {
 }
 
 btnResignYes.addEventListener("click", function () {
-    resignConfirmModal.classList.add("hidden");
+    closeModal(resignConfirmModal);
     if (!currentState) return;
 
     if (isOnlineGame) {

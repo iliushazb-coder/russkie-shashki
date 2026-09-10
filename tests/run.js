@@ -61,6 +61,7 @@ const FILES = [
   ['BB.6 №26: app_check_unavailable stays out of terminal/definitive allowlists', 'appcheck-error-not-terminal.test.js'],
   ['BB.7 №32: user-facing strings localized; persisted RTDB fallbacks left neutral', 'i18n-user-facing-strings.test.js'],
   ['BB.8 №33: dead code removed; GROUP_ID and App Check backoff state preserved', 'dead-code-cleanup.test.js'],
+  ['BB.9 №42-B1: dialog role/aria-modal + focus-management helper wired into the 4 local confirm modals', 'modal-dialog-focus.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

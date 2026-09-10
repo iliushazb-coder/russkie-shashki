@@ -124,22 +124,22 @@
 
     <div id="emoji-burst-container" class="emoji-burst-container"></div>
 
-    <div id="resign-confirm-modal" class="hidden modal-overlay">
+    <div id="resign-confirm-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="resign-confirm-modal-label">
         <div class="modal-box">
-            <p data-i18n="confirm_resign">Вы уверены, что хотите сдаться?</p>
+            <p id="resign-confirm-modal-label" data-i18n="confirm_resign">Вы уверены, что хотите сдаться?</p>
             <div class="modal-buttons">
                 <button id="btn-resign-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
-                <button id="btn-resign-no" class="menu-button" data-i18n="btn_no">Нет</button>
+                <button id="btn-resign-no" class="menu-button" data-i18n="btn_no" data-modal-initial-focus data-modal-escape>Нет</button>
             </div>
         </div>
     </div>
 
-    <div id="back-confirm-modal" class="hidden modal-overlay">
+    <div id="back-confirm-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="back-confirm-modal-label">
         <div class="modal-box">
-            <p data-i18n="confirm_back_bot">Вы точно хотите выйти?</p>
+            <p id="back-confirm-modal-label" data-i18n="confirm_back_bot">Вы точно хотите выйти?</p>
             <div class="modal-buttons">
                 <button id="btn-back-bot-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
-                <button id="btn-back-bot-no" class="menu-button" data-i18n="btn_no">Нет</button>
+                <button id="btn-back-bot-no" class="menu-button" data-i18n="btn_no" data-modal-initial-focus data-modal-escape>Нет</button>
             </div>
         </div>
     </div>
@@ -238,25 +238,25 @@
         </div>
     </div>
 
-    <div id="bot-difficulty-modal" class="hidden modal-overlay">
+    <div id="bot-difficulty-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bot-difficulty-modal-label">
         <div class="modal-box">
-            <p class="end-game-text" data-i18n="modal_bot_difficulty">Выберите сложность</p>
+            <p id="bot-difficulty-modal-label" class="end-game-text" data-i18n="modal_bot_difficulty">Выберите сложность</p>
             <div class="modal-buttons">
                 <button id="btn-difficulty-easy" class="menu-button" data-i18n="btn_difficulty_easy">🌱 Лёгкий</button>
                 <button id="btn-difficulty-medium" class="menu-button" data-i18n="btn_difficulty_medium">⚖️ Средний</button>
                 <button id="btn-difficulty-hard" class="menu-button" data-i18n="btn_difficulty_hard">🔥 Сложный</button>
-                <button id="btn-difficulty-back" class="menu-button" data-i18n="btn_back">Назад</button>
+                <button id="btn-difficulty-back" class="menu-button" data-i18n="btn_back" data-modal-initial-focus data-modal-escape>Назад</button>
             </div>
         </div>
     </div>
 
-    <div id="continue-or-new-modal" class="hidden modal-overlay">
+    <div id="continue-or-new-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="continue-or-new-modal-label">
         <div class="modal-box">
-            <p class="end-game-text" data-i18n="modal_continue_or_new">У вас уже есть партия с ботом</p>
+            <p id="continue-or-new-modal-label" class="end-game-text" data-i18n="modal_continue_or_new">У вас уже есть партия с ботом</p>
             <div class="modal-buttons">
-                <button id="btn-continue-existing-session" class="menu-button" data-i18n="btn_continue_existing">▶️ Продолжить текущую</button>
+                <button id="btn-continue-existing-session" class="menu-button" data-i18n="btn_continue_existing" data-modal-initial-focus>▶️ Продолжить текущую</button>
                 <button id="btn-start-new-session" class="menu-button" data-i18n="btn_start_new_session">🆕 Начать новую</button>
-                <button id="btn-continue-or-new-back" class="menu-button" data-i18n="btn_back">Назад</button>
+                <button id="btn-continue-or-new-back" class="menu-button" data-i18n="btn_back" data-modal-escape>Назад</button>
             </div>
         </div>
     </div>

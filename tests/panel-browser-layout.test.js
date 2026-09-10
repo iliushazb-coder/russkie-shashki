@@ -29,6 +29,8 @@
 const fs = require('fs');
 const path = require('path');
 const CSS = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
+const SRC = fs.readFileSync(path.join(__dirname, '..', 'script.js'), 'utf8');
+const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 // №39: движки импортируются ЖЁСТКО. Прежний вариант заворачивал require в
 // try/catch и при отсутствии playwright печатал «ИТОГ: 0/0» с кодом 0 --
@@ -261,6 +263,117 @@ async function dumpDiagnostics(browser, engineName, out) {
     console.log('--- КОНЕЦ ДИАГНОСТИКИ ' + engineName.toUpperCase() + ' ---\n');
 }
 
+// №42-B1: fixture для focus-management четырёх ЛОКАЛЬНЫХ confirm-модалок.
+// Helper (openModal/closeModal/getFocusableInModal) и разметка модалок --
+// РЕАЛЬНЫЕ, извлечённые из script.js/index.html, не копии текста. Клик-
+// привязка на каждой кнопке в fixture -- ПРЕДСТАВИТЕЛЬНАЯ (closeModal(modal)
+// как первая строка обработчика, тот же паттерн, что и во всех 19 реальных
+// call-site'ов; это отдельно проверяется source-guard'ом в
+// modal-dialog-focus.test.js, секция 7). Здесь цель -- ТОЛЬКО механика
+// фокуса/клавиатуры, которую вне настоящего браузера не проверить.
+// Побочные эффекты конкретных обработчиков (например, сброс
+// pendingReplaceExistingSession у bot-difficulty "Назад") проверяются
+// отдельно, на реальном извлечённом теле, в modal-dialog-focus.test.js.
+function buildModalFixture() {
+    const helperStart = SRC.indexOf('const modalFocusState = new WeakMap();');
+    const heMarker = 'function closeModal(modal) {';
+    const heStart = SRC.indexOf(heMarker, helperStart);
+    let depth = 0, i = SRC.indexOf('{', heStart), end = -1;
+    for (; i < SRC.length; i++) {
+        if (SRC[i] === '{') depth++;
+        else if (SRC[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const helperSrc = SRC.slice(helperStart, end + 1);
+
+    const modalIds = ['resign-confirm-modal', 'back-confirm-modal', 'bot-difficulty-modal', 'continue-or-new-modal'];
+    const modalsHtml = modalIds.map(function (id) {
+        const start = HTML.indexOf('<div id="' + id + '"');
+        const m = /\n    <\/div>/.exec(HTML.slice(start));
+        return HTML.slice(start, start + m.index + m[0].length);
+    }).join('\n');
+
+    return '<!doctype html><html><head><style>.hidden{display:none !important}</style></head><body>'
+        + '<button id="ext-trigger">внешний триггер</button>' + modalsHtml
+        + '<script>' + helperSrc + '\n'
+        // Представительная привязка: closeModal(modal) первой строкой --
+        // ровно паттерн всех 19 реальных call-site'ов.
+        + 'document.querySelectorAll(".modal-overlay").forEach(function(modal){'
+        + '  modal.querySelectorAll("button").forEach(function(btn){'
+        + '    btn.addEventListener("click", function(){ closeModal(modal); });'
+        + '  });'
+        + '});'
+        + '</script></body></html>';
+}
+
+async function runModalFocusChecks(page, engineName) {
+    async function reset() {
+        await page.evaluate(function () {
+            document.querySelectorAll('.modal-overlay').forEach(function (m) { m.classList.add('hidden'); });
+            document.getElementById('ext-trigger').focus();
+        });
+    }
+
+    await reset();
+    await page.evaluate(function () { openModal(document.getElementById('resign-confirm-modal')); });
+    let active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1: resign-confirm initial focus -> btn-resign-no (не первая btn-resign-yes)',
+        active === 'btn-resign-no', active);
+
+    await page.keyboard.press('Tab');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1: Tab со второй (последней) кнопки уходит на первую (wrap)',
+        active === 'btn-resign-yes', active);
+
+    await page.keyboard.press('Shift+Tab');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1: Shift+Tab с первой уходит на последнюю (wrap)',
+        active === 'btn-resign-no', active);
+
+    await page.keyboard.press('Escape');
+    let stillOpen = await page.evaluate(function () { return !document.getElementById('resign-confirm-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B1: Escape вызывает click на data-modal-escape и закрывает модалку', !stillOpen);
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1: return focus на исходный триггер после закрытия', active === 'ext-trigger', active);
+
+    // review fix: повторный openModal() того же диалога БЕЗ closeModal()
+    // между вызовами (например, дважды сработавшая асинхронная проверка
+    // перед показом) не должен потерять НАСТОЯЩИЙ внешний триггер --
+    // раньше второй openModal() перезаписывал его текущим activeElement
+    // (уже внутренней кнопкой диалога), и после close фокус улетал в
+    // никуда вместо ext-trigger.
+    await reset();
+    await page.evaluate(function () { document.getElementById('ext-trigger').focus(); openModal(document.getElementById('resign-confirm-modal')); });
+    await page.evaluate(function () { openModal(document.getElementById('resign-confirm-modal')); }); // повторно, БЕЗ closeModal
+    await page.evaluate(function () { closeModal(document.getElementById('resign-confirm-modal')); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1 review fix: повторный openModal() без close между вызовами НЕ теряет исходный внешний триггер',
+        active === 'ext-trigger', active);
+
+    // continue-or-new: initial-focus и escape-target -- РАЗНЫЕ кнопки.
+    await reset();
+    await page.evaluate(function () { openModal(document.getElementById('continue-or-new-modal')); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1: continue-or-new initial focus -> Продолжить текущую (не Назад)',
+        active === 'btn-continue-existing-session', active);
+    await page.keyboard.press('Escape');
+    stillOpen = await page.evaluate(function () { return !document.getElementById('continue-or-new-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B1: continue-or-new Escape закрывает через btn-continue-or-new-back (Назад), не Продолжить', !stillOpen);
+
+    // bot-difficulty: initial focus и полный Tab-цикл по всем 4 кнопкам.
+    await reset();
+    await page.evaluate(function () { openModal(document.getElementById('bot-difficulty-modal')); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B1: bot-difficulty initial focus -> Назад (не первая Лёгкий)',
+        active === 'btn-difficulty-back', active);
+    const order = [active];
+    for (let i = 0; i < 4; i++) {
+        await page.keyboard.press('Tab');
+        order.push(await page.evaluate(function () { return document.activeElement.id; }));
+    }
+    check(engineName + ' 42-B1: 4 Tab по кругу через все кнопки возвращают на initial (' + order.join(' -> ') + ')',
+        order[0] === order[4]);
+}
+
 async function runEngine(engine) {
     console.log('\n################  ДВИЖОК: ' + engine.name.toUpperCase() + '  ################');
     const browser = await engine.type.launch(engine.launchOptions);
@@ -372,6 +485,14 @@ async function runEngine(engine) {
     if (failed > failedBefore) {
         console.log('\n(есть провалы -- печатаю диагностику этого движка)');
         diagLines.forEach(l => console.log(l));
+    }
+
+    console.log('\n=== №42-B1: dialog focus management (4 локальные confirm-модалки) ===');
+    {
+        const modalPage = await browser.newPage();
+        await modalPage.setContent(buildModalFixture());
+        await runModalFocusChecks(modalPage, engine.name);
+        await modalPage.close();
     }
 
     await browser.close();
