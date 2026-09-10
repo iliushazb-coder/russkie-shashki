@@ -172,7 +172,7 @@ console.log('\n=== 9. ПЕРЕВОДЫ И CACHE-BUST ===');
         check('9.x ' + k + ' есть в трёх языках',
             (SRC.match(new RegExp(k + ':', 'g')) || []).length === 3);
     });
-check('9.y cache-bust поднят', /script\.js\?v=203/.test(HTML));
+check('9.y cache-bust поднят', /script\.js\?v=204/.test(HTML));
 check('9.z стили тоже', /style\.css\?v=20/.test(HTML));
 check('9.w элемент изменения рейтинга есть', /id="end-game-rating"/.test(HTML));
 

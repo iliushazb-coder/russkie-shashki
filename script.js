@@ -1156,6 +1156,12 @@ if (!window.RussianCheckersFormatUtils || typeof window.RussianCheckersFormatUti
 }
 const { formatTime } = window.RussianCheckersFormatUtils;
 
+// ===== №43 slice 4: CAPTURED STACK UTILS (вынесены в shared/captured-stack-utils.js) =====
+if (!window.RussianCheckersCapturedStackUtils || typeof window.RussianCheckersCapturedStackUtils.capturedDepthOpacity !== "function") {
+    throw new Error("RussianCheckersCapturedStackUtils failed to load");
+}
+const { capturedDepthOpacity } = window.RussianCheckersCapturedStackUtils;
+
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
 
 let currentState = null;
@@ -1369,14 +1375,6 @@ function renderPlayerNameCell(cell, marker, name, rating, ratingCell) {
 // перестаёт читаться, а точное число всё равно говорит значок.
 const CAPTURED_STACK_MAX = 6;
 
-// Глубина стопки: передняя шашка чёткая, дальние уходят назад.
-// Дальше четвёртой не бледнеем, иначе стопка выглядит грязной.
-const CAPTURED_DEPTH_OPACITY = [1, 0.82, 0.66, 0.52, 0.45];
-
-function capturedDepthOpacity(fromFront) {
-    const i = Math.min(fromFront, CAPTURED_DEPTH_OPACITY.length - 1);
-    return CAPTURED_DEPTH_OPACITY[i];
-}
 
 function renderCapturedStack(container, count, iconClass) {
     if (!container) return;

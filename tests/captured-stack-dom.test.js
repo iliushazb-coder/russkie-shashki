@@ -49,13 +49,21 @@ global.document = { createElement: makeEl };
 // сам себя и пропустил бы изменение самих значений глубины.
 const EXPECTED_DEPTH = [1, 0.82, 0.66, 0.52, 0.45];
 
-eval(grab('capturedDepthOpacity'));
 eval(grab('renderCapturedStack'));
 global.CAPTURED_STACK_MAX = 6;
-global.CAPTURED_DEPTH_OPACITY = (function () {
-    const m = /const CAPTURED_DEPTH_OPACITY = (\[[^\]]*\]);/.exec(SRC);
-    return m ? JSON.parse(m[1]) : [];
-})();
+// №43 slice 4: capturedDepthOpacity() вынесена в
+// shared/captured-stack-utils.js. CAPTURED_DEPTH_OPACITY осталась
+// module-level const внутри ЭТОГО файла (тот же runtime-паттерн, что и в
+// исходном script.js -- создаётся один раз, не на каждый вызов), но
+// приватна модулю, не экспортируется. Получаем РЕАЛЬНУЮ функцию оттуда,
+// не эмулируем её текстом здесь.
+global.capturedDepthOpacity = require('../shared/captured-stack-utils.js').capturedDepthOpacity;
+// Ряд глубины получаем ВЫЗОВОМ реальной функции для индексов 0..4, а не
+// regex-извлечением константы: она приватна shared-модулю (не
+// экспортируется), поэтому пришлось бы регэкспить чужой файл вместо
+// вызова публичного API. EXPECTED_DEPTH выше по-прежнему задан отдельно,
+// не из production -- сравнение ниже всё так же не проверяет само себя.
+global.CAPTURED_DEPTH_OPACITY = [0, 1, 2, 3, 4].map(function (i) { return global.capturedDepthOpacity(i); });
 
 function build(total) {
     const c = makeEl('div');

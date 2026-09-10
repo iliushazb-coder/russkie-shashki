@@ -83,8 +83,11 @@ check('F. script.js: нет declaration formatTime', !/^function formatTime\(/m.
 console.log('');
 console.log('=== G. Cache-bust ===');
 check('G.1 HTML содержит shared/format-utils.js?v=1', /shared\/format-utils\.js\?v=1/.test(HTML));
-check('G.2 HTML содержит script.js?v=203 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersFormatUtils)',
-    /script\.js\?v=203/.test(HTML));
+check('G.2 HTML содержит script.js с версией СТРОГО ВЫШЕ v=202 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersFormatUtils; конкретное число не фиксируем -- продолжит расти со следующими slice\'ами №43)',
+    (function () {
+        const m = /script\.js\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) > 202;
+    })());
 check('G.3 HTML НЕ содержит старую script.js?v=202', !/script\.js\?v=202/.test(HTML));
 
 console.log('');

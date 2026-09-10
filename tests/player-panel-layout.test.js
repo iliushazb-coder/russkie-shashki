@@ -286,7 +286,7 @@ console.log('\n=== 8. МЕСТО В РЕЙТИНГЕ И CACHE-BUST ===');
 check('8.1 места в панели нет', !/id="player-(top|bottom)-rank"/.test(HTML));
 check('8.2 место только в статистике',
     (SRC.match(/t\("stats_your_rank"\)/g) || []).length === 1);
-check('8.3 скрипт поднят', /script\.js\?v=203/.test(HTML));
+check('8.3 скрипт поднят', /script\.js\?v=204/.test(HTML));
 check('8.4 стили подняты', /style\.css\?v=20/.test(HTML));
 check('8.5 старых ссылок нет',
     !/script\.js\?v=195/.test(HTML) && !/style\.css\?v=16/.test(HTML));
