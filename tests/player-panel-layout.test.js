@@ -105,14 +105,6 @@ check('4.2 шашки накладываются', (function () {
     const b = rule('.captured-icons .captured-icon + .captured-icon');
     return b && /margin-left\s*:\s*-\d+px/.test(b);
 })());
-check('4.3 наложение заметное, но шашки различимы', (function () {
-    const b = rule('.captured-icons .captured-icon + .captured-icon') || '';
-    const m = /margin-left\s*:\s*-(\d+)px/.exec(b);
-    if (!m) return false;
-    const overlap = parseInt(m[1], 10);
-    // иконка 15px: сдвиг от 8 до 12 оставляет видимой полоску
-    return overlap >= 8 && overlap <= 12;
-})());
 check('4.7 значок с числом есть', /\.captured-count\s*\{/.test(CSS));
 // Значок больше не висит абсолютом над строкой — он выглядел
 // подпрыгнувшим. Теперь обычный элемент ряда, по центру стопки.
@@ -279,25 +271,15 @@ console.log('\n=== 7g. ЧУЖИЕ ЭКРАНЫ НЕ ЗАТРОНУТЫ ===');
         const g = /gap:\s*(\d+)px/.exec(m[2]);
         if (g) vals[sel] = parseInt(g[1], 10);
     }
-    // №39: у .player-panel зазор стал адаптивным (clamp), поэтому простой
-    // разбор «gap: Npx» его больше не видит. Проверяем выражение целиком:
-    // верхняя граница осталась прежними 4px, на узких экранах сжимается.
-    // Смысл секции -- «чужие экраны не затронуты» -- проверяют соседние
-    // check'и ниже, они не менялись.
-    check('7g.1 промежуток панели адаптивный, максимум прежние 4px',
-        /gap:\s*clamp\(2\.5px,\s*0\.8vw,\s*4px\)/.test(rule('.player-panel') || ''));
+    // №40: точные значения --gap/padding .player-panel сами по себе --
+    // rendered geometry, теперь это дело browser-сюиты. Здесь остаётся
+    // ровно то, ради чего секция и была написана: соседние правила не
+    // задеты заменами внутри .player-panel.
     [['#active-rooms-section', 8], ['#active-rooms-list', 8],
      ['.room-item-row', 8], ['.stats-tabs', 6]].forEach(function (p) {
         check('7g.x ' + p[0] + ' не тронут', vals[p[0]] === p[1],
             'ожидалось ' + p[1] + 'px, стало ' + vals[p[0]] + 'px');
     });
-    check('7g.2 поля панели адаптивные, максимум прежние 10px', (function () {
-        // №39: горизонтальные поля сжимаются на узких экранах, чтобы
-        // оплатить расширение треков рейтинга и статуса. Вертикальные и
-        // верхняя граница горизонтальных прежние.
-        const b = rule('.player-panel') || '';
-        return /padding:\s*6px clamp\(3px,\s*0\.9vw,\s*10px\)/.test(b);
-    })());
 }
 
 console.log('\n=== 8. МЕСТО В РЕЙТИНГЕ И CACHE-BUST ===');

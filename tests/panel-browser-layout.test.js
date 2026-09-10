@@ -97,6 +97,16 @@ const MEASURE = function () {
     probe.remove();
     const cap = q('.captured-icons');
     const badge = q('.captured-count');
+    // №40: геометрия наложения шашек в стопке -- ТОЛЬКО измеренные
+    // bounding box'ы, никаких чисел из CSS (17px/12px и т.п.). Раньше это
+    // был regex-тест по значению margin-left с диапазоном 8..12,
+    // обоснованным шириной иконки 15px -- иконка с тех пор выросла до
+    // 17px, обоснование устарело, а верхняя граница диапазона стояла
+    // ровно на пределе. Теперь порог относительный к измеренной ширине,
+    // поэтому рост/уменьшение иконки не требует синхронной правки теста.
+    const icons = Array.from(p.querySelectorAll('.captured-icon'));
+    const iconRects = icons.map(el => el.getBoundingClientRect());
+    const iconSteps = iconRects.slice(1).map((r, i) => r.left - iconRects[i].left);
     return {
         overflow: document.documentElement.scrollWidth > document.body.clientWidth,
         widerThanBoard: p.getBoundingClientRect().width > bw.getBoundingClientRect().width + 1,
@@ -104,7 +114,9 @@ const MEASURE = function () {
         statusCut: cut(q('.player-status-text')),
         nameShown: shown,
         capRight: Math.round(cap.getBoundingClientRect().right),
-        badgeRight: badge ? Math.round(badge.getBoundingClientRect().right) : null
+        badgeRight: badge ? Math.round(badge.getBoundingClientRect().right) : null,
+        iconWidth: icons.length ? iconRects[0].width : null,
+        iconSteps: iconSteps
     };
 };
 
@@ -275,6 +287,19 @@ async function runEngine(engine) {
         // настоящих букв имени, а не знаков вместе с эмодзи.
         check(vw + 'px: имени видно не меньше шести букв (' + r.nameShown + ')',
             r.nameShown >= 6);
+
+        // №40: наложение шашек в стопке -- по факту отрисовки, относительно
+        // измеренной ширины иконки, без хардкода 15/17/8..12 из CSS.
+        if (r.iconSteps.length) {
+            const w = r.iconWidth;
+            r.iconSteps.forEach(function (step, i) {
+                check(vw + 'px: шаг ' + i + ' различим и накладывается (' + step.toFixed(1) + 'px из ' + w.toFixed(1) + 'px)',
+                    step >= w * 0.15 && step < w);
+            });
+            const maxStep = Math.max(...r.iconSteps), minStep = Math.min(...r.iconSteps);
+            check(vw + 'px: шаг между шашками одинаков (' + minStep.toFixed(2) + '..' + maxStep.toFixed(2) + ')',
+                maxStep - minStep <= 0.5);
+        }
     }
 
     console.log('\n=== 2. ЗНАЧОК НЕ ДВИГАЕТСЯ ОТ СОДЕРЖИМОГО ===');
