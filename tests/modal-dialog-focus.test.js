@@ -28,8 +28,8 @@ const B1_MODALS = ['resign-confirm-modal', 'back-confirm-modal', 'bot-difficulty
 // реализованы. opponent-left-modal/offline-opponent-modal остаются
 // недостижимы (dead-markup follow-up), info-modal -- B2c, ещё не начат.
 const B2_DONE_MODALS = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'spectator-interrupted-modal',
-  'stats-modal', 'bot-details-modal'];
-const B2_STILL_PENDING_MODALS = ['opponent-left-modal', 'info-modal', 'offline-opponent-modal'];
+  'stats-modal', 'bot-details-modal', 'info-modal'];
+const B2_STILL_PENDING_MODALS = ['opponent-left-modal', 'offline-opponent-modal'];
 
 function modalTag(id) {
   const m = new RegExp('<div id="' + id + '"[^>]*>').exec(HTML);
@@ -182,7 +182,7 @@ for (const varName of ['drawOfferModal', 'rematchRequestModal', 'endGameModal', 
 // переменную modal, полученную по id, тем же способом, что и в самом коде.
 check('bot-details-modal: прямого modal.classList.add/remove("hidden") БОЛЬШЕ НЕТ (мигрировано в №42-B2b)',
   !/getElementById\("bot-details-modal"\)[\s\S]{0,40}modal\.classList\.(add|remove)\("hidden"\)/.test(SRC));
-for (const varName of ['opponentLeftModal', 'infoModal', 'offlineOpponentModal']) {
+for (const varName of ['opponentLeftModal', 'offlineOpponentModal']) {
   const stillRaw = new RegExp(varName + '\\.classList\\.(add|remove)\\("hidden"\\)').test(SRC);
   check(`${varName}: по-прежнему прямой classList (вне scope №42-B2a/B2b)`, stillRaw);
 }

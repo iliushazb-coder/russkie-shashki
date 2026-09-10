@@ -518,6 +518,155 @@ async function runNestedModalFocusChecks(page, engineName) {
         labelledby === 'stats-title-online', labelledby);
 }
 
+// №42-B2c: fixture для info-modal. openModal/closeModal/showInfoModal --
+// РЕАЛЬНЫЕ, извлечённые из script.js. showInfoModal() внутри вызывает
+// openModal(infoModal, { returnFocus: !(infoModalShouldNavigate ||
+// offerNewGame) }) -- мутация этой формулы должна ломать тест, поэтому
+// извлекаем showInfoModal целиком, а не переписываем условие вручную.
+function buildInfoModalFixture() {
+    const helperStart = SRC.indexOf('const modalFocusState = new WeakMap();');
+    const heMarker = 'function closeModal(modal) {';
+    const heStart = SRC.indexOf(heMarker, helperStart);
+    let depth = 0, i = SRC.indexOf('{', heStart), end = -1;
+    for (; i < SRC.length; i++) {
+        if (SRC[i] === '{') depth++;
+        else if (SRC[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const helperSrc = SRC.slice(helperStart, end + 1);
+
+    function extractFn(marker) {
+        const s = SRC.indexOf(marker);
+        if (s === -1) throw new Error('function not found for extraction: ' + marker);
+        let d = 0, j = SRC.indexOf('{', s), e = -1;
+        for (; j < SRC.length; j++) {
+            if (SRC[j] === '{') d++;
+            else if (SRC[j] === '}') { d--; if (d === 0) { e = j; break; } }
+        }
+        return SRC.slice(s, e + 1);
+    }
+    const showInfoModalSrc = extractFn('function showInfoModal(text, offerNewGame, navigateToMenu) {');
+
+    const infoStart = HTML.indexOf('<div id="info-modal"');
+    const infoM = /\n    <\/div>/.exec(HTML.slice(infoStart));
+    const infoHtml = HTML.slice(infoStart, infoStart + infoM.index + infoM[0].length);
+
+    return '<!doctype html><html><head><style>.hidden{display:none !important}</style></head><body>'
+        + '<button id="ext-trigger">внешний триггер</button>' + infoHtml
+        + '<script>' + helperSrc + '\n'
+        + 'function t(k){ return k; }'
+        + 'var infoModal=document.getElementById("info-modal");'
+        + 'var infoModalText=document.getElementById("info-modal-text");'
+        + 'var btnInfoNewGame=document.getElementById("btn-info-new-game");'
+        + 'var btnInfoClose=document.getElementById("btn-info-close");'
+        + 'var infoModalShouldNavigate=true;'
+        + 'var menuScreen={}, timeControlScreen={}, showScreenCalls=[];'
+        + 'function showScreen(s){ showScreenCalls.push(s); }'
+        + 'function detachRoomListener(){} function stopPresenceHeartbeat(){} function loadActiveRooms(){}'
+        + 'var roomCode=null, currentState=null, isOnlineGame=false;'
+        // Реальные close-кнопки; wiring представительный (совпадает с
+        // реальным паттерном, отдельно проверено source-guard'ом).
+        + 'btnInfoNewGame.addEventListener("click", function(){'
+        + '  closeModal(infoModal); showScreen(timeControlScreen);'
+        + '});'
+        + 'btnInfoClose.addEventListener("click", function(){'
+        + '  closeModal(infoModal); if (infoModalShouldNavigate) showScreen(menuScreen);'
+        + '});'
+        + showInfoModalSrc
+        + '</script></body></html>';
+}
+
+async function runInfoModalFocusChecks(page, engineName) {
+    async function reset() {
+        await page.evaluate(function () {
+            document.getElementById('info-modal').classList.add('hidden');
+            document.getElementById('btn-info-new-game').classList.add('hidden');
+            document.getElementById('ext-trigger').focus();
+            window.__showScreenCallsAtReset = showScreenCalls.length;
+        });
+    }
+
+    // --- Комбинация 1: offerNewGame=false, navigateToMenu=true (default) -- реальный, единственный используемый сегодня режим ---
+    await reset();
+    await page.evaluate(function () { showInfoModal('err_test', false); });
+    let active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: обычный navigating-режим, initial focus -> btn-info-close', active === 'btn-info-close', active);
+
+    await page.keyboard.press('Tab');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: Tab внутри единственной видимой кнопки остаётся на ней (New Game скрыта)', active === 'btn-info-close', active);
+
+    await page.keyboard.press('Escape');
+    let stillOpen = await page.evaluate(function () { return !document.getElementById('info-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2c: Escape закрывает через btn-info-close', !stillOpen);
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: navigating-режим -- НЕТ stale return-focus на ext-trigger (экран сменился)',
+        active !== 'ext-trigger', active);
+
+    // --- Комбинация 2: offerNewGame=false, navigateToMenu=false -- non-navigating, return-focus ДОЛЖЕН сработать ---
+    await reset();
+    await page.evaluate(function () { showInfoModal('err_no_nav', false, false); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: non-navigating режим, initial focus -> btn-info-close', active === 'btn-info-close', active);
+    await page.evaluate(function () { document.getElementById('btn-info-close').click(); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: non-navigating режим -- return-focus РЕАЛЬНО вернулся на ext-trigger',
+        active === 'ext-trigger', active);
+
+    // --- Комбинация 3: offerNewGame=true, navigateToMenu=true -- dormant двухкнопочный режим, оба exit навигируют ---
+    await reset();
+    await page.evaluate(function () { showInfoModal('err_two_btn', true); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: dormant двухкнопочный режим, initial focus -> btn-info-close (не btn-info-new-game)',
+        active === 'btn-info-close', active);
+
+    const order = [active];
+    await page.keyboard.press('Tab');
+    order.push(await page.evaluate(function () { return document.activeElement.id; }));
+    await page.keyboard.press('Tab');
+    order.push(await page.evaluate(function () { return document.activeElement.id; }));
+    check(engineName + ' 42-B2c: Tab между двумя кнопками циклически замкнут (' + order.join(' -> ') + ')',
+        order[0] === order[2] && order[0] !== order[1]);
+
+    await page.keyboard.press('Escape');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    const escapeWentToNewGame = await page.evaluate(function () { return showScreenCalls[showScreenCalls.length - 1] === timeControlScreen; });
+    check(engineName + ' 42-B2c: Escape НИКОГДА не запускает btn-info-new-game (New Game screen не вызван Escape\'ом)', !escapeWentToNewGame);
+
+    // --- New Game exit явным кликом: навигация безусловна ---
+    await reset();
+    await page.evaluate(function () { showInfoModal('err_two_btn2', true); });
+    await page.evaluate(function () { document.getElementById('btn-info-new-game').click(); });
+    const newGameScreenCalled = await page.evaluate(function () { return showScreenCalls[showScreenCalls.length - 1] === timeControlScreen; });
+    check(engineName + ' 42-B2c: явный клик на btn-info-new-game реально переводит на timeControlScreen', newGameScreenCalled);
+
+    // --- Комбинация 4: offerNewGame=true, navigateToMenu=false -- New Game видима, но её handler ИГНОРИРУЕТ navigateToMenu ---
+    await reset();
+    await page.evaluate(function () { showInfoModal('err_mixed', true, false); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: смешанная комбинация (New Game видима, navigateToMenu=false), initial focus -> btn-info-close',
+        active === 'btn-info-close', active);
+    await page.evaluate(function () { document.getElementById('btn-info-close').click(); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2c: смешанная комбинация -- НЕТ return-focus (New Game видима => returnFocus:false по формуле)',
+        active !== 'ext-trigger', active);
+
+    // --- Repeated showInfoModal() до close: новое сообщение осмысленно переустанавливает фокус на initial ---
+    await reset();
+    await page.evaluate(function () { showInfoModal('err_first', false); });
+    await page.keyboard.press('Tab'); // пользователь остаётся на единственной кнопке
+    await page.evaluate(function () { showInfoModal('err_second', false); }); // второй, замещающий вызов
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    const text = await page.evaluate(function () { return document.getElementById('info-modal-text').textContent; });
+    check(engineName + ' 42-B2c: повторный showInfoModal() реально заменяет текст (' + text + ') и сохраняет фокус на btn-info-close',
+        text === 'err_second' && active === 'btn-info-close');
+
+    // --- Реальный текущий call-site: showInfoModal(t("err_..."), false) -- ровно 2 аргумента, как все 45 в проде ---
+    await reset();
+    await page.evaluate(function () { showInfoModal(t('err_auth_required'), false); });
+    stillOpen = await page.evaluate(function () { return !document.getElementById('info-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2c: реальная форма вызова (2 аргумента, как в 45 продакшен call-sites) открывает модалку корректно', stillOpen);
+}
+
 async function runModalFocusChecks(page, engineName) {
     async function reset() {
         await page.evaluate(function () {
@@ -822,6 +971,14 @@ async function runEngine(engine) {
         await nestedModalPage.setContent(buildNestedModalFixture());
         await runNestedModalFocusChecks(nestedModalPage, engine.name);
         await nestedModalPage.close();
+    }
+
+    console.log('\n=== №42-B2c: info-modal focus management (4 combinations) ===');
+    {
+        const infoModalPage = await browser.newPage();
+        await infoModalPage.setContent(buildInfoModalFixture());
+        await runInfoModalFocusChecks(infoModalPage, engine.name);
+        await infoModalPage.close();
     }
 
     await browser.close();

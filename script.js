@@ -6730,7 +6730,15 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
         btnInfoNewGame.classList.add("hidden");
         btnInfoClose.textContent = t("btn_ok");
     }
-    infoModal.classList.remove("hidden");
+    // №42-B2c: return-focus зависит от ТЕКУЩЕЙ конфигурации вызова, не
+    // хардкожен. btnInfoClose навигирует условно (infoModalShouldNavigate),
+    // но btnInfoNewGame навигирует БЕЗУСЛОВНО в любом случае, когда видима
+    // (её обработчик не проверяет infoModalShouldNavigate вовсе) -- значит
+    // если offerNewGame истинен, хотя бы один достижимый exit точно уводит
+    // на другой экран, и восстанавливать старый trigger бессмысленно, даже
+    // если navigateToMenu=false. Проверено на всех 4 комбинациях параметров
+    // по реальным btnInfoClose/btnInfoNewGame handler'ам.
+    openModal(infoModal, { returnFocus: !(infoModalShouldNavigate || offerNewGame) });
 }
 
 // STARTUP COVER (invite-link/lobby flash fix). Существует в разметке видимым
@@ -7155,7 +7163,7 @@ btnCloseAfterLeave.addEventListener("click", function () {
 // ===== МОДАЛКА "НЕТ ИГРЫ / НЕЛЬЗЯ ИГРАТЬ С СОБОЙ" =====
 
 btnInfoNewGame.addEventListener("click", function () {
-    infoModal.classList.add("hidden");
+    closeModal(infoModal);
     detachRoomListener();
     stopPresenceHeartbeat();
     roomCode = null;
@@ -7165,7 +7173,7 @@ btnInfoNewGame.addEventListener("click", function () {
 });
 
 btnInfoClose.addEventListener("click", function () {
-    infoModal.classList.add("hidden");
+    closeModal(infoModal);
     // Если флаг разрешает навигацию — возвращаемся в меню.
     // Если нет (например, при отказе от ничьи) — просто остаемся на текущем экране.
     if (infoModalShouldNavigate) {
