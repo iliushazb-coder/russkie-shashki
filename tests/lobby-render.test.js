@@ -22,10 +22,9 @@ function check(name, cond, info) {
     else { failed++; console.log('  ❌ ' + name + (info ? '  — ' + info : '')); }
 }
 
-// --- настоящий escapeHtml из production ---
-const escapeSrc = /^function escapeHtml[\s\S]*?\n\}/m.exec(SRC);
-if (!escapeSrc) { console.log('  ❌ 0. escapeHtml не найдена в script.js'); process.exit(1); }
-eval(escapeSrc[0]);
+// --- настоящий escapeHtml из production (№43: вынесена в shared/string-utils.js) ---
+const escapeHtml = require('../shared/string-utils.js').escapeHtml;
+if (typeof escapeHtml !== 'function') { console.log('  ❌ 0. escapeHtml не найдена в shared/string-utils.js'); process.exit(1); }
 
 // --- настоящие шаблоны кнопок из production ---
 const lobbySrc = /function renderLobbyListFromCache[\s\S]*?\n\}/.exec(SRC);

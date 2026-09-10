@@ -1037,11 +1037,6 @@ function generateRoomCode() {
     return code;
 }
 
-function escapeHtml(name) {
-    const chars = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
-    return name.replace(/[&<>"']/g, function (ch) { return chars[ch]; });
-}
-
 // №42-B1: общий helper для локально-управляемых confirm-диалогов (никакой
 // Firebase/async-логики внутри самого helper'а -- он занимается ТОЛЬКО
 // фокусом и клавиатурой; открывать/закрывать что показывать по-прежнему
@@ -1215,6 +1210,13 @@ const {
     attemptMove,
     computeNextDrawState
 } = window.RussianCheckersEngine;
+
+// ===== №43: STRING UTILS (вынесены в shared/string-utils.js) =====
+// Первый slice постепенной модульности -- та же схема, что и у движка выше.
+if (!window.RussianCheckersStringUtils || typeof window.RussianCheckersStringUtils.escapeHtml !== "function") {
+    throw new Error("RussianCheckersStringUtils failed to load");
+}
+const { escapeHtml } = window.RussianCheckersStringUtils;
 
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
 

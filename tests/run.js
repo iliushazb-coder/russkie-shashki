@@ -65,6 +65,7 @@ const FILES = [
   ['BB.10 №42-B2a: async dialog focus management + per-dialog return-focus policy', 'modal-dialog-focus-b2a.test.js'],
   ['BB.11 №42-B2b: nested stats-modal/bot-details-modal focus management (sibling isolation, dynamic aria-labelledby)', 'modal-dialog-focus-b2b.test.js'],
   ['BB.12 №42-B2c: info-modal focus management, dynamic return-focus from real handler parameters', 'modal-dialog-focus-b2c.test.js'],
+  ['BB.13 №43 slice 1: escapeHtml extracted to shared/string-utils.js (same pattern as game-engine.js)', 'shared-string-utils.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

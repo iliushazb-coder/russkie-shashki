@@ -58,7 +58,7 @@ global.myTelegramId = 'ME';
 global.t = function (k) { return k; };
 global.RECONNECT_GRACE_MS = 60000;
 global.getEstimatedServerNow = function () { return Date.now(); };
-eval(grab('escapeHtml'));
+global.escapeHtml = require('../shared/string-utils.js').escapeHtml;
 // CLOCK SAFETY (v185): staleness считается по серверному времени и требует
 // подтверждённого .info/serverTimeOffset; разрушительное удаление — ещё и
 // живой связи. Подставляем в харнесс то, что в бою даёт приложение.
