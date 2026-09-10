@@ -144,7 +144,7 @@
         </div>
     </div>
 
-    <div id="end-game-modal" class="hidden modal-overlay">
+    <div id="end-game-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="end-game-text">
         <div class="modal-box">
             <p id="end-game-text" class="end-game-text"></p>
             <p id="end-game-subtext" class="end-game-subtext"></p>
@@ -152,7 +152,7 @@
             <p id="rematch-wait-note" class="rematch-wait-note"></p>
             <div class="modal-buttons">
                 <button id="btn-new-game" class="menu-button" data-i18n="btn_rematch">Реванш</button>
-                <button id="btn-close-game" class="menu-button" data-i18n="btn_close">Закрыть</button>
+                <button id="btn-close-game" class="menu-button" data-i18n="btn_close" data-modal-initial-focus data-modal-escape>Закрыть</button>
             </div>
         </div>
     </div>
@@ -167,11 +167,11 @@
         </div>
     </div>
 
-    <div id="spectator-interrupted-modal" class="hidden modal-overlay">
+    <div id="spectator-interrupted-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="spectator-interrupted-modal-label">
         <div class="modal-box">
-            <p class="end-game-text" data-i18n="status_game_interrupted">Игра прервана</p>
+            <p id="spectator-interrupted-modal-label" class="end-game-text" data-i18n="status_game_interrupted">Игра прервана</p>
             <div class="modal-buttons">
-                <button id="btn-spectator-interrupted-ok" class="menu-button" data-i18n="btn_ok">Окей</button>
+                <button id="btn-spectator-interrupted-ok" class="menu-button" data-i18n="btn_ok" data-modal-initial-focus data-modal-escape>Окей</button>
             </div>
         </div>
     </div>
@@ -261,22 +261,22 @@
         </div>
     </div>
 
-    <div id="rematch-request-modal" class="hidden modal-overlay">
+    <div id="rematch-request-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="rematch-request-text">
         <div class="modal-box">
             <p id="rematch-request-text" class="end-game-text"></p>
             <div class="modal-buttons">
                 <button id="btn-rematch-accept" class="menu-button" data-i18n="btn_accept">✅ Принять</button>
-                <button id="btn-rematch-decline" class="menu-button danger-button" data-i18n="btn_decline">❌ Отклонить</button>
+                <button id="btn-rematch-decline" class="menu-button danger-button" data-i18n="btn_decline" data-modal-initial-focus>❌ Отклонить</button>
             </div>
         </div>
     </div>
-    <div id="draw-offer-modal" class="hidden modal-overlay">
+    <div id="draw-offer-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="draw-offer-text">
         <div class="modal-box">
             <p id="draw-offer-text" class="end-game-text"></p>
             <div class="modal-buttons">
                 <button id="btn-draw-accept" class="menu-button" data-i18n="btn_accept">✅ Принять</button>
-                <button id="btn-draw-decline" class="menu-button danger-button" data-i18n="btn_decline">❌ Отклонить</button>
-                <button id="btn-draw-cancel" class="menu-button hidden" data-i18n="btn_cancel_offer">Отменить предложение</button>
+                <button id="btn-draw-decline" class="menu-button danger-button" data-i18n="btn_decline" data-modal-initial-focus>❌ Отклонить</button>
+                <button id="btn-draw-cancel" class="menu-button hidden" data-i18n="btn_cancel_offer" data-modal-initial-focus>Отменить предложение</button>
             </div>
         </div>
     </div>

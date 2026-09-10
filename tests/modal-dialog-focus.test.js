@@ -17,8 +17,15 @@ const SRC = fs.readFileSync(path.join(__dirname, '..', 'script.js'), 'utf8');
 const HTML = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 const B1_MODALS = ['resign-confirm-modal', 'back-confirm-modal', 'bot-difficulty-modal', 'continue-or-new-modal'];
-const B2_MODALS = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'opponent-left-modal',
-  'spectator-interrupted-modal', 'info-modal', 'stats-modal', 'bot-details-modal', 'offline-opponent-modal'];
+// review fix (№42-B2a): 4 из 9 B2-кандидатов теперь реализованы --
+// draw-offer/rematch-request/end-game/spectator-interrupted. Guard "role=
+// dialog ещё не появился" для них корректно устарел (см. секцию 1b ниже,
+// которая теперь проверяет обратное). opponent-left-modal и
+// offline-opponent-modal остаются вне scope дольше -- недостижимы из UI
+// (dead-markup follow-up, не B2), info-modal/stats-modal/bot-details-modal
+// -- B2c/B2b, ещё не начаты.
+const B2_DONE_MODALS = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'spectator-interrupted-modal'];
+const B2_STILL_PENDING_MODALS = ['opponent-left-modal', 'info-modal', 'stats-modal', 'bot-details-modal', 'offline-opponent-modal'];
 
 function modalTag(id) {
   const m = new RegExp('<div id="' + id + '"[^>]*>').exec(HTML);
@@ -32,11 +39,17 @@ for (const id of B1_MODALS) {
   check(`${id}: role="dialog"`, /role="dialog"/.test(tag));
   check(`${id}: aria-modal="true"`, /aria-modal="true"/.test(tag));
 }
-console.log('=== 1b. scope guard: B2-модалки НЕ получили role/aria-modal в этом срезе ===');
-for (const id of B2_MODALS) {
+console.log('=== 1b. scope guard: B2-модалки, реализованные в №42-B2a, ТЕПЕРЬ имеют role/aria-modal (guard retired) ===');
+for (const id of B2_DONE_MODALS) {
   const tag = modalTag(id);
-  check(`${id}: без role="dialog" (это №42-B2, не B1)`, !/role="dialog"/.test(tag));
-  check(`${id}: без aria-modal (это №42-B2, не B1)`, !/aria-modal/.test(tag));
+  check(`${id}: role="dialog" (появилось в №42-B2a)`, /role="dialog"/.test(tag));
+  check(`${id}: aria-modal (появилось в №42-B2a)`, /aria-modal/.test(tag));
+}
+console.log('=== 1c. scope guard: остальные B2-кандидаты по-прежнему БЕЗ role/aria-modal (B2b/B2c/dead, ещё не начаты) ===');
+for (const id of B2_STILL_PENDING_MODALS) {
+  const tag = modalTag(id);
+  check(`${id}: без role="dialog" (вне scope №42-B2a)`, !/role="dialog"/.test(tag));
+  check(`${id}: без aria-modal (вне scope №42-B2a)`, !/aria-modal/.test(tag));
 }
 
 console.log('=== 2. data-modal-initial-focus и data-modal-escape -- точная привязка ===');
@@ -83,9 +96,21 @@ for (const id of B1_MODALS) {
   }
 }
 
-console.log('=== 3. ровно 4 data-modal-initial-focus и 4 data-modal-escape во всём index.html ===');
-check('ровно 4 data-modal-initial-focus', (HTML.match(/data-modal-initial-focus/g) || []).length === 4);
-check('ровно 4 data-modal-escape', (HTML.match(/data-modal-escape/g) || []).length === 4);
+console.log('=== 3. ровно 4 data-modal-initial-focus и 4 data-modal-escape СРЕДИ B1-МОДАЛОК ===');
+// review fix (№42-B2a): раньше проверялось "ровно 4 во всём index.html" --
+// корректно ломается любым легитимным расширением (B2a добавляет свои
+// data-modal-initial-focus/escape на ДРУГИХ модалках). Инвариант B1 --
+// "ровно 4 внутри блоков ИМЕННО этих 4 модалок", не общее число по файлу.
+const B1_BLOCKS = B1_MODALS.map(id => {
+  const start = HTML.indexOf('<div id="' + id + '"');
+  const rest = HTML.slice(start + 10);
+  const nextIdx = rest.search(/<div id="[a-z-]+-modal"/);
+  return HTML.slice(start, nextIdx === -1 ? HTML.length : start + 10 + nextIdx);
+}).join('\n');
+check('ровно 4 data-modal-initial-focus внутри 4 B1-модалок',
+  (B1_BLOCKS.match(/data-modal-initial-focus/g) || []).length === 4);
+check('ровно 4 data-modal-escape внутри 4 B1-модалок',
+  (B1_BLOCKS.match(/data-modal-escape/g) || []).length === 4);
 
 console.log('=== 4. Escape не ведёт на destructive-кнопку ни в одной из 4 ===');
 const DESTRUCTIVE = { 'resign-confirm-modal': 'btn-resign-yes', 'back-confirm-modal': 'btn-back-bot-yes' };
@@ -97,7 +122,10 @@ for (const [id, destructiveBtn] of Object.entries(DESTRUCTIVE)) {
 console.log('=== 5. реальные openModal/closeModal: helper владеет видимостью, не только фокусом ===');
 
 function helperBody(name) {
-  const start = SRC.indexOf('function ' + name + '(modal)');
+  // review fix (№42-B2a): openModal() получил второй необязательный
+  // параметр (options), поэтому точное совпадение '(modal)' больше не
+  // находит функцию. Ищем по началу сигнатуры -- любой список параметров.
+  const start = SRC.indexOf('function ' + name + '(modal');
   if (start === -1) throw new Error(name + ' not found in script.js');
   let depth = 0, i = SRC.indexOf('{', start), end = -1;
   for (; i < SRC.length; i++) {
@@ -141,11 +169,14 @@ for (const varName of ['resignConfirmModal', 'backConfirmModal', 'botDifficultyM
   check(`${varName}: не осталось прямых classList.add/remove("hidden")`, !raw);
 }
 
-console.log('=== 8. B2/async call sites не задеты (scope guard) ===');
-for (const varName of ['drawOfferModal', 'rematchRequestModal', 'endGameModal', 'opponentLeftModal',
-    'spectatorInterruptedModal', 'infoModal', 'statsModal', 'offlineOpponentModal']) {
+console.log('=== 8. B2a call sites мигрированы; остальные B2/async всё ещё вне scope (scope guard) ===');
+for (const varName of ['drawOfferModal', 'rematchRequestModal', 'endGameModal', 'spectatorInterruptedModal']) {
   const stillRaw = new RegExp(varName + '\\.classList\\.(add|remove)\\("hidden"\\)').test(SRC);
-  check(`${varName}: по-прежнему прямой classList (не тронут B1)`, stillRaw);
+  check(`${varName}: прямого classList БОЛЬШЕ НЕТ (мигрировано в №42-B2a)`, !stillRaw);
+}
+for (const varName of ['opponentLeftModal', 'infoModal', 'statsModal', 'offlineOpponentModal']) {
+  const stillRaw = new RegExp(varName + '\\.classList\\.(add|remove)\\("hidden"\\)').test(SRC);
+  check(`${varName}: по-прежнему прямой classList (вне scope №42-B2a)`, stillRaw);
 }
 
 console.log('=== 9. bot-difficulty "Назад": РЕАЛЬНЫЙ побочный эффект, не только скрытие modal ===');

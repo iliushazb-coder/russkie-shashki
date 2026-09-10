@@ -305,6 +305,75 @@ function buildModalFixture() {
         + '</script></body></html>';
 }
 
+// №42-B2a: fixture для 4 АСИНХРОННЫХ диалогов. В отличие от B1, они
+// открываются программно (функцией, имитирующей реальный паттерн
+// checkDrawProposal()/checkRematchProposal()/renderEndGameModal()/
+// checkSpectatorGameInterrupted() -- guard "openModal только если
+// classList.contains('hidden')"), а не кликом. Клик-привязка кнопок --
+// та же представительная closeModal(modal), что и в B1-fixture; реальное
+// соответствие call-site'ов этому паттерну отдельно проверяется
+// source-guard'ами в modal-dialog-focus-b2a.test.js.
+function buildAsyncModalFixture() {
+    const helperStart = SRC.indexOf('const modalFocusState = new WeakMap();');
+    const heMarker = 'function closeModal(modal) {';
+    const heStart = SRC.indexOf(heMarker, helperStart);
+    let depth = 0, i = SRC.indexOf('{', heStart), end = -1;
+    for (; i < SRC.length; i++) {
+        if (SRC[i] === '{') depth++;
+        else if (SRC[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const helperSrc = SRC.slice(helperStart, end + 1);
+
+    // review fix: строки-guard'ы извлечены ИЗ SRC, а не переписаны вручную --
+    // первая попытка hand-написала эти же условия внутри simulate*-функций,
+    // и мутация реальной строки в script.js (убрать guard) не ловилась
+    // тестом, потому что тест проверял СВОЙ отдельный текст, не реальный.
+    function extractLine(marker) {
+        const idx = SRC.indexOf(marker);
+        if (idx === -1) throw new Error('line not found for extraction: ' + marker);
+        return SRC.slice(idx, SRC.indexOf(';', idx) + 1);
+    }
+    const drawGuardLine = extractLine('if (drawOfferModal.classList.contains("hidden"))');
+    const rematchGuardLine = extractLine('if (rematchRequestModal.classList.contains("hidden"))');
+    const endGameGuardLine = extractLine('if (endGameModal.classList.contains("hidden"))');
+
+    const modalIds = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'spectator-interrupted-modal'];
+    const modalsHtml = modalIds.map(function (id) {
+        const start = HTML.indexOf('<div id="' + id + '"');
+        const m = /\n    <\/div>/.exec(HTML.slice(start));
+        return HTML.slice(start, start + m.index + m[0].length);
+    }).join('\n');
+
+    return '<!doctype html><html><head><style>.hidden{display:none !important}</style></head><body>'
+        + '<button id="ext-trigger">внешний триггер</button>' + modalsHtml
+        + '<script>' + helperSrc + '\n'
+        + 'document.querySelectorAll(".modal-overlay").forEach(function(modal){'
+        + '  modal.querySelectorAll("button").forEach(function(btn){'
+        + '    btn.addEventListener("click", function(){ closeModal(modal); });'
+        + '  });'
+        + '});'
+        // Представительные функции; сама guard-строка внутри каждой --
+        // РЕАЛЬНАЯ, извлечённая выше из script.js, не переписанная вручную.
+        + 'function simulateDrawOfferShown(){'
+        + '  var drawOfferModal=document.getElementById("draw-offer-modal");'
+        + '  ' + drawGuardLine
+        + '}'
+        + 'function simulateDrawOfferCleared(){ closeModal(document.getElementById("draw-offer-modal")); }'
+        + 'function simulateRematchOfferCleared(){ closeModal(document.getElementById("rematch-request-modal")); }'
+        + 'function simulateRematchOfferShown(){'
+        + '  var rematchRequestModal=document.getElementById("rematch-request-modal");'
+        + '  ' + rematchGuardLine
+        + '}'
+        + 'function simulateEndGameShown(){'
+        + '  var endGameModal=document.getElementById("end-game-modal");'
+        + '  ' + endGameGuardLine
+        + '}'
+        + 'function simulateSpectatorInterrupted(){'
+        + '  openModal(document.getElementById("spectator-interrupted-modal"), { returnFocus: false });'
+        + '}'
+        + '</script></body></html>';
+}
+
 async function runModalFocusChecks(page, engineName) {
     async function reset() {
         await page.evaluate(function () {
@@ -372,6 +441,106 @@ async function runModalFocusChecks(page, engineName) {
     }
     check(engineName + ' 42-B1: 4 Tab по кругу через все кнопки возвращают на initial (' + order.join(' -> ') + ')',
         order[0] === order[4]);
+}
+
+async function runAsyncModalFocusChecks(page, engineName) {
+    async function reset() {
+        await page.evaluate(function () {
+            document.querySelectorAll('.modal-overlay').forEach(function (m) { m.classList.add('hidden'); });
+            document.getElementById('ext-trigger').focus();
+        });
+    }
+
+    // --- 1. Программное async-открытие БЕЗ клика; return-focus (draw-offer: экран не меняется) ---
+    await reset();
+    await page.evaluate(function () { simulateDrawOfferShown(); });
+    let active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: draw-offer программно открылся БЕЗ клика, initial focus -> btn-draw-decline',
+        active === 'btn-draw-decline', active);
+
+    // --- 2. Нет Escape у draw-offer (нет безопасного нейтрального действия) ---
+    await page.keyboard.press('Escape');
+    let stillOpen = await page.evaluate(function () { return !document.getElementById('draw-offer-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2a: draw-offer НЕ закрывается по Escape (нет data-modal-escape)', stillOpen);
+
+    // --- 3. Программное внешнее закрытие (соперник отменил предложение) идёт через closeModal ---
+    await page.evaluate(function () { simulateDrawOfferCleared(); });
+    stillOpen = await page.evaluate(function () { return !document.getElementById('draw-offer-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2a: draw-offer programmatic external close (simulateDrawOfferCleared) реально закрывает', !stillOpen);
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: draw-offer return-focus после внешнего закрытия -> ext-trigger (экран не менялся)',
+        active === 'ext-trigger', active);
+
+    // --- 4. Repeated async open (redundant re-render) НЕ крадёт фокус пользователя ---
+    await reset();
+    await page.evaluate(function () { simulateDrawOfferShown(); });
+    await page.keyboard.press('Tab'); // пользователь уходит с initial на следующую кнопку
+    const afterTab = await page.evaluate(function () { return document.activeElement.id; });
+    await page.evaluate(function () { simulateDrawOfferShown(); }); // redundant re-render, proposal тот же
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: redundant re-render (тот же проposal) НЕ возвращает фокус на initial (' + afterTab + ' -> ' + active + ')',
+        active === afterTab, active);
+
+    // --- 5. rematch-request: тоже нет Escape ---
+    await reset();
+    await page.evaluate(function () { simulateRematchOfferShown(); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: rematch-request initial focus -> btn-rematch-decline', active === 'btn-rematch-decline', active);
+    await page.keyboard.press('Escape');
+    stillOpen = await page.evaluate(function () { return !document.getElementById('rematch-request-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2a: rematch-request НЕ закрывается по Escape', stillOpen);
+
+    // --- 6. end-game-modal: Escape РАБОТАЕТ (делегирует Закрыть), returnFocus:false ---
+    await reset();
+    await page.evaluate(function () { simulateEndGameShown(); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: end-game initial focus -> btn-close-game (не btn-new-game)', active === 'btn-close-game', active);
+    await page.keyboard.press('Escape');
+    stillOpen = await page.evaluate(function () { return !document.getElementById('end-game-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2a: end-game Escape закрывает через btn-close-game', !stillOpen);
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: end-game returnFocus:false -- НЕ возвращается на ext-trigger (' + active + ')',
+        active !== 'ext-trigger');
+
+    // --- 7. spectator-interrupted: Escape работает, returnFocus:false, повторный async-open (listener teardown) ---
+    await reset();
+    await page.evaluate(function () { simulateSpectatorInterrupted(); });
+    await page.evaluate(function () { simulateSpectatorInterrupted(); }); // повторный async open без close между ними
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a: spectator-interrupted повторный async-open не ломается (keydown listener не задвоен), фокус на btn-spectator-interrupted-ok',
+        active === 'btn-spectator-interrupted-ok', active);
+    await page.keyboard.press('Escape');
+    stillOpen = await page.evaluate(function () { return !document.getElementById('spectator-interrupted-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2a: spectator-interrupted Escape закрывает через btn-spectator-interrupted-ok', !stillOpen);
+
+    // --- 8. review fix: РЕАЛЬНЫЙ порядок renderBoard() -- renderEndGameModal()
+    // открывается ПЕРВЫМ, checkRematchProposal()/checkDrawProposal() (закрытие
+    // устаревшего draw/rematch при currentState.winner) идут ПОСЛЕ, в том же
+    // синхронном проходе. Обратный порядок ("сначала закрыли draw, потом
+    // открыли end-game") не воспроизводит найденный баг: closeModal(draw)
+    // late-запущенный ПОСЛЕ того как end-game уже получил фокус, крал его
+    // обратно на старый game-screen trigger, хотя end-game оставался открыт.
+    await reset();
+    await page.evaluate(function () { simulateDrawOfferShown(); });
+    await page.evaluate(function () {
+        simulateEndGameShown();   // 1: renderEndGameModal() -- открывается первым
+        simulateDrawOfferCleared(); // 2: checkDrawProposal() -- закрывается позже, в том же проходе
+    });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a review fix: draw-offer -> end-game в РЕАЛЬНОМ порядке renderBoard -- late closeModal(draw) НЕ крадёт фокус у уже открытого end-game',
+        active === 'btn-close-game', active);
+    stillOpen = await page.evaluate(function () { return !document.getElementById('end-game-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2a review fix: end-game остаётся открытым после late close(draw)', stillOpen);
+
+    await reset();
+    await page.evaluate(function () { simulateRematchOfferShown(); });
+    await page.evaluate(function () {
+        simulateEndGameShown();
+        simulateRematchOfferCleared();
+    });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2a review fix: rematch-request -> end-game в РЕАЛЬНОМ порядке -- то же самое для rematch',
+        active === 'btn-close-game', active);
 }
 
 async function runEngine(engine) {
@@ -493,6 +662,14 @@ async function runEngine(engine) {
         await modalPage.setContent(buildModalFixture());
         await runModalFocusChecks(modalPage, engine.name);
         await modalPage.close();
+    }
+
+    console.log('\n=== №42-B2a: async dialog focus management (draw-offer/rematch/end-game/spectator-interrupted) ===');
+    {
+        const asyncModalPage = await browser.newPage();
+        await asyncModalPage.setContent(buildAsyncModalFixture());
+        await runAsyncModalFocusChecks(asyncModalPage, engine.name);
+        await asyncModalPage.close();
     }
 
     await browser.close();

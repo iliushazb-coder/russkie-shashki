@@ -62,6 +62,7 @@ const FILES = [
   ['BB.7 №32: user-facing strings localized; persisted RTDB fallbacks left neutral', 'i18n-user-facing-strings.test.js'],
   ['BB.8 №33: dead code removed; GROUP_ID and App Check backoff state preserved', 'dead-code-cleanup.test.js'],
   ['BB.9 №42-B1: dialog role/aria-modal + focus-management helper wired into the 4 local confirm modals', 'modal-dialog-focus.test.js'],
+  ['BB.10 №42-B2a: async dialog focus management + per-dialog return-focus policy', 'modal-dialog-focus-b2a.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

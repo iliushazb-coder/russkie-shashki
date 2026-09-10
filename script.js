@@ -1072,8 +1072,19 @@ function getFocusableInModal(modal) {
         });
 }
 
-function openModal(modal) {
+function openModal(modal, options) {
     if (!modal) return;
+    // №42-B2a: options.returnFocus -- необязательный, по умолчанию true (все
+    // 4 существующих B1 call-site'а вызывают openModal(modal) одним
+    // аргументом и продолжают вести себя ровно как раньше). false — для
+    // async-диалогов, у которых закрытие достоверно уводит на другой экран
+    // (end-game-modal через "Закрыть", spectator-interrupted-modal всегда):
+    // фокусировать на закрытии элемент со СТАРОГО экрана бессмысленно, он
+    // либо уже скрыт (и existing offsetParent-guard в closeModal его и так
+    // пропустит), либо доступен, но переход экрана — не то место, куда
+    // стоит искусственно тащить фокус обратно.
+    const returnFocus = !options || options.returnFocus !== false;
+
     // Сам helper владеет переключением видимости: раньше эту роль играл
     // classList.remove/add("hidden") на каждом call-site по отдельности,
     // и вынести её сюда обязательно -- иначе .focus() ниже молча не
@@ -1096,9 +1107,17 @@ function openModal(modal) {
     // возвращаться было бы уже некуда (внутренняя кнопка сама станет
     // скрытой вместе с модалкой). Настоящий внешний триггер сохраняем
     // ТОЛЬКО с первого открытия.
-    const trigger = existing ? existing.trigger : document.activeElement;
+    const trigger = returnFocus ? (existing ? existing.trigger : document.activeElement) : null;
     const focusable = getFocusableInModal(modal);
-    const initial = modal.querySelector("[data-modal-initial-focus]") || focusable[0] || null;
+    // №42-B2a: initial-focus выбирается СРЕДИ ВИДИМЫХ [data-modal-initial-focus]
+    // -- draw-offer-modal переключает набор видимых кнопок в рантайме
+    // (Cancel для своего предложения, Accept/Decline для чужого), и B1's
+    // querySelector() брал бы первую по DOM-порядку независимо от того,
+    // видна ли она сейчас. Ни один из 4 B1-диалогов от этого не зависел
+    // (там набор кнопок статичен), поэтому там поведение не меняется.
+    const initialCandidates = Array.from(modal.querySelectorAll("[data-modal-initial-focus]"));
+    const visibleInitial = initialCandidates.find(function (el) { return el.offsetParent !== null; });
+    const initial = visibleInitial || focusable[0] || null;
     const escapeBtn = modal.querySelector("[data-modal-escape]");
 
     function onKeydown(e) {
@@ -1132,11 +1151,25 @@ function closeModal(modal) {
     if (state) {
         modal.removeEventListener("keydown", state.onKeydown);
         modalFocusState.delete(modal);
+        // review fix: если к моменту закрытия фокус уже находится ВНУТРИ
+        // ДРУГОГО видимого модального диалога -- например, renderBoard()
+        // за один проход сначала открывает end-game-modal, а следом
+        // (позже в той же функции) закрывает уже неактуальный
+        // draw-offer-modal -- не крадём фокус у более нового,
+        // действительно открытого сейчас диалога обратно на старый
+        // trigger. modal сам уже получил "hidden" строкой выше, поэтому
+        // :not(.hidden) естественно исключает его самого: если фокус всё
+        // ещё внутри ЭТОГО закрываемого диалога (обычный случай --
+        // пользователь закрыл его собственной кнопкой/Escape), проверка
+        // ничего не находит, и trigger восстанавливается как раньше.
+        const activeInsideOtherOpenModal = !!(document.activeElement
+            && typeof document.activeElement.closest === "function"
+            && document.activeElement.closest(".modal-overlay:not(.hidden)"));
         // Триггер мог исчезнуть из DOM или сам стать невидимым между
         // открытием и закрытием (например, если в это время сменился
         // экран) -- offsetParent-проверка защищает от .focus() на
         // элементе, вернуть фокус на который уже бессмысленно.
-        if (state.trigger && document.body.contains(state.trigger) && state.trigger.offsetParent !== null) {
+        if (!activeInsideOtherOpenModal && state.trigger && document.body.contains(state.trigger) && state.trigger.offsetParent !== null) {
             state.trigger.focus();
         }
     }
@@ -2815,7 +2848,7 @@ function renderEndGameModal() {
             }
         }
 
-        endGameModal.classList.remove("hidden");
+        if (endGameModal.classList.contains("hidden")) openModal(endGameModal, { returnFocus: false });
         
         // Настраиваем кнопки: зритель видит только "В меню", игрок видит обе
         const buttonsRow = endGameModal.querySelector(".modal-buttons");
@@ -2881,7 +2914,7 @@ function renderEndGameModal() {
         }
 
     } else {
-        endGameModal.classList.add("hidden");
+        closeModal(endGameModal);
     }
 }
 
@@ -5837,7 +5870,7 @@ if (btnBackSpectator) {
 
 if (btnSpectatorInterruptedOk) {
     btnSpectatorInterruptedOk.addEventListener("click", function () {
-        if (spectatorInterruptedModal) spectatorInterruptedModal.classList.add("hidden");
+        if (spectatorInterruptedModal) closeModal(spectatorInterruptedModal);
         leaveSpectatorAndReturnToLobby();
     });
 }
@@ -6011,12 +6044,12 @@ function triggerEmojiBurst(emoji) {
 function checkDrawProposal() {
     if (!drawOfferModal) return;
     if (!isOnlineGame || !currentState || currentState.winner) {
-        drawOfferModal.classList.add("hidden");
+        closeModal(drawOfferModal);
         return;
     }
     const proposal = currentState.drawProposal;
     if (!proposal) {
-        drawOfferModal.classList.add("hidden");
+        closeModal(drawOfferModal);
         return;
     }
     if (proposal.by === myColor) {
@@ -6030,12 +6063,12 @@ function checkDrawProposal() {
         if (btnDrawDecline) btnDrawDecline.classList.remove("hidden");
         if (btnDrawCancel) btnDrawCancel.classList.add("hidden");
     }
-    drawOfferModal.classList.remove("hidden");
+    if (drawOfferModal.classList.contains("hidden")) openModal(drawOfferModal);
 }
 
 if (btnDrawAccept) {
     btnDrawAccept.addEventListener("click", function () {
-        drawOfferModal.classList.add("hidden");
+        closeModal(drawOfferModal);
     // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
     // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
     // владеет presence обоих игроков. Причина техническая, а не игровая:
@@ -6091,7 +6124,7 @@ if (btnDrawAccept) {
 
 if (btnDrawDecline) {
     btnDrawDecline.addEventListener("click", function () {
-        drawOfferModal.classList.add("hidden");
+        closeModal(drawOfferModal);
         if (!requireFirebaseAuth()) return;
         if (currentState && currentState.ratedMatchId) {
             submitRatedDrawCancel();
@@ -6103,7 +6136,7 @@ if (btnDrawDecline) {
 
 if (btnDrawCancel) {
     btnDrawCancel.addEventListener("click", function () {
-        drawOfferModal.classList.add("hidden");
+        closeModal(drawOfferModal);
         if (!requireFirebaseAuth()) return;
         if (currentState && currentState.ratedMatchId) {
             submitRatedDrawCancel();
@@ -6118,7 +6151,7 @@ if (btnDrawCancel) {
 btnCloseGame.addEventListener("click", function () {
     // Если мы зритель — просто отписываемся от комнаты и выходим в меню.
     if (isSpectator) {
-        endGameModal.classList.add("hidden");
+        closeModal(endGameModal);
         detachRoomListener();
         if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
         showScreen(menuScreen);
@@ -6134,7 +6167,7 @@ btnCloseGame.addEventListener("click", function () {
         const generationAtClick = ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt);
 
         waitForSettlementBeforeRoomMutation().then(function (outcome) {
-            endGameModal.classList.add("hidden");
+            closeModal(endGameModal);
             markMyselfLeftExplicitly();
 
             const stillSameFinished = outcome === "safe"
@@ -6161,7 +6194,7 @@ btnCloseGame.addEventListener("click", function () {
         return;
     }
 
-    endGameModal.classList.add("hidden");
+    closeModal(endGameModal);
     markMyselfLeftExplicitly();
 
     if (isOnlineGame) {
@@ -6238,7 +6271,7 @@ btnNewGame.addEventListener("click", function () {
             showInfoModal(t("err_rematch_failed"), false);
         });
     } else if (isBotGame && ownerSessionAttached) {
-        endGameModal.classList.add("hidden");
+        closeModal(endGameModal);
         const oldMatchId = currentBotMatchId;
         applyRematchViaSession(oldMatchId, buildFreshBotGameState()).then(function (result) {
             if (result.committed) {
@@ -6260,10 +6293,10 @@ btnNewGame.addEventListener("click", function () {
         // открыто) получат новое состояние через уже подключённый listener —
         // отдельного локального обновления currentState здесь не требуется.
     } else if (isBotGame) {
-        endGameModal.classList.add("hidden");
+        closeModal(endGameModal);
         startOfflineGame();
     } else {
-        endGameModal.classList.add("hidden");
+        closeModal(endGameModal);
         startOfflineGame();
     }
 });
@@ -6342,20 +6375,20 @@ function performRematchReset(expectedGenerationKey) {
 function checkRematchProposal() {
     if (!rematchRequestModal) return;
     if (!isOnlineGame || !currentState) {
-        rematchRequestModal.classList.add("hidden");
+        closeModal(rematchRequestModal);
         return;
     }
     const proposal = currentState.rematchProposal;
     const buttonsRow = endGameModal.querySelector(".modal-buttons");
 
     if (!proposal) {
-        rematchRequestModal.classList.add("hidden");
+        closeModal(rematchRequestModal);
         if (buttonsRow) buttonsRow.classList.remove("hidden");
         return;
     }
 
     if (proposal.by === myColor) {
-        rematchRequestModal.classList.add("hidden");
+        closeModal(rematchRequestModal);
         if (currentState.winner) {
             endGameText.textContent = endGameText.textContent.split("\n\n⏳")[0] + "\n\n" + t("waiting_rematch");
             if (buttonsRow) {
@@ -6367,7 +6400,7 @@ function checkRematchProposal() {
         }
     } else {
         rematchRequestText.textContent = (proposal.name || t("opponent_default")) + t("offers_rematch");
-        rematchRequestModal.classList.remove("hidden");
+        if (rematchRequestModal.classList.contains("hidden")) openModal(rematchRequestModal);
     }
 }
 
@@ -6451,7 +6484,7 @@ function waitForSettlementBeforeRematch() {
 }
 
 btnRematchAccept.addEventListener("click", function () {
-    rematchRequestModal.classList.add("hidden");
+    closeModal(rematchRequestModal);
     const generationAtAccept = (currentState && roomCode)
         ? ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) : null;
 
@@ -6490,7 +6523,7 @@ btnRematchAccept.addEventListener("click", function () {
             } else {
                 throw new Error("rematch_not_a_player");
             }
-            endGameModal.classList.add("hidden");
+            closeModal(endGameModal);
             showScreen(gameScreen);
             startOnlineGame();
         });
@@ -6501,7 +6534,7 @@ btnRematchAccept.addEventListener("click", function () {
 });
 
 btnRematchDecline.addEventListener("click", function () {
-    rematchRequestModal.classList.add("hidden");
+    closeModal(rematchRequestModal);
     if (canUseFirebase()) database.ref("rooms/" + roomCode + "/rematchProposal").remove();
 });
 
@@ -6617,7 +6650,7 @@ function checkSpectatorGameInterrupted() {
     const darkElapsed = presence.dark ? (Date.now() - (presence.dark.lastSeen || 0)) : Infinity;
     if (lightElapsed > RECONNECT_GRACE_MS || darkElapsed > RECONNECT_GRACE_MS) {
         spectatorInterruptedModalShown = true;
-        if (spectatorInterruptedModal) spectatorInterruptedModal.classList.remove("hidden");
+        if (spectatorInterruptedModal) openModal(spectatorInterruptedModal, { returnFocus: false });
     }
 }
 
@@ -9190,7 +9223,7 @@ function watchGroupRoomAsSpectator(code) {
         if (currentState.winner) {
              renderEndGameModal();
         } else {
-             endGameModal.classList.add("hidden");
+             closeModal(endGameModal);
         }
     });
 }
