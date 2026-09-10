@@ -349,6 +349,15 @@ const translations = {
         offers_draw: " предлагает ничью",
         btn_cancel: "Отменить",
         opponent_default: "Соперник",
+        // №42-A: accessible names для icon-only кнопок (emoji без текстовой
+        // альтернативы) и явная синхронизация lang документа.
+        aria_lang_ru: "Русский язык",
+        aria_lang_it: "Итальянский язык",
+        aria_lang_en: "Английский язык",
+        aria_reaction_laugh: "Реакция: смех",
+        aria_reaction_fire: "Реакция: огонь",
+        aria_reaction_shock: "Реакция: удивление",
+        aria_reaction_angry: "Реакция: злость",
         rematch_no_response: "Соперник не ответил на реванш (пропал).",
         left_game: " покинул игру 👋",
         game_over: "\nПартия завершена.",
@@ -486,6 +495,13 @@ const translations = {
         offers_draw: " offers a draw",
         btn_cancel: "Cancel",
         opponent_default: "Opponent",
+        aria_lang_ru: "Russian language",
+        aria_lang_it: "Italian language",
+        aria_lang_en: "English language",
+        aria_reaction_laugh: "Reaction: laugh",
+        aria_reaction_fire: "Reaction: fire",
+        aria_reaction_shock: "Reaction: surprise",
+        aria_reaction_angry: "Reaction: angry",
         rematch_no_response: "Opponent didn't respond to rematch (disconnected).",
         left_game: " left the game 👋",
         game_over: "\nGame over.",
@@ -622,6 +638,13 @@ const translations = {
         offers_draw: " offre il pareggio",
         btn_cancel: "Annulla",
         opponent_default: "Avversario",
+        aria_lang_ru: "Lingua russa",
+        aria_lang_it: "Lingua italiana",
+        aria_lang_en: "Lingua inglese",
+        aria_reaction_laugh: "Reazione: risata",
+        aria_reaction_fire: "Reazione: fuoco",
+        aria_reaction_shock: "Reazione: sorpresa",
+        aria_reaction_angry: "Reazione: rabbia",
         rematch_no_response: "L'avversario non ha risposto alla rivincita (disconnesso).",
         left_game: " ha lasciato la partita 👋",
         game_over: "\nPartita terminata.",
@@ -708,9 +731,17 @@ function t(key) {
 
 // Функция применения переводов к HTML-элементам с атрибутом data-i18n
 function applyTranslationsToDOM() {
+    document.documentElement.lang = currentLang;
     document.querySelectorAll("[data-i18n]").forEach(function(el) {
         const key = el.getAttribute("data-i18n");
         el.textContent = t(key);
+    });
+    // №42-A: accessible names для icon-only кнопок (emoji сам по себе не
+    // текстовая альтернатива) — тем же способом и в той же точке, что и
+    // видимый текст выше, поэтому обновляются одновременно со сменой языка.
+    document.querySelectorAll("[data-i18n-aria]").forEach(function(el) {
+        const key = el.getAttribute("data-i18n-aria");
+        el.setAttribute("aria-label", t(key));
     });
     // Обновляем подсветку активного флага
     document.querySelectorAll(".lang-btn").forEach(function(btn) {

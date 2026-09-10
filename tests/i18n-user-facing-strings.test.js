@@ -14,6 +14,7 @@ let passed = 0, failed = 0;
 function check(n, c, d) { console.log((c ? '  ✅ ' : '  ❌ ') + n + (!c && d ? ' — ' + d : '')); c ? passed++ : failed++; }
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'script.js'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 // ===== 1. словарь: ключи во всех языках =====
 
@@ -263,6 +264,101 @@ check('9.1 localizeOpponentPlaceholder больше не существует в
 check('9.2 sentinel-список удалён', src.indexOf('OPPONENT_WAITING_SENTINELS') === -1);
 check('9.3 loadActiveRooms больше не читает data[code].opponentName для отображения',
   !/opponent: [^\n]*data\[code\]\.opponentName/.test(src));
+
+// ===== №42-A: accessibility semantics (aria-label, document.lang) =====
+//
+// Только semantic-only слой: имена icon-only кнопок и синхронизация lang
+// документа. НЕ входит и намеренно не проверяется здесь: aria-modal,
+// role="dialog", focus management, aria-pressed, board keyboard controls,
+// aria-live -- всё это отдельные, более рискованные срезы №42.
+
+console.log('=== 11. accessibility: 7 новых translation keys ===');
+
+const ARIA_KEYS = [
+  'aria_lang_ru', 'aria_lang_it', 'aria_lang_en',
+  'aria_reaction_laugh', 'aria_reaction_fire', 'aria_reaction_shock', 'aria_reaction_angry'
+];
+
+for (const key of ARIA_KEYS) {
+  for (const lang of LANGS) {
+    check(`${key} есть в ${lang}`, new RegExp('\\b' + key + ':').test(blocks[lang]));
+  }
+}
+
+console.log('=== 12. en/it без кириллицы для accessibility-ключей ===');
+for (const key of ARIA_KEYS) {
+  for (const lang of ['en', 'it']) {
+    const m = blocks[lang].match(new RegExp('\\b' + key + ':\\s*"([^"]*)"'));
+    check(`${key} в ${lang} не содержит кириллицы`, !!m && !/[а-яА-ЯёЁ]/.test(m[1]), m ? m[1] : 'ключ не найден');
+  }
+}
+
+console.log('=== 13. index.html: ровно 7 data-i18n-aria, правильная привязка ===');
+
+const ariaAttrMatches = [...html.matchAll(/data-i18n-aria="([a-z_]+)"/g)].map(m => m[1]);
+check('ровно 7 атрибутов data-i18n-aria в index.html', ariaAttrMatches.length === 7,
+  'найдено: ' + ariaAttrMatches.length);
+
+const EXPECTED_BINDINGS = {
+  'data-lang="ru"': 'aria_lang_ru',
+  'data-lang="it"': 'aria_lang_it',
+  'data-lang="en"': 'aria_lang_en',
+  'id="btn-react-laugh"': 'aria_reaction_laugh',
+  'id="btn-react-fire"': 'aria_reaction_fire',
+  'id="btn-react-shock"': 'aria_reaction_shock',
+  'id="btn-react-angry"': 'aria_reaction_angry'
+};
+for (const [anchorAttr, expectedKey] of Object.entries(EXPECTED_BINDINGS)) {
+  const re = new RegExp('<button[^>]*' + anchorAttr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[^>]*data-i18n-aria="([a-z_]+)"');
+  const m = html.match(re);
+  check(`кнопка ${anchorAttr} привязана к ${expectedKey}`, !!m && m[1] === expectedKey,
+    m ? m[1] : 'не найдено');
+}
+
+check('emoji сохранены на всех 7 кнопках (текстовое содержимое не заменено на пусто)',
+  ARIA_KEYS.every(k => {
+    const re = new RegExp('data-i18n-aria="' + k + '">([^<]+)</button>');
+    const m = html.match(re);
+    return !!m && m[1].trim().length > 0;
+  }));
+
+console.log('=== 14. никакого inline accessibility script в index.html ===');
+check('в index.html ровно один <script> (тот же, что и в base -- никакого monkey-patch wrapper)',
+  (html.match(/<script>/g) || []).length === 1);
+check('index.html не содержит manual document.documentElement.lang (эта логика -- в script.js)',
+  !/<script>[\s\S]*document\.documentElement\.lang/.test(html));
+
+console.log('=== 15. реальный applyTranslationsToDOM(): lang sync и aria-label внутри самой функции ===');
+
+const ATD_BODY = (function () {
+  const start = src.indexOf('function applyTranslationsToDOM()');
+  if (start === -1) throw new Error('applyTranslationsToDOM not found in script.js');
+  // Границы функции по балансу фигурных скобок -- тело может содержать
+  // вложенные forEach-колбэки с собственными { }.
+  let depth = 0, i = src.indexOf('{', start), end = -1;
+  for (; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+  }
+  if (end === -1) throw new Error('applyTranslationsToDOM: не удалось найти конец функции');
+  return src.slice(start, end + 1);
+})();
+
+check('document.documentElement.lang = currentLang находится ВНУТРИ реального applyTranslationsToDOM()',
+  /document\.documentElement\.lang\s*=\s*currentLang/.test(ATD_BODY));
+check('реальный applyTranslationsToDOM() проходит [data-i18n-aria] и выставляет aria-label через t(key)',
+  /data-i18n-aria/.test(ATD_BODY) && /setAttribute\("aria-label",\s*t\(key\)\)/.test(ATD_BODY));
+check('нет отдельного monkey-patch поверх applyTranslationsToDOM в script.js (единственное объявление функции)',
+  (src.match(/function applyTranslationsToDOM\(\)/g) || []).length === 1
+  && !/applyTranslationsToDOM\s*=\s*function/.test(src));
+
+console.log('=== 16. explicit scope guard: №42-A не включает более рискованные accessibility срезы ===');
+check('нет aria-modal (появится в №42-B вместе с focus management, не в этом срезе)',
+  !/aria-modal/.test(html) && !/aria-modal/.test(src));
+check('нет role="dialog" (появится в №42-B вместе с focus management, не в этом срезе)',
+  !/role="dialog"/.test(html) && !/role="dialog"/.test(src));
+check('нет aria-pressed (отдельный будущий срез: состояние активной языковой кнопки, не №42-B)',
+  !/aria-pressed/.test(html) && !/aria-pressed/.test(src));
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 if (failed > 0) process.exit(1);
