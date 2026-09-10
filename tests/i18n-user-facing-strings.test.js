@@ -50,7 +50,7 @@ console.log('=== 3. подтверждённые user-facing литералы у
 check('нет showInfoModal("Соперник покинул игру.")', src.indexOf('showInfoModal("Соперник покинул игру.') === -1);
 check('нет showInfoModal("Комната уже занята...")', src.indexOf('showInfoModal("Комната уже занята') === -1);
 check('waitingText не присваивается литералом "Ожидание подключения друга..."', src.indexOf('waitingText.textContent = "Ожидание подключения друга') === -1);
-check('waitingText не присваивается литералом "Друг подключился!...")', src.indexOf('waitingText.textContent = "Друг подключился') === -1);
+check('waitingText не присваивается литералом "Друг подключился!..."', src.indexOf('waitingText.textContent = "Друг подключился') === -1);
 // review fix: используем УЖЕ СУЩЕСТВОВАВШИЙ до №32 ключ waiting_friend
 // (ru "Ожидание подключения друга..." -- буквально тот же текст, что был
 // захардкожен), а не новый дублирующий waiting_for_friend.
