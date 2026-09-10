@@ -54,7 +54,11 @@ console.log('=== C. index.html: порядок и способ загрузки 
 {
     const engineIdx = HTML.indexOf('shared/game-engine.js?v=1');
     const stringUtilsIdx = HTML.indexOf('shared/string-utils.js?v=1');
-    const scriptIdx = HTML.indexOf('script.js?v=201');
+    // Версия script.js неизбежно продолжит расти с каждым следующим slice
+    // №43 -- ищем её generic-регэкспом, не жёстко зашитым числом, иначе этот
+    // check ломался бы при КАЖДОМ будущем cache-bust'е, не только при откате.
+    const scriptVerMatch = /script\.js\?v=(\d+)/.exec(HTML);
+    const scriptIdx = scriptVerMatch ? scriptVerMatch.index : -1;
     check('C.1 shared/string-utils.js?v=1 присутствует в index.html', stringUtilsIdx !== -1);
     check('C.2 порядок: game-engine.js < string-utils.js < script.js',
         engineIdx !== -1 && engineIdx < stringUtilsIdx && stringUtilsIdx < scriptIdx,
@@ -87,8 +91,11 @@ check('F. script.js: нет declaration escapeHtml', !/^function escapeHtml\(/m.
 console.log('');
 console.log('=== G. Cache-bust ===');
 check('G.1 HTML содержит shared/string-utils.js?v=1', /shared\/string-utils\.js\?v=1/.test(HTML));
-check('G.2 HTML содержит script.js?v=201 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersStringUtils -- смешанный cache-state старого index.html с новым script.js под прежним ?v=200 бросал бы RussianCheckersStringUtils failed to load)',
-    /script\.js\?v=201/.test(HTML));
+check('G.2 HTML содержит script.js с версией СТРОГО ВЫШЕ v=200 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersStringUtils -- смешанный cache-state старого index.html с новым script.js под прежним ?v=200 бросал бы RussianCheckersStringUtils failed to load; конкретное число не фиксируем -- оно продолжит расти со следующими slice\'ами №43, важен сам факт "выше исходного v=200")',
+    (function () {
+        const m = /script\.js\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) > 200;
+    })());
 check('G.3 HTML НЕ содержит старую script.js?v=200', !/script\.js\?v=200/.test(HTML));
 
 console.log('');

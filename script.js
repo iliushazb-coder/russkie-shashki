@@ -128,94 +128,6 @@ connectedRef.on("value", function(snap) {
 
 // ===== ЭКОНОМИКА =====
 
-
-
-// ===== ЗВУКИ =====
-
-const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
-// Современные браузеры блокируют звук, пока человек не коснётся экрана —
-// это разблокирует звуковую систему при самом первом касании/клике.
-function unlockAudioContext() {
-    if (audioContext.state === "suspended") {
-        audioContext.resume();
-    }
-}
-document.addEventListener("touchstart", unlockAudioContext, { once: true });
-document.addEventListener("click", unlockAudioContext, { once: true });
-
-function playTone(frequency, duration, volume) {
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    oscillator.frequency.value = frequency;
-    oscillator.type = "sine";
-    gainNode.gain.setValueAtTime(volume, audioContext.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
-    oscillator.start();
-    oscillator.stop(audioContext.currentTime + duration);
-}
-
-function playWoodKnock(duration, volume, filterFreq) {
-    const bufferSize = Math.floor(audioContext.sampleRate * duration);
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 3);
-    }
-    const noise = audioContext.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = audioContext.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.value = filterFreq;
-    filter.Q.value = 1.1;
-
-    const gain = audioContext.createGain();
-    gain.gain.setValueAtTime(volume, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + duration);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(audioContext.destination);
-    noise.start();
-}
-
-function playMoveSound() { playWoodKnock(0.09, 0.32, 1700); }
-function playCaptureSound() {
-    playWoodKnock(0.13, 0.5, 850);
-    setTimeout(function () { playWoodKnock(0.1, 0.32, 650); }, 55);
-}
-function playKingSound() {
-    playTone(523, 0.1, 0.22);
-    setTimeout(function () { playTone(659, 0.1, 0.24); }, 90);
-    setTimeout(function () { playTone(784, 0.22, 0.26); }, 180);
-}
-function playKingCaptureSound() {
-    playWoodKnock(0.18, 0.6, 600);
-    setTimeout(function () { playWoodKnock(0.13, 0.42, 480); }, 65);
-    setTimeout(function () { playTone(880, 0.14, 0.18); }, 150);
-}
-function playWinSound() {
-    playTone(392, 0.15, 0.3);
-    setTimeout(function () { playTone(523, 0.15, 0.3); }, 150);
-    setTimeout(function () { playTone(659, 0.3, 0.3); }, 300);
-}
-function playSoundForMoveType(type, wasKing) {
-    if (type === "king") {
-        playKingSound();
-    } else if (type === "capture") {
-        if (wasKing) {
-            playKingCaptureSound();
-        } else {
-            playCaptureSound();
-        }
-    } else if (type === "move") {
-        playMoveSound();
-    }
-}
-
 // ===== ТЕЛЕГРАМ-ПОЛЬЗОВАТЕЛЬ =====
 
 // ===== ВОРОТА ДОСТУПА К FIREBASE =====
@@ -1217,6 +1129,26 @@ if (!window.RussianCheckersStringUtils || typeof window.RussianCheckersStringUti
     throw new Error("RussianCheckersStringUtils failed to load");
 }
 const { escapeHtml } = window.RussianCheckersStringUtils;
+
+// ===== №43 slice 2: AUDIO EFFECTS (вынесены в shared/audio-effects.js) =====
+if (!window.RussianCheckersAudioEffects || typeof window.RussianCheckersAudioEffects.playSoundForMoveType !== "function") {
+    throw new Error("RussianCheckersAudioEffects failed to load");
+}
+const {
+    unlockAudioContext,
+    playMoveSound,
+    playCaptureSound,
+    playKingSound,
+    playKingCaptureSound,
+    playWinSound,
+    playSoundForMoveType
+} = window.RussianCheckersAudioEffects;
+// Современные браузеры блокируют звук, пока человек не коснётся экрана —
+// это разблокирует звуковую систему при самом первом касании/клике.
+// Регистрация остаётся здесь (не в shared-модуле): это side-effect
+// привязки к document текущей страницы, а не часть звуковой логики.
+document.addEventListener("touchstart", unlockAudioContext, { once: true });
+document.addEventListener("click", unlockAudioContext, { once: true });
 
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
 
