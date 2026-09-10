@@ -69,6 +69,7 @@ const FILES = [
   ['BB.14 №43 slice 2: audio-effects cluster extracted to shared/audio-effects.js (structural + behavioral fake AudioContext)', 'shared-audio-effects.test.js'],
   ['BB.15 №43 slice 3: formatTime extracted to shared/format-utils.js (pure function, no fakes needed)', 'shared-format-utils.test.js'],
   ['BB.16 №43 slice 4: capturedDepthOpacity extracted to shared/captured-stack-utils.js (index/clamp coverage)', 'shared-captured-stack-utils.test.js'],
+  ['BB.17 №43 slice 5: startup-cover cluster extracted to shared/startup-cover-utils.js (global.Telegram adaptation)', 'shared-startup-cover-utils.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

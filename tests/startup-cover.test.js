@@ -109,41 +109,68 @@ console.log('=== 4b. JS CACHE-BUST ПОДНЯТ ВМЕСТЕ С COVER (publicati
 }
 
 console.log('');
-console.log('=== 5. hasInviteIntent() / hideStartupCover() — извлечённые функции ===');
+console.log('=== 5. hasInviteIntent() / hideStartupCover() / markStartupCoverAsInvite() -- из shared/startup-cover-utils.js ===');
 let loadError = null;
+let startupCoverUtils = null;
 try {
   global.document = {
     _cover: { classList: { _classes: new Set(), add: function (c) { this._classes.add(c); }, contains: function (c) { return this._classes.has(c); } } },
     documentElement: { classList: { _classes: new Set(), add: function (c) { this._classes.add(c); }, contains: function (c) { return this._classes.has(c); } } },
     getElementById: function (id) { return id === 'startup-cover' ? global.document._cover : null; }
   };
-  eval(extractFunc('hideStartupCover'));
-  eval(extractFunc('hasInviteIntent'));
-  eval(extractFunc('markStartupCoverAsInvite'));
+  // №43 slice 5: три функции теперь живут в shared/startup-cover-utils.js,
+  // не в script.js -- берём реальный модуль через require(), не
+  // eval-извлечением текста, которого здесь больше нет.
+  delete require.cache[require.resolve('../shared/startup-cover-utils.js')];
+  startupCoverUtils = require('../shared/startup-cover-utils.js');
 } catch (e) { loadError = e.message; }
 
 check('5.0 все три функции извлеклись без ошибок', loadError === null, loadError);
 
 if (!loadError) {
-  check('5.1 hasInviteIntent() === false вне Telegram (window.Telegram отсутствует)', (function () {
-    global.window = {};
-    global.Telegram = undefined;
+  const hideStartupCover = startupCoverUtils.hideStartupCover;
+  const hasInviteIntent = startupCoverUtils.hasInviteIntent;
+  const markStartupCoverAsInvite = startupCoverUtils.markStartupCoverAsInvite;
+
+  check('5.1 hasInviteIntent() === false вне Telegram (Telegram отсутствует)', (function () {
+    delete global.Telegram;
     return hasInviteIntent() === false;
   })());
 
-  check('5.2 hasInviteIntent() === false при Telegram без start_param', (function () {
-    global.window = { Telegram: { WebApp: { initDataUnsafe: {} } } };
-    global.Telegram = global.window.Telegram;
+  check('5.1b hasInviteIntent() === false при Telegram без WebApp', (function () {
+    global.Telegram = {};
+    return hasInviteIntent() === false;
+  })());
+
+  check('5.2 hasInviteIntent() === false при Telegram.WebApp без initDataUnsafe', (function () {
+    global.Telegram = { WebApp: {} };
+    return hasInviteIntent() === false;
+  })());
+
+  check('5.2b hasInviteIntent() === false при initDataUnsafe без start_param (пустой)', (function () {
+    global.Telegram = { WebApp: { initDataUnsafe: {} } };
     return hasInviteIntent() === false;
   })());
 
   check('5.3 hasInviteIntent() === true при заполненном start_param', (function () {
-    global.window = { Telegram: { WebApp: { initDataUnsafe: { start_param: 'ROOM01' } } } };
-    global.Telegram = global.window.Telegram;
+    global.Telegram = { WebApp: { initDataUnsafe: { start_param: 'ROOM01' } } };
     return hasInviteIntent() === true;
   })());
 
-  check('5.4 hideStartupCover() добавляет class hidden на #startup-cover', (function () {
+  check('5.3b review fix: hasInviteIntent() читает ОДНУ согласованную global.Telegram -- не смешивает window.Telegram и bare Telegram, как было в script.js до извлечения', (function () {
+    const sharedSrc = fs.readFileSync(path.join(__dirname, '..', 'shared', 'startup-cover-utils.js'), 'utf8');
+    const fnMatch = /function hasInviteIntent\(\) \{[\s\S]*?\n    \}/.exec(sharedSrc);
+    if (!fnMatch) return false;
+    const body = fnMatch[0];
+    const globalTelegramCount = (body.match(/global\.Telegram/g) || []).length;
+    const bodyWithoutGlobalTelegram = body.split('global.Telegram').join('');
+    // После вычёркивания каждого "global.Telegram" в теле не должно остаться
+    // ни одного самостоятельного упоминания "Telegram" -- значит все ссылки
+    // шли через global., ни одной голой или через window.
+    return globalTelegramCount >= 4 && !/Telegram/.test(bodyWithoutGlobalTelegram);
+  })());
+
+  check('5.4 hideStartupCover() добавляет class hidden на #startup-cover (элемент присутствует)', (function () {
     global.document._cover.classList._classes.clear();
     hideStartupCover();
     return global.document._cover.classList.contains('hidden');

@@ -1162,6 +1162,12 @@ if (!window.RussianCheckersCapturedStackUtils || typeof window.RussianCheckersCa
 }
 const { capturedDepthOpacity } = window.RussianCheckersCapturedStackUtils;
 
+// ===== №43 slice 5: STARTUP COVER UTILS (вынесены в shared/startup-cover-utils.js) =====
+if (!window.RussianCheckersStartupCoverUtils || typeof window.RussianCheckersStartupCoverUtils.hasInviteIntent !== "function") {
+    throw new Error("RussianCheckersStartupCoverUtils failed to load");
+}
+const { hideStartupCover, hasInviteIntent, markStartupCoverAsInvite } = window.RussianCheckersStartupCoverUtils;
+
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
 
 let currentState = null;
@@ -6677,32 +6683,6 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
 // по умолчанию без участия JS — эти два хелпера только УБИРАЮТ его; кто
 // именно вошёл (invite vs normal) решают checkForInviteLink()/bootstrapApp(),
 // сам cover никакого security-решения не принимает.
-function hideStartupCover() {
-    const cover = document.getElementById("startup-cover");
-    if (cover) cover.classList.add("hidden");
-}
-
-// Тот же прочитываемый признак, что использует checkForInviteLink() ниже —
-// намеренно НЕ переиспользуем classList "invite-launch-hint" из <head>: тот
-// читается раньше и предназначен только для выбора текста, здесь нужно
-// самостоятельное, более позднее чтение для функционального решения.
-function hasInviteIntent() {
-    return !!(window.Telegram &&
-        window.Telegram.WebApp &&
-        Telegram.WebApp.initDataUnsafe &&
-        Telegram.WebApp.initDataUnsafe.start_param);
-}
-
-// Late-detected invite: ранний <head>-hint мог не увидеть start_param (та же
-// причина, по которой у authenticateTelegramUser() есть защитная пауза), но
-// к ЭТОМУ моменту (после тех же 100мс) hasInviteIntent() уже надёжен. Если
-// early hint промахнулся, cover должен ДОГНАТЬ правильный текст, а не
-// остаться на нейтральном "Загрузка…" на весь auth+join lifecycle.
-// Переключаем ТОТ ЖЕ класс, что и early hint (идемпотентно — если он уже
-// стоит, действие не требуется), а не заводим отдельный CSS-путь.
-function markStartupCoverAsInvite() {
-    document.documentElement.classList.add("invite-launch-hint");
-}
 
 function checkForInviteLink() {
     // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
