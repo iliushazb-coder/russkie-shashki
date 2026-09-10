@@ -7355,7 +7355,7 @@ function openBotDetailsModal(name, wins, losses, byLevel) {
         });
     });
 
-    modal.classList.remove("hidden");
+    openModal(modal);
 }
 
 // Отдельная строка для рейтинга "Заработано" — переиспользует те же
@@ -7390,7 +7390,7 @@ function openStatsModal() {
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
 
-    statsModal.classList.remove("hidden");
+    openModal(statsModal);
 
     // --- ОНЛАЙН РЕЙТИНГ: ВСЕ ИГРОКИ ---
     // Раньше здесь брались 50 кандидатов ДВУМЯ запросами и после честной
@@ -7530,6 +7530,13 @@ if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
         statsViewBot.classList.add("hidden");
         if (statsTitleOnline) statsTitleOnline.classList.remove("hidden");
         if (statsTitleBot) statsTitleBot.classList.add("hidden");
+        // №42-B2b: statsModal сохраняет последнюю выбранную вкладку между
+        // открытиями (openStatsModal() её не сбрасывает) -- обновляем
+        // aria-labelledby ЗДЕСЬ же, а не только при открытии, иначе при
+        // повторном открытии с ранее выбранной вкладкой "С ботом" атрибут
+        // остался бы указывать на заголовок "Онлайн", не совпадая с тем,
+        // что реально видно.
+        statsModal.setAttribute("aria-labelledby", "stats-title-online");
     });
 
     statsTabBot.addEventListener("click", function () {
@@ -7539,12 +7546,13 @@ if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
         statsViewOnline.classList.add("hidden");
         if (statsTitleBot) statsTitleBot.classList.remove("hidden");
         if (statsTitleOnline) statsTitleOnline.classList.add("hidden");
+        statsModal.setAttribute("aria-labelledby", "stats-title-bot");
     });
 }
 
 if (btnStatsClose) {
     btnStatsClose.addEventListener("click", function () {
-        statsModal.classList.add("hidden");
+        closeModal(statsModal);
     });
 }
 
@@ -7552,7 +7560,7 @@ const btnBotDetailsClose = document.getElementById("btn-bot-details-close");
 if (btnBotDetailsClose) {
     btnBotDetailsClose.addEventListener("click", function () {
         const modal = document.getElementById("bot-details-modal");
-        if (modal) modal.classList.add("hidden");
+        if (modal) closeModal(modal);
     });
 }
 

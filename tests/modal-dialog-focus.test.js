@@ -24,8 +24,12 @@ const B1_MODALS = ['resign-confirm-modal', 'back-confirm-modal', 'bot-difficulty
 // offline-opponent-modal остаются вне scope дольше -- недостижимы из UI
 // (dead-markup follow-up, не B2), info-modal/stats-modal/bot-details-modal
 // -- B2c/B2b, ещё не начаты.
-const B2_DONE_MODALS = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'spectator-interrupted-modal'];
-const B2_STILL_PENDING_MODALS = ['opponent-left-modal', 'info-modal', 'stats-modal', 'bot-details-modal', 'offline-opponent-modal'];
+// review fix (№42-B2b): stats-modal/bot-details-modal теперь тоже
+// реализованы. opponent-left-modal/offline-opponent-modal остаются
+// недостижимы (dead-markup follow-up), info-modal -- B2c, ещё не начат.
+const B2_DONE_MODALS = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'spectator-interrupted-modal',
+  'stats-modal', 'bot-details-modal'];
+const B2_STILL_PENDING_MODALS = ['opponent-left-modal', 'info-modal', 'offline-opponent-modal'];
 
 function modalTag(id) {
   const m = new RegExp('<div id="' + id + '"[^>]*>').exec(HTML);
@@ -169,14 +173,18 @@ for (const varName of ['resignConfirmModal', 'backConfirmModal', 'botDifficultyM
   check(`${varName}: не осталось прямых classList.add/remove("hidden")`, !raw);
 }
 
-console.log('=== 8. B2a call sites мигрированы; остальные B2/async всё ещё вне scope (scope guard) ===');
-for (const varName of ['drawOfferModal', 'rematchRequestModal', 'endGameModal', 'spectatorInterruptedModal']) {
+console.log('=== 8. B2a/B2b call sites мигрированы; остальные B2/async всё ещё вне scope (scope guard) ===');
+for (const varName of ['drawOfferModal', 'rematchRequestModal', 'endGameModal', 'spectatorInterruptedModal', 'statsModal']) {
   const stillRaw = new RegExp(varName + '\\.classList\\.(add|remove)\\("hidden"\\)').test(SRC);
-  check(`${varName}: прямого classList БОЛЬШЕ НЕТ (мигрировано в №42-B2a)`, !stillRaw);
+  check(`${varName}: прямого classList БОЛЬШЕ НЕТ (мигрировано в №42-B2a/B2b)`, !stillRaw);
 }
-for (const varName of ['opponentLeftModal', 'infoModal', 'statsModal', 'offlineOpponentModal']) {
+// bot-details-modal не имеет персистентной const-переменной -- ищем ЛОКАЛЬНУЮ
+// переменную modal, полученную по id, тем же способом, что и в самом коде.
+check('bot-details-modal: прямого modal.classList.add/remove("hidden") БОЛЬШЕ НЕТ (мигрировано в №42-B2b)',
+  !/getElementById\("bot-details-modal"\)[\s\S]{0,40}modal\.classList\.(add|remove)\("hidden"\)/.test(SRC));
+for (const varName of ['opponentLeftModal', 'infoModal', 'offlineOpponentModal']) {
   const stillRaw = new RegExp(varName + '\\.classList\\.(add|remove)\\("hidden"\\)').test(SRC);
-  check(`${varName}: по-прежнему прямой classList (вне scope №42-B2a)`, stillRaw);
+  check(`${varName}: по-прежнему прямой classList (вне scope №42-B2a/B2b)`, stillRaw);
 }
 
 console.log('=== 9. bot-difficulty "Назад": РЕАЛЬНЫЙ побочный эффект, не только скрытие modal ===');

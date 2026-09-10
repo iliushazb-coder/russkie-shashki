@@ -20,7 +20,11 @@ const B2A_MODALS = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal
 // B1 -- проверить, что НЕ задеты этой правкой.
 const B1_MODALS = ['resign-confirm-modal', 'back-confirm-modal', 'bot-difficulty-modal', 'continue-or-new-modal'];
 // Остальное вне scope этого среза.
-const OUT_OF_SCOPE = ['info-modal', 'stats-modal', 'bot-details-modal', 'opponent-left-modal', 'offline-opponent-modal'];
+// review fix (№42-B2b): stats-modal/bot-details-modal реализованы в
+// №42-B2b. Отделяем от того, что по-прежнему вне scope (info-modal --
+// B2c, opponent-left-modal/offline-opponent-modal -- недостижимы).
+const OUT_OF_SCOPE = ['info-modal', 'opponent-left-modal', 'offline-opponent-modal'];
+const B2B_DONE = ['stats-modal', 'bot-details-modal'];
 
 function modalTag(id) {
   const m = new RegExp('<div id="' + id + '"[^>]*>').exec(HTML);
@@ -158,12 +162,16 @@ for (const varName of ['drawOfferModal', 'rematchRequestModal', 'endGameModal', 
   check(`${varName}: не осталось прямых classList.add/remove("hidden")`, !raw);
 }
 
-console.log('=== 10. B2b/B2c/dead-markup не задеты этим срезом ===');
+console.log('=== 10. B2c/dead-markup не задеты этим срезом; B2b (реализован отдельно) корректно ИМЕЕТ role/aria-modal ===');
 for (const id of OUT_OF_SCOPE) {
   const tag = modalTag(id);
   check(`${id}: без role="dialog" (вне scope №42-B2a)`, !/role="dialog"/.test(tag));
 }
-for (const varName of ['infoModal', 'statsModal', 'offlineOpponentModal', 'opponentLeftModal']) {
+for (const id of B2B_DONE) {
+  const tag = modalTag(id);
+  check(`${id}: role="dialog" (реализовано в №42-B2b, не в этом файле, но факт корректен)`, /role="dialog"/.test(tag));
+}
+for (const varName of ['infoModal', 'offlineOpponentModal', 'opponentLeftModal']) {
   const stillRaw = new RegExp(varName + '\\.classList\\.(add|remove)\\("hidden"\\)').test(SRC);
   check(`${varName}: по-прежнему прямой classList (вне scope №42-B2a)`, stillRaw);
 }

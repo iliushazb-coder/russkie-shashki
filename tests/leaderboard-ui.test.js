@@ -70,6 +70,15 @@ global.t = function (k) {
         btn_difficulty_hard: '🔥 Сложный'
     })[k] || k;
 };
+// №42-B2b: openBotDetailsModal() теперь вызывает openModal(modal) вместо
+// голого classList.remove("hidden") -- этот файл тестирует ТОЛЬКО
+// content-building логику (title/body/разбивку по уровням), не focus
+// management (для этого есть modal-dialog-focus-b2b.test.js и
+// panel-browser-layout.test.js), поэтому здесь достаточен минимальный
+// classList-стаб, а не настоящий helper (у мок-DOM нет
+// document.activeElement/.focus()).
+global.openModal = function (modal) { if (modal && modal.classList) modal.classList.remove('hidden'); };
+global.closeModal = function (modal) { if (modal && modal.classList) modal.classList.add('hidden'); };
 
 eval(ex('normalizeEloRating'));
 eval(ex('renderRankAndName'));
@@ -188,9 +197,9 @@ check('17. Никаких economy-данных в details (нет 🪙, нет �
     ex('openBotDetailsModal').indexOf('economy') === -1 &&
     ex('openBotDetailsModal').indexOf('database.ref') === -1);
 
-check('18. Закрытие модалки работает (кнопка есть в HTML, обработчик прячет модалку)',
+check('18. Закрытие модалки работает (кнопка есть в HTML, обработчик закрывает модалку через closeModal())',
     html.indexOf('id="btn-bot-details-close"') !== -1 &&
-    /btn-bot-details-close[\s\S]{0,400}?classList\.add\("hidden"\)/.test(src));
+    /btn-bot-details-close[\s\S]{0,400}?closeModal\(modal\)/.test(src));
 
 const row2 = renderBotStatsRow(2, '@tetiana220722', 0, 1, null);
 (row2._handlers['click'] || [])[0]({ target: row2.children[1].children[0] });

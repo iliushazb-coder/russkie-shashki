@@ -63,6 +63,7 @@ const FILES = [
   ['BB.8 №33: dead code removed; GROUP_ID and App Check backoff state preserved', 'dead-code-cleanup.test.js'],
   ['BB.9 №42-B1: dialog role/aria-modal + focus-management helper wired into the 4 local confirm modals', 'modal-dialog-focus.test.js'],
   ['BB.10 №42-B2a: async dialog focus management + per-dialog return-focus policy', 'modal-dialog-focus-b2a.test.js'],
+  ['BB.11 №42-B2b: nested stats-modal/bot-details-modal focus management (sibling isolation, dynamic aria-labelledby)', 'modal-dialog-focus-b2b.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

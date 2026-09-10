@@ -57,6 +57,12 @@ const onlineList = makeNode();
 const botList = makeNode();
 global.statsLeaderboard = onlineList;
 global.statsModal = { classList: { remove: function () {}, add: function () {} } };
+// №42-B2b: openStatsModal() теперь вызывает openModal(statsModal) вместо
+// голого classList.remove("hidden") -- этот файл тестирует ТОЛЬКО данные
+// leaderboard (полный список игроков), не focus management. Минимальный
+// стаб, зеркалящий statsModal.classList, достаточен.
+global.openModal = function (modal) { if (modal && modal.classList) modal.classList.remove('hidden'); };
+global.closeModal = function (modal) { if (modal && modal.classList) modal.classList.add('hidden'); };
 global.document = {
     getElementById: function (id) { return id === 'stats-leaderboard-bot' ? botList : null; },
     createElement: function () { return makeNode(); }

@@ -374,6 +374,150 @@ function buildAsyncModalFixture() {
         + '</script></body></html>';
 }
 
+// №42-B2b: nested stats-modal/bot-details-modal fixture. openModal/
+// closeModal -- те же извлечённые helper'ы. openBotDetailsModal() и оба
+// tab-switch handler'а (Online/Bot) -- РЕАЛЬНЫЕ тела функций, извлечённые
+// из script.js, а не переписанные вручную: именно на этом мы уже дважды
+// ловили несловленные мутации (B1's click-wiring, B2a's redundant-guard).
+// "bot-row" в fixture -- синтетическая (реальные строки рендерятся JS
+// динамически, статической разметки для них нет), но её click вызывает
+// РЕАЛЬНУЮ extracted openBotDetailsModal(...), не имитацию.
+function buildNestedModalFixture() {
+    const helperStart = SRC.indexOf('const modalFocusState = new WeakMap();');
+    const heMarker = 'function closeModal(modal) {';
+    const heStart = SRC.indexOf(heMarker, helperStart);
+    let depth = 0, i = SRC.indexOf('{', heStart), end = -1;
+    for (; i < SRC.length; i++) {
+        if (SRC[i] === '{') depth++;
+        else if (SRC[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const helperSrc = SRC.slice(helperStart, end + 1);
+
+    function extractFn(marker) {
+        const s = SRC.indexOf(marker);
+        if (s === -1) throw new Error('function not found for extraction: ' + marker);
+        let d = 0, j = SRC.indexOf('{', s), e = -1;
+        for (; j < SRC.length; j++) {
+            if (SRC[j] === '{') d++;
+            else if (SRC[j] === '}') { d--; if (d === 0) { e = j; break; } }
+        }
+        return SRC.slice(s, e + 1);
+    }
+    const openBotDetailsSrc = extractFn('function openBotDetailsModal(name, wins, losses, byLevel) {');
+
+    function extractHandler(marker) {
+        const s = SRC.indexOf(marker);
+        if (s === -1) throw new Error('handler not found for extraction: ' + marker);
+        const e = SRC.indexOf('});', s);
+        return SRC.slice(s, e + 3);
+    }
+    const onlineTabHandlerSrc = extractHandler('statsTabOnline.addEventListener("click", function () {');
+    const botTabHandlerSrc = extractHandler('statsTabBot.addEventListener("click", function () {');
+
+    const statsHtmlStart = HTML.indexOf('<div id="stats-modal"');
+    const statsHtmlEnd = HTML.indexOf('<div id="bot-details-modal"');
+    const statsHtml = HTML.slice(statsHtmlStart, statsHtmlEnd);
+    const detailsHtmlStart = statsHtmlEnd;
+    const detailsM = /\n    <\/div>/.exec(HTML.slice(detailsHtmlStart));
+    const detailsHtml = HTML.slice(detailsHtmlStart, detailsHtmlStart + detailsM.index + detailsM[0].length);
+
+    return '<!doctype html><html><head><style>.hidden{display:none !important}</style></head><body>'
+        + '<button id="ext-trigger">внешний триггер</button>'
+        + statsHtml + detailsHtml
+        + '<button id="bot-row" class="stats-row">bot-row</button>'
+        + '<script>' + helperSrc + '\n'
+        // Реальные close-кнопки: представительная привязка closeModal(modal)
+        // -- тот же паттерн, что реальный код (проверено source-guard'ом в
+        // modal-dialog-focus-b2b.test.js, секция 7).
+        + 'document.getElementById("btn-stats-close").addEventListener("click", function(){ closeModal(document.getElementById("stats-modal")); });'
+        // Реальный, извлечённый openBotDetailsModal -- мутация в нём (например,
+        // удаление openModal(modal) внутри) действительно ломает этот тест.
+        + 'function t(k){ return ({bot_details_total:"Всего",btn_difficulty_medium:"Средний",btn_difficulty_hard:"Сложный"})[k] || k; }'
+        + openBotDetailsSrc + '\n'
+        + 'document.getElementById("btn-bot-details-close").addEventListener("click", function(){'
+        + '  var modal=document.getElementById("bot-details-modal"); if(modal) closeModal(modal);'
+        + '});'
+        + 'var statsTabOnline=document.getElementById("stats-tab-online");'
+        + 'var statsTabBot=document.getElementById("stats-tab-bot");'
+        + 'var statsViewOnline=document.getElementById("stats-view-online");'
+        + 'var statsViewBot=document.getElementById("stats-view-bot");'
+        + 'var statsTitleOnline=document.getElementById("stats-title-online");'
+        + 'var statsTitleBot=document.getElementById("stats-title-bot");'
+        + 'var statsModal=document.getElementById("stats-modal");'
+        + 'if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {'
+        + onlineTabHandlerSrc
+        + botTabHandlerSrc
+        + '}'
+        + 'document.getElementById("bot-row").addEventListener("click", function(){'
+        + '  openBotDetailsModal("тест-бот", 9, 38, { medium: { wins: 6, losses: 20 }, hard: { wins: 3, losses: 18 } });'
+        + '});'
+        + '</script></body></html>';
+}
+
+async function runNestedModalFocusChecks(page, engineName) {
+    async function reset() {
+        await page.evaluate(function () {
+            document.querySelectorAll('.modal-overlay').forEach(function (m) { m.classList.add('hidden'); });
+            document.getElementById('ext-trigger').focus();
+        });
+    }
+
+    // --- Полный жизненный цикл ровно из задания ---
+    await reset();
+    await page.evaluate(function () { openModal(document.getElementById('stats-modal')); });
+    let active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: stats initial focus -> btn-stats-close (не вкладка -- та может быть не Online при переоткрытии)',
+        active === 'btn-stats-close', active);
+
+    await page.evaluate(function () { document.getElementById('bot-row').focus(); document.getElementById('bot-row').click(); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: клик по bot-row открывает bot-details-modal (реальный extracted openBotDetailsModal), фокус -> btn-bot-details-close',
+        active === 'btn-bot-details-close', active);
+
+    await page.keyboard.press('Tab');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: Tab внутри details не уходит наружу в stats (единственная кнопка, wrap на себя)',
+        active === 'btn-bot-details-close', active);
+    await page.keyboard.press('Shift+Tab');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: Shift+Tab тоже не уходит наружу', active === 'btn-bot-details-close', active);
+
+    await page.keyboard.press('Escape');
+    let stillOpen = await page.evaluate(function () { return !document.getElementById('bot-details-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2b: Escape закрывает bot-details-modal через btn-bot-details-close', !stillOpen);
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: после закрытия child фокус ВЕРНУЛСЯ ИМЕННО в bot-row (не в ext-trigger, не потерян)',
+        active === 'bot-row', active);
+    stillOpen = await page.evaluate(function () { return !document.getElementById('stats-modal').classList.contains('hidden'); });
+    check(engineName + ' 42-B2b: stats-modal остаётся открытым после закрытия child', stillOpen);
+
+    // Tab-trap stats продолжает работать после возврата фокуса от child.
+    await page.keyboard.press('Tab');
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: Tab внутри stats после возврата от child всё ещё работает (уходит на следующую кнопку)',
+        active !== 'bot-row', active);
+
+    await page.evaluate(function () { document.getElementById('btn-stats-close').click(); });
+    active = await page.evaluate(function () { return document.activeElement.id; });
+    check(engineName + ' 42-B2b: закрытие stats после этого возвращает фокус во внешний ext-trigger',
+        active === 'ext-trigger', active);
+
+    // --- Dynamic aria-labelledby: реальные tab-switch handler'ы ---
+    await reset();
+    await page.evaluate(function () { openModal(document.getElementById('stats-modal')); });
+    let labelledby = await page.evaluate(function () { return document.getElementById('stats-modal').getAttribute('aria-labelledby'); });
+    check(engineName + ' 42-B2b: начальный aria-labelledby = stats-title-online (дефолтная активная вкладка)',
+        labelledby === 'stats-title-online', labelledby);
+    await page.evaluate(function () { document.getElementById('stats-tab-bot').click(); });
+    labelledby = await page.evaluate(function () { return document.getElementById('stats-modal').getAttribute('aria-labelledby'); });
+    check(engineName + ' 42-B2b: после клика на вкладку "С ботом" aria-labelledby реально переключился на stats-title-bot (реальный extracted handler)',
+        labelledby === 'stats-title-bot', labelledby);
+    await page.evaluate(function () { document.getElementById('stats-tab-online').click(); });
+    labelledby = await page.evaluate(function () { return document.getElementById('stats-modal').getAttribute('aria-labelledby'); });
+    check(engineName + ' 42-B2b: обратный клик на "Онлайн" возвращает aria-labelledby на stats-title-online',
+        labelledby === 'stats-title-online', labelledby);
+}
+
 async function runModalFocusChecks(page, engineName) {
     async function reset() {
         await page.evaluate(function () {
@@ -670,6 +814,14 @@ async function runEngine(engine) {
         await asyncModalPage.setContent(buildAsyncModalFixture());
         await runAsyncModalFocusChecks(asyncModalPage, engine.name);
         await asyncModalPage.close();
+    }
+
+    console.log('\n=== №42-B2b: nested stats-modal / bot-details-modal focus management ===');
+    {
+        const nestedModalPage = await browser.newPage();
+        await nestedModalPage.setContent(buildNestedModalFixture());
+        await runNestedModalFocusChecks(nestedModalPage, engine.name);
+        await nestedModalPage.close();
     }
 
     await browser.close();
