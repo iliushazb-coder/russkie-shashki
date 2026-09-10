@@ -48,9 +48,9 @@
         <button id="btn-show-stats" class="menu-button" data-i18n="btn_show_stats">📊 Моя статистика</button>
         
         <div class="lang-switcher">
-            <button class="lang-btn" data-lang="ru">🇷🇺</button>
-            <button class="lang-btn" data-lang="it">🇮🇹</button>
-            <button class="lang-btn" data-lang="en">🇺🇸</button>
+            <button class="lang-btn" data-lang="ru" data-i18n-aria="aria_lang_ru">🇷🇺</button>
+            <button class="lang-btn" data-lang="it" data-i18n-aria="aria_lang_it">🇮🇹</button>
+            <button class="lang-btn" data-lang="en" data-i18n-aria="aria_lang_en">🇺🇸</button>
         </div>
     </div>
 
@@ -102,14 +102,14 @@
 
         <div id="reactions-row" class="reactions-wrapper hidden">
             <div class="action-row">
-                <button id="btn-react-laugh" class="reaction-btn">😂</button>
+                <button id="btn-react-laugh" class="reaction-btn" data-i18n-aria="aria_reaction_laugh">😂</button>
                 <button id="btn-offer-draw" class="menu-button" data-i18n="btn_draw">🤝 Ничья</button>
-                <button id="btn-react-fire" class="reaction-btn">🔥</button>
+                <button id="btn-react-fire" class="reaction-btn" data-i18n-aria="aria_reaction_fire">🔥</button>
             </div>
             <div class="action-row">
-                <button id="btn-react-shock" class="reaction-btn">😱</button>
+                <button id="btn-react-shock" class="reaction-btn" data-i18n-aria="aria_reaction_shock">😱</button>
                 <button id="btn-resign" class="menu-button danger-button" data-i18n="btn_resign">🏳 Сдаться</button>
-                <button id="btn-react-angry" class="reaction-btn">😡</button>
+                <button id="btn-react-angry" class="reaction-btn" data-i18n-aria="aria_reaction_angry">😡</button>
             </div>
         </div>
 
@@ -285,5 +285,59 @@
 
     <script src="shared/game-engine.js?v=1"></script>
     <script src="script.js?v=200"></script>
+    <script>
+        // №42-A: semantic-only accessibility metadata. Используем тот же
+        // currentLang/translations/t(), что и основной i18n, не меняя click-flow.
+        (function () {
+            const ariaTranslations = {
+                ru: {
+                    aria_lang_ru: "Русский язык",
+                    aria_lang_it: "Итальянский язык",
+                    aria_lang_en: "Английский язык",
+                    aria_reaction_laugh: "Реакция: смех",
+                    aria_reaction_fire: "Реакция: огонь",
+                    aria_reaction_shock: "Реакция: удивление",
+                    aria_reaction_angry: "Реакция: злость"
+                },
+                en: {
+                    aria_lang_ru: "Russian language",
+                    aria_lang_it: "Italian language",
+                    aria_lang_en: "English language",
+                    aria_reaction_laugh: "Reaction: laugh",
+                    aria_reaction_fire: "Reaction: fire",
+                    aria_reaction_shock: "Reaction: surprise",
+                    aria_reaction_angry: "Reaction: angry"
+                },
+                it: {
+                    aria_lang_ru: "Lingua russa",
+                    aria_lang_it: "Lingua italiana",
+                    aria_lang_en: "Lingua inglese",
+                    aria_reaction_laugh: "Reazione: risata",
+                    aria_reaction_fire: "Reazione: fuoco",
+                    aria_reaction_shock: "Reazione: sorpresa",
+                    aria_reaction_angry: "Reazione: rabbia"
+                }
+            };
+            Object.keys(ariaTranslations).forEach(function(lang) {
+                Object.assign(translations[lang], ariaTranslations[lang]);
+            });
+
+            const baseApplyTranslationsToDOM = applyTranslationsToDOM;
+            function applyAccessibilityTranslations() {
+                document.documentElement.lang = currentLang;
+                document.querySelectorAll("[data-i18n-aria]").forEach(function(el) {
+                    const key = el.getAttribute("data-i18n-aria");
+                    el.setAttribute("aria-label", t(key));
+                });
+            }
+            applyTranslationsToDOM = function() {
+                baseApplyTranslationsToDOM();
+                applyAccessibilityTranslations();
+            };
+            // startApp() уже выполнился внутри script.js; синхронизируем metadata
+            // один раз сразу, затем wrapper делает это при каждой смене языка.
+            applyAccessibilityTranslations();
+        })();
+    </script>
 </body>
 </html>

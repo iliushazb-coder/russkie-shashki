@@ -14,6 +14,7 @@ let passed = 0, failed = 0;
 function check(n, c, d) { console.log((c ? '  ✅ ' : '  ❌ ') + n + (!c && d ? ' — ' + d : '')); c ? passed++ : failed++; }
 
 const src = fs.readFileSync(path.join(__dirname, '..', 'script.js'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
 // ===== 1. словарь: ключи во всех языках =====
 
@@ -49,7 +50,7 @@ console.log('=== 3. подтверждённые user-facing литералы у
 check('нет showInfoModal("Соперник покинул игру.")', src.indexOf('showInfoModal("Соперник покинул игру.') === -1);
 check('нет showInfoModal("Комната уже занята...")', src.indexOf('showInfoModal("Комната уже занята') === -1);
 check('waitingText не присваивается литералом "Ожидание подключения друга..."', src.indexOf('waitingText.textContent = "Ожидание подключения друга') === -1);
-check('waitingText не присваивается литералом "Друг подключился!..."', src.indexOf('waitingText.textContent = "Друг подключился') === -1);
+check('waitingText не присваивается литералом "Друг подключился!...")', src.indexOf('waitingText.textContent = "Друг подключился') === -1);
 // review fix: используем УЖЕ СУЩЕСТВОВАВШИЙ до №32 ключ waiting_friend
 // (ru "Ожидание подключения друга..." -- буквально тот же текст, что был
 // захардкожен), а не новый дублирующий waiting_for_friend.
@@ -263,6 +264,58 @@ check('9.1 localizeOpponentPlaceholder больше не существует в
 check('9.2 sentinel-список удалён', src.indexOf('OPPONENT_WAITING_SENTINELS') === -1);
 check('9.3 loadActiveRooms больше не читает data[code].opponentName для отображения',
   !/opponent: [^\n]*data\[code\]\.opponentName/.test(src));
+
+// ===== 10. №42-A: accessibility metadata =====
+
+console.log('=== 10. №42-A: document lang и icon-only accessible names ===');
+const A11Y_KEYS = [
+  'aria_lang_ru', 'aria_lang_it', 'aria_lang_en',
+  'aria_reaction_laugh', 'aria_reaction_fire', 'aria_reaction_shock', 'aria_reaction_angry'
+];
+const ariaMapMatch = /const ariaTranslations = \{([\s\S]*?)\n            \};/.exec(html);
+check('10.1 ariaTranslations существует в accessibility bootstrap', !!ariaMapMatch);
+const ariaMap = ariaMapMatch ? ariaMapMatch[1] : '';
+function extractAriaBlock(lang) {
+  const m = ariaMap.match(new RegExp('\\n\\s*' + lang + ': \\{([\\s\\S]*?)\\n\\s*\\}'));
+  return m ? m[1] : '';
+}
+for (const lang of LANGS) {
+  const block = extractAriaBlock(lang);
+  check(`10.2 accessibility labels: блок ${lang} существует`, !!block);
+  for (const key of A11Y_KEYS) {
+    const m = block.match(new RegExp('\\b' + key + ':\\s*"([^"]+)"'));
+    check(`10.x ${key} имеет непустой label в ${lang}`, !!m && m[1].trim().length > 0, m ? m[1] : 'ключ не найден');
+    if (lang !== 'ru') {
+      check(`10.x ${key} в ${lang} не содержит кириллицы`, !!m && !/[а-яА-ЯёЁ]/.test(m[1]), m ? m[1] : 'ключ не найден');
+    }
+  }
+}
+check('10.3 labels добавляются в существующий translations/t() pipeline',
+  /Object\.assign\(translations\[lang\], ariaTranslations\[lang\]\)/.test(html));
+check('10.4 <html lang> синхронизируется с currentLang',
+  /document\.documentElement\.lang\s*=\s*currentLang/.test(html));
+check('10.5 aria-label выставляется через t(key)',
+  /setAttribute\("aria-label",\s*t\(key\)\)/.test(html));
+check('10.6 wrapper сначала вызывает исходный applyTranslationsToDOM',
+  /applyTranslationsToDOM\s*=\s*function\(\)\s*\{\s*baseApplyTranslationsToDOM\(\);\s*applyAccessibilityTranslations\(\);/.test(html));
+check('10.7 в HTML ровно семь data-i18n-aria',
+  (html.match(/\bdata-i18n-aria=/g) || []).length === 7);
+
+const A11Y_WIRING = [
+  [/class="lang-btn" data-lang="ru" data-i18n-aria="aria_lang_ru">🇷🇺<\/button>/, 'русский язык'],
+  [/class="lang-btn" data-lang="it" data-i18n-aria="aria_lang_it">🇮🇹<\/button>/, 'итальянский язык'],
+  [/class="lang-btn" data-lang="en" data-i18n-aria="aria_lang_en">🇺🇸<\/button>/, 'английский язык'],
+  [/id="btn-react-laugh" class="reaction-btn" data-i18n-aria="aria_reaction_laugh">😂<\/button>/, 'реакция смех'],
+  [/id="btn-react-fire" class="reaction-btn" data-i18n-aria="aria_reaction_fire">🔥<\/button>/, 'реакция огонь'],
+  [/id="btn-react-shock" class="reaction-btn" data-i18n-aria="aria_reaction_shock">😱<\/button>/, 'реакция удивление'],
+  [/id="btn-react-angry" class="reaction-btn" data-i18n-aria="aria_reaction_angry">😡<\/button>/, 'реакция злость']
+];
+for (const [re, name] of A11Y_WIRING) {
+  check(`10.x ${name}: ключ привязан, emoji сохранён`, re.test(html));
+}
+check('10.8 №42-A не добавляет aria-modal/role=dialog',
+  !/aria-modal=/.test(html) && !/role="dialog"/.test(html));
+check('10.9 №42-A не добавляет aria-pressed', !/aria-pressed=/.test(html));
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 if (failed > 0) process.exit(1);
