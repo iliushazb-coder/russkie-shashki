@@ -135,6 +135,37 @@ test("ненулевые captured counters: публикация pointer отк�
   await assertFails(publishPointer(databaseFor(SERVER_UID)));
 });
 
+test("capturedLight > 0: публикация pointer отклонена", async () => {
+  await seed("rooms/ABC123", pristineRoom({ capturedLight: 1 }));
+  await seedIndex();
+  await assertFails(publishPointer(databaseFor(SERVER_UID)));
+});
+
+test("winner присутствует: публикация pointer отклонена", async () => {
+  await seed("rooms/ABC123", pristineRoom({ winner: "light" }));
+  await seedIndex();
+  await assertFails(publishPointer(databaseFor(SERVER_UID)));
+});
+
+test("result присутствует: публикация pointer отклонена", async () => {
+  await seed("rooms/ABC123", pristineRoom({
+    status: "finished",
+    winner: "light",
+    winReason: "disconnect",
+    result: {
+      winnerColor: "light",
+      loserColor: "dark",
+      winnerId: "alice",
+      loserId: "bob",
+      winReason: "disconnect",
+      status: "finished",
+      decidedAt: CREATED_AT + 1000
+    }
+  }));
+  await seedIndex();
+  await assertFails(publishPointer(databaseFor(SERVER_UID)));
+});
+
 test("drawProposal присутствует: публикация pointer отклонена", async () => {
   await seed("rooms/ABC123", pristineRoom({ drawProposal: { by: "light", name: "Alice" } }));
   await seedIndex();
