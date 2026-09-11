@@ -1311,6 +1311,22 @@ function registeredMatchIdForState(state, code) {
 // состояния комнаты не выполняется: иначе protected replay, стартующий с
 // доверенной начальной позиции, никогда не увидит этих ходов, и партия
 // молча станет нерейтинговой.
+// №23: поколение доигрывается по narrow unrated fallback
+// (room_already_started), то есть Worker отверг регистрацию ДО claim
+// matchIndex. Значит matchIndex для этой комнаты не существует, и реванш
+// с matchNumber=1 получил бы от decideRegistration() not_first_match —
+// терминальную ошибку, которую gate не открывает: комната стала бы
+// активной, но неиграбельной. Поэтому реванш в такой комнате не
+// начинаем вовсе; выход в меню остаётся доступен.
+function rematchBlockedByUnratedFallback() {
+    if (!isOnlineGame || isBotGame || isSpectator) return false;
+    if (!currentState || !roomCode) return false;
+    if (registeredMatchIdForState(currentState, roomCode) !== null) return false;
+    const st = ratedJoinState[currentRatedGenerationKey()];
+    return !!(st && st.phase === "terminalFailed"
+        && st.errorCode === "room_already_started");
+}
+
 function ratedGenerationPlayable() {
     if (!isOnlineGame || isBotGame || isSpectator) return true; // не rated-поток
     if (!currentState || !roomCode) return false;
@@ -6232,6 +6248,7 @@ function cleanupFinishedRoom() {
 }
 
 btnNewGame.addEventListener("click", function () {
+    if (rematchBlockedByUnratedFallback()) { showInfoModal(t("rating_settlement_failed"), false); return; } // №23
     if (isOnlineGame) {
         if (!requireFirebaseAuth()) return;
         const codeAtClick = roomCode;
@@ -6289,6 +6306,7 @@ btnNewGame.addEventListener("click", function () {
 });
 
 function performRematchReset(expectedGenerationKey) {
+    if (rematchBlockedByUnratedFallback()) return; // №23 defense-in-depth
     if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
     // Defense-in-depth against double accept / stale async callbacks. If another
     // device (or an earlier click on this device) already started N+1, this
@@ -6471,6 +6489,7 @@ function waitForSettlementBeforeRematch() {
 }
 
 btnRematchAccept.addEventListener("click", function () {
+    if (rematchBlockedByUnratedFallback()) { showInfoModal(t("rating_settlement_failed"), false); return; } // №23
     closeModal(rematchRequestModal);
     const generationAtAccept = (currentState && roomCode)
         ? ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) : null;

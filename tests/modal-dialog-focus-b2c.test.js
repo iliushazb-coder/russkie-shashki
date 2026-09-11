@@ -102,9 +102,11 @@ console.log('=== 5. все реальные call sites сегодня перед
 {
   const calls = SRC.match(/showInfoModal\([^;]*\)/g) || [];
   const realCalls = calls.filter(c => !c.startsWith('showInfoModal(text, offerNewGame, navigateToMenu)'));
-  check('ровно 45 реальных call sites', realCalls.length === 45, 'найдено: ' + realCalls.length);
+  // №23 добавил два вызова в rematch-guard'ах (btnNewGame, btnRematchAccept),
+  // оба в той же форме (text, false) — существенный инвариант ниже не изменился.
+  check('ровно 47 реальных call sites', realCalls.length === 47, 'найдено: ' + realCalls.length);
   const nonConforming = realCalls.filter(c => !/,\s*false\)$/.test(c));
-  check('ВСЕ 45 передают ровно ", false)" вторым/последним аргументом (двухкнопочный режим сегодня нигде не включён)',
+  check('ВСЕ 47 передают ровно ", false)" вторым/последним аргументом (двухкнопочный режим сегодня нигде не включён)',
     nonConforming.length === 0, JSON.stringify(nonConforming));
 }
 

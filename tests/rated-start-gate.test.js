@@ -38,6 +38,7 @@ eval(grab('registeredMatchIdForState'));
 eval(grab('ratedGenerationKey'));
 eval(grab('currentRatedGenerationKey'));
 eval(grab('ratedGenerationPlayable'));
+eval(grab('rematchBlockedByUnratedFallback'));
 
 // generation-scoped хранилище join-состояния (в production — модульная
 // переменная; здесь объявляем, т.к. функции извлекаются изолированно).
@@ -252,6 +253,58 @@ check('6.1 room_already_started в RATED_JOIN_TERMINAL_ERRORS', (function () {
 check('6.2 stale_generation тоже остался terminal (ветка Worker CHAR-1)', (function () {
     const m = /const RATED_JOIN_TERMINAL_ERRORS = \[([\s\S]*?)\]/.exec(SRC);
     return !!m && m[1].indexOf('"stale_generation"') !== -1;
+})());
+
+console.log('');
+console.log('=== 8. Реванш после unrated fallback (CHAR-4) ===');
+
+check('8.1 fallback-поколение остаётся playable в ТЕКУЩЕЙ партии', (function () {
+    const st = unregisteredState(); setEnv({ state: st });
+    setJoinState(st, { phase: 'terminalFailed', errorCode: 'room_already_started' });
+    return ratedGenerationPlayable() === true;
+})());
+
+check('8.2 но реванш в такой комнате ЗАБЛОКИРОВАН', (function () {
+    const st = unregisteredState(); setEnv({ state: st });
+    setJoinState(st, { phase: 'terminalFailed', errorCode: 'room_already_started' });
+    return rematchBlockedByUnratedFallback() === true;
+})());
+
+check('8.3 обычный ЗАРЕГИСТРИРОВАННЫЙ rated-реванш разрешён', (function () {
+    const st = registeredState(); setEnv({ state: st });
+    setJoinState(st, null);
+    return rematchBlockedByUnratedFallback() === false;
+})());
+
+check('8.4 not_first_match НЕ становится unrated fallback и НЕ блокирует реванш этим путём', (function () {
+    const st = unregisteredState(); setEnv({ state: st });
+    setJoinState(st, { phase: 'terminalFailed', errorCode: 'not_first_match' });
+    return ratedGenerationPlayable() === false && rematchBlockedByUnratedFallback() === false;
+})());
+
+check('8.5 бот/offline и spectator не затронуты блокировкой реванша', (function () {
+    const st = unregisteredState();
+    setEnv({ state: st, online: false, bot: true });
+    const bot = rematchBlockedByUnratedFallback();
+    setEnv({ state: st, spectator: true });
+    return bot === false && rematchBlockedByUnratedFallback() === false;
+})());
+
+check('8.6 все три точки реванша реально защищены предикатом', (function () {
+    const n = (SRC.match(/rematchBlockedByUnratedFallback\(\)/g) || []).length;
+    return n >= 4; // 1 объявление + btnNewGame + btnRematchAccept + performRematchReset
+})());
+
+check('8.7 performRematchReset не повышает matchNumber для fallback-поколения', (function () {
+    const fn = grab('performRematchReset');
+    const guard = fn.indexOf('rematchBlockedByUnratedFallback()');
+    const inc = fn.indexOf('matchNumber');
+    return guard !== -1 && inc !== -1 && guard < inc;
+})());
+
+check('8.8 выход в меню остаётся доступен (btnCloseGame не тронут блокировкой)', (function () {
+    const i = SRC.indexOf('btnCloseGame.addEventListener');
+    return i !== -1 && SRC.slice(i, i + 600).indexOf('rematchBlockedByUnratedFallback') === -1;
 })());
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
