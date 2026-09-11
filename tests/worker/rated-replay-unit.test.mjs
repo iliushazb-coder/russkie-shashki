@@ -9,6 +9,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
+const { createInitialPieces } = createRequire(import.meta.url)("../../shared/game-engine.js");
+
 import {
   commitRatedEvent,
   syncProjection,
@@ -630,6 +632,9 @@ test("joinRatedMatch (rematch) clears a leftover ratedReplay from the PRIOR gene
     rooms: { ABC123: {
       players: { light: { id: "tg_111", name: "Alice" }, dark: { id: "tg_222", name: "Bob" } },
       status: "active", createdAt: 1_700_000_000_000, matchNumber: 1,
+      // Реванш: доска уже сброшена клиентом к начальной (как в production) --
+      // №23 pristine guard требует именно этого для НОВОЙ generation.
+      pieces: createInitialPieces(), turn: "light", moveCount: 0,
       // Реванш: старая generation оставила ratedReplay с ВЫСОКИМИ числами --
       // ratedMatchId ещё СТАРЫЙ на этом этапе (join его перебиндит).
       ratedMatchId: OLD_MATCH_ID,
@@ -664,6 +669,9 @@ test("joinRatedMatch retry (reconnect) for the SAME already-established generati
       status: "active", createdAt: 1_700_000_000_000, matchNumber: 0,
       // Матч УЖЕ идёт под этой же generation, с реальным прогрессом.
       ratedMatchId: SAME_MATCH_ID,
+      // finalizePointer публикует pointer и ratingsAtStart ОДНИМ атомарным
+      // патчем, поэтому установленная generation всегда несёт оба поля.
+      ratingsAtStart: { light: 1210, dark: 1190 },
       ratedReplay: { matchId: SAME_MATCH_ID, acceptedSeq: 12, boardSeq: 11 },
       pieces: { d4: { color: "light", king: false } }, turn: "dark", moveCount: 12
     } },
@@ -984,4 +992,178 @@ test("settleMatch (replayVersion=undefined, room missing) still requires an exis
     /nothing_to_resume/,
     "legacy (pre-№23) generation без room и без existing receipt по-прежнему не settle'ится в обход"
   );
+});
+
+// ===== №23: pristine guard, clock origin, permission_denied repair =====
+
+const MID_0 = "elo_ABC123_1700000000000_0";
+
+function joinRoom(overrides = {}) {
+  return {
+    players: { light: { id: "tg_111", name: "Alice" }, dark: { id: "tg_222", name: "Bob" } },
+    status: "active", createdAt: 1_700_000_000_000, matchNumber: 0,
+    pieces: createInitialPieces(), turn: "light", moveCount: 0,
+    ...overrides
+  };
+}
+
+function joinStore(room) {
+  return {
+    rooms: { ABC123: room },
+    stats: { tg_111: { rating: 1210, wins: 1, losses: 0, name: "Alice" },
+             tg_222: { rating: 1190, wins: 0, losses: 1, name: "Bob" } }
+  };
+}
+
+test("№23: early pristine отклоняет начатую комнату ДО первого write-side-effect (stats не тронуты)", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  rtdb.store.data = joinStore(joinRoom({ moveCount: 3, turn: "dark" }));
+  const statsBefore = JSON.stringify(rtdb.store.data.stats);
+
+  await assert.rejects(() => joinRatedMatch(env, deps, "tg_111", "ABC123"),
+    /room_already_started/, "начатая комната не регистрируется");
+  assert.equal(JSON.stringify(rtdb.store.data.stats), statsBefore,
+    "ensureStatsInitialized не выполнялся — проверка стоит ДО первого write");
+  assert.equal(rtdb.store.data.matches, undefined, "карточка матча не создана");
+  assert.equal(rtdb.store.data.rooms.ABC123.ratedMatchId, undefined, "pointer не опубликован");
+});
+
+test("№23: полное несовпадение доски отклоняется, даже если moveCount=0 и turn=light", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  const tampered = createInitialPieces();
+  delete tampered[Object.keys(tampered)[0]];
+  rtdb.store.data = joinStore(joinRoom({ pieces: tampered }));
+
+  await assert.rejects(() => joinRatedMatch(env, deps, "tg_111", "ABC123"),
+    /room_already_started/, "подменённая доска не проходит полную проверку Worker'а");
+});
+
+test("№23: первичная регистрация публикует pointer И ставит turnStartedAt (clock origin)", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  rtdb.store.data = joinStore(joinRoom());
+
+  const res = await joinRatedMatch(env, deps, "tg_111", "ABC123");
+  const room = rtdb.store.data.rooms.ABC123;
+  assert.equal(room.ratedMatchId, res.matchId, "pointer опубликован");
+  assert.equal(typeof room.ratingsAtStart.light, "number", "снимок рейтингов опубликован");
+  assert.ok(room.turnStartedAt, "turnStartedAt установлен при первичной регистрации");
+});
+
+test("№23: повторный join уже зарегистрированной сыгранной партии — idempotent, часы НЕ сдвигаются", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  const CLOCK = 1_700_000_055_555;
+  rtdb.store.data = joinStore(joinRoom({
+    moveCount: 12, turn: "dark",
+    pieces: { d4: { color: "light", king: false } },
+    ratedMatchId: MID_0,
+    ratingsAtStart: { light: 1210, dark: 1190 },
+    ratedReplay: { matchId: MID_0, acceptedSeq: 7, boardSeq: 7 },
+    turnStartedAt: CLOCK
+  }));
+  rtdb.store.data.matchIndex = { ABC123: { matchId: MID_0, createdAt: 1_700_000_000_000, lastMatchNumber: 0 } };
+  rtdb.store.data.matches = { [MID_0]: card({ participants: {
+    tg_111: { color: "light", ratingAtJoin: 1210, name: "Alice" },
+    tg_222: { color: "dark", ratingAtJoin: 1190, name: "Bob" }
+  } }) };
+
+  const res = await joinRatedMatch(env, deps, "tg_111", "ABC123");
+  const room = rtdb.store.data.rooms.ABC123;
+  assert.equal(res.matchId, MID_0, "тот же matchId — idempotent success");
+  assert.equal(room.turnStartedAt, CLOCK, "часы НЕ сдвинуты повторным join");
+  assert.deepEqual(room.ratedReplay, { matchId: MID_0, acceptedSeq: 7, boardSeq: 7 },
+    "прогресс ratedReplay не откачен stale join'ом");
+});
+
+test("№23: permission_denied + наш pointer уже опубликован -> idempotent success (проигравший гонку)", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  rtdb.store.data = joinStore(joinRoom());
+
+  // Гонка: победитель публикует pointer и успевает сделать ход, наш PATCH
+  // отклоняется Rules; после re-read регистрация фактически наша.
+  const origFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH") {
+      const r = rtdb.store.data.rooms.ABC123;
+      r.ratedMatchId = MID_0;
+      r.ratingsAtStart = { light: 1210, dark: 1190 };
+      r.moveCount = 1; r.turn = "dark";
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return origFetch(url, options);
+  };
+  const res = await joinRatedMatch(env, deps, "tg_111", "ABC123");
+  assert.equal(res.matchId, MID_0, "признано idempotent success, а не terminal failure");
+});
+
+test("№23: permission_denied + pointer НЕ наш и комната начата -> terminal room_already_started", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  rtdb.store.data = joinStore(joinRoom());
+
+  const origFetch2 = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH") {
+      const r = rtdb.store.data.rooms.ABC123;
+      r.moveCount = 4; r.turn = "dark";
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return origFetch2(url, options);
+  };
+  await assert.rejects(() => joinRatedMatch(env, deps, "tg_111", "ABC123"),
+    /room_already_started/, "без нашего pointer'а это честная terminal failure");
+});
+
+test("№23 (CHAR-1): permission_denied + pointer ЧУЖОГО поколения -> stale_generation, НЕ room_already_started", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  const FOREIGN = "elo_ABC123_1700000000000_9";
+  rtdb.store.data = joinStore(joinRoom());
+
+  // Гонка с ДРУГИМ поколением (например реванш со второго устройства):
+  // Rules отклоняют наш PATCH, а в комнате оказывается чужой pointer.
+  const origFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH") {
+      const r = rtdb.store.data.rooms.ABC123;
+      r.ratedMatchId = FOREIGN;
+      r.ratingsAtStart = { light: 1210, dark: 1190 };
+      r.moveCount = 5; r.turn = "dark";
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return origFetch(url, options);
+  };
+  await assert.rejects(() => joinRatedMatch(env, deps, "tg_111", "ABC123"),
+    /stale_generation/,
+    "чужой pointer — это устаревшее поколение, а не начатая комната");
+});
+
+test("№23 (CHAR-1 negative control): pointer ОТСУТСТВУЕТ + комната начата -> по-прежнему room_already_started", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  rtdb.store.data = joinStore(joinRoom());
+
+  const origFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH") {
+      const r = rtdb.store.data.rooms.ABC123;
+      r.moveCount = 4; r.turn = "dark";   // pointer НЕ появился
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return origFetch(url, options);
+  };
+  await assert.rejects(() => joinRatedMatch(env, deps, "tg_111", "ABC123"),
+    /room_already_started/,
+    "новая ветка stale_generation не должна перехватывать этот случай");
+});
+
+test("№23: room_already_started входит в публичный allowlist кодов", async () => {
+  const src = createRequire(import.meta.url)("node:fs")
+    .readFileSync(new URL("../../worker/index.mjs", import.meta.url), "utf8");
+  assert.ok(src.includes('"room_already_started"'),
+    "код должен доходить до клиента, иначе фронтенд не сможет классифицировать его как terminal");
 });

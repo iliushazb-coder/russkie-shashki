@@ -1105,6 +1105,14 @@ async function finalizePointer(env, deps, token, roomCode, matchId, card) {
   // A normal rematch changes both matchNumber and sides, but re-check the player
   // binding too: never publish a snapshot captured for a different seat layout.
   if (!cardMatchesRoomPlayers(card, latestRoom)) throw new Error("card_mismatch");
+  // №23: финальная pristine-проверка НЕПОСРЕДСТВЕННО перед публикацией.
+  // Атомарности она не даёт (dbPatchRoot — безусловный PATCH), её задача —
+  // внятная ошибка вместо сырого permission_denied от Rules, которые и
+  // закрывают гонку на коммите.
+  const firstPublication = !registrationComplete(latestRoom, matchId);
+  if (firstPublication && !roomIsPristine(latestRoom)) {
+    throw new Error("room_already_started");
+  }
   const index = await dbGet(env, deps, token, "matchIndex/" + roomCode);
   if (!index || index.matchId !== matchId || index.createdAt !== latestRoom.createdAt ||
       index.lastMatchNumber !== latestRoom.matchNumber) {
@@ -1132,8 +1140,73 @@ async function finalizePointer(env, deps, token, roomCode, matchId, card) {
   // восстановил бы то же самое), а не просто "безопасным no-op".
   if (latestRoom.ratedMatchId !== matchId) {
     updates["rooms/" + roomCode + "/ratedReplay"] = null;
+    // №23 clock origin: часы первого хода стартуют в момент, когда поколение
+    // СТАНОВИТСЯ playable, и ровно один раз. Тот же признак реального
+    // перехода pointer'а, что и сброс ratedReplay выше, поэтому stale или
+    // повторный join (pointer уже наш) сюда не заходит и время не дарит.
+    updates["rooms/" + roomCode + "/turnStartedAt"] = serverTimestamp();
   }
-  await dbPatchRoot(env, deps, token, updates);
+  try {
+    await dbPatchRoot(env, deps, token, updates);
+  } catch (error) {
+    // №23: Rules закрывают гонку атомарно, поэтому проигравший гонку join
+    // получает здесь отказ. Не доверяем самому факту отказа (та же
+    // дисциплина, что в syncProjection): перечитываем комнату и, если
+    // канонический pointer ЭТОГО matchId уже корректно опубликован
+    // победителем гонки, это idempotent success, а не ложная terminal
+    // failure. Комната при этом законно может быть уже не pristine.
+    if (!isPermissionDeniedError(error)) throw error;
+    const after = await dbGet(env, deps, token, "rooms/" + roomCode);
+    if (registrationComplete(after, matchId)) return;
+    // №23 (CHAR-1): pointer СУЩЕСТВУЕТ, но принадлежит ДРУГОМУ поколению —
+    // это устаревшая generation, а не начатая комната. Без этой ветки обе
+    // ситуации сваливались в room_already_started, потому что
+    // registrationComplete() одинаково ложен и для чужого pointer'а, и для
+    // отсутствующего: клиент получал "начните новую игру" там, где верно
+    // "переприсоединитесь". stale_generation уже есть и в публичном
+    // allowlist, и в terminal-списке клиента.
+    if (after && after.ratedMatchId && after.ratedMatchId !== matchId) {
+      throw new Error("stale_generation");
+    }
+    if (after && !roomIsPristine(after)) throw new Error("room_already_started");
+    throw error;
+  }
+}
+
+// №23: каноническая регистрация ЗАВЕРШЕНА для этого matchId, если pointer
+// указывает именно на него И снимок рейтингов уже опубликован. Тот же
+// предикат, что registeredMatchIdForState() на клиенте — одно определение
+// на все три слоя (Rules / Worker / frontend).
+function registrationComplete(room, matchId) {
+  if (!room || room.ratedMatchId !== matchId) return false;
+  const rs = room.ratingsAtStart;
+  return !!rs && typeof rs.light === "number" && typeof rs.dark === "number";
+}
+
+// №23: комната нетронута — поколение можно делать рейтинговым. Rules
+// проверяют дешёвые поля атомарно на коммите; здесь проверка ПОЛНАЯ,
+// включая побайтовое сравнение доски с доверенной начальной расстановкой,
+// которое в Rules невыразимо (24 узла, бюджет сложности).
+function roomIsPristine(room) {
+  if (!room) return false;
+  if (typeof room.moveCount === "number" && room.moveCount !== 0) return false;
+  if (room.turn !== "light") return false;
+  if (room.mustContinueFrom !== undefined && room.mustContinueFrom !== null) return false;
+  if (typeof room.capturedDark === "number" && room.capturedDark !== 0) return false;
+  if (typeof room.capturedLight === "number" && room.capturedLight !== 0) return false;
+  if (room.drawProposal !== undefined && room.drawProposal !== null) return false;
+  if (room.winner !== undefined && room.winner !== null) return false;
+  if (room.result !== undefined && room.result !== null) return false;
+  const expected = createInitialPieces();
+  const actual = room.pieces;
+  if (!actual || typeof actual !== "object") return false;
+  const ek = Object.keys(expected), ak = Object.keys(actual);
+  if (ek.length !== ak.length) return false;
+  for (const k of ek) {
+    const e = expected[k], a = actual[k];
+    if (!a || a.color !== e.color || !!a.king !== !!e.king) return false;
+  }
+  return true;
 }
 
 export async function joinRatedMatch(env, deps, callerUid, roomCode) {
@@ -1159,6 +1232,14 @@ export async function joinRatedMatch(env, deps, callerUid, roomCode) {
   const verdict = decideRegistration(idx.value, room);
   if (!verdict.ok) throw new Error(verdict.reason);
   const matchId = buildCanonicalMatchId(roomCode, room.createdAt, verdict.matchNumber);
+
+  // №23: early pristine — ДО первого write-side-effect (ensureStatsInitialized
+  // пишет stats/<uid>). Проверяем ТОЛЬКО если каноническая регистрация этого
+  // matchId ещё не завершена: у уже зарегистрированной сыгранной партии
+  // комната законно не pristine, и idempotent join (reconnect) обязан пройти.
+  if (!registrationComplete(room, matchId) && !roomIsPristine(room)) {
+    throw new Error("room_already_started");
+  }
 
   // Initialize/freeze ratings before claiming the index. The card is create-only
   // in practice, so the first creator fixes the snapshot for all retries.
@@ -1822,6 +1903,7 @@ function settlementPublicError(error) {
     "not_a_participant", "match_not_finished", "card_mismatch",
     "receipt_mismatch", "nothing_to_resume", "legacy_receipt_room_missing",
     "stats_init_conflict",
+    "room_already_started",
     // №23: protected event log / replay errors
     "wrong_actor_turn", "illegal_segment", "incomplete_chain",
     "extra_landing_after_completion", "match_already_terminal",
