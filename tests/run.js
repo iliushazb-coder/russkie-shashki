@@ -70,6 +70,7 @@ const FILES = [
   ['BB.15 №43 slice 3: formatTime extracted to shared/format-utils.js (pure function, no fakes needed)', 'shared-format-utils.test.js'],
   ['BB.16 №43 slice 4: capturedDepthOpacity extracted to shared/captured-stack-utils.js (index/clamp coverage)', 'shared-captured-stack-utils.test.js'],
   ['BB.17 №43 slice 5: startup-cover cluster extracted to shared/startup-cover-utils.js (global.Telegram adaptation)', 'shared-startup-cover-utils.test.js'],
+  ['BB.18 №23 frontend: start gate — authoritative-действия заблокированы до канонической регистрации', 'rated-start-gate.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.

@@ -57,6 +57,12 @@ eval(grab('isRoomPlayerStale'));
 let transactions = [];
 global.isSpectator = false;
 global.isOnlineGame = true;
+// №23: checkTimeout()/writeTechnicalResult() теперь вызывают start gate.
+// Эти сюиты проверяют clock/presence-логику, а не регистрацию рейтинга,
+// поэтому подставляем правдивый для их фикстур стаб: во всех сценариях
+// здесь поколение уже зарегистрировано и играбельно.
+global.ratedGenerationPlayable = function () { return true; };
+
 global.roomCode = 'R1';
 global.database = { ref: function () { return {
     transaction: function (fn) { transactions.push(fn); return { then: function () { return this; }, catch: function () { return this; } }; }

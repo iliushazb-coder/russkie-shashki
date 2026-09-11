@@ -46,6 +46,12 @@ let monoNow = 60000;
 function reset() {
     cleanupCalls = 0; modalHidden = true; timersCreated = []; txAborted = 0;
     global.isOnlineGame = true; global.isBotGame = false; global.isSpectator = false;
+// №23: checkTimeout()/writeTechnicalResult() теперь вызывают start gate.
+// Эти сюиты проверяют clock/presence-логику, а не регистрацию рейтинга,
+// поэтому подставляем правдивый для их фикстур стаб: во всех сценариях
+// здесь поколение уже зарегистрировано и играбельно.
+global.ratedGenerationPlayable = function () { return true; };
+
     global.roomCode = 'R1'; global.myColor = 'light'; global.myTelegramId = 'ME';
     global.isFirebaseConnected = true;
     global.connectedSinceMono = 0;
