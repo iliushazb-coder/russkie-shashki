@@ -312,3 +312,60 @@ test("participant НЕ может опубликовать pointer сам", asyn
   await seedIndex();
   await assertFails(publishPointer(databaseFor("alice")));
 });
+
+test("srv_settlement publishes first rated pointer when presence is populated", async () => {
+  await seed("rooms/ABC123", pristineRoom({
+    presence: {
+      light: {
+        lastSeen: CREATED_AT + 1000,
+        online: true,
+        onlineSince: CREATED_AT + 500
+      },
+      dark: {
+        lastSeen: CREATED_AT + 1000,
+        online: true,
+        onlineSince: CREATED_AT + 500
+      }
+    }
+  }));
+  await seedIndex();
+
+  const { serverTimestamp } = await import("firebase/database");
+
+  await assertSucceeds(update(ref(databaseFor(SERVER_UID)), {
+    "rooms/ABC123/ratedMatchId": MATCH_ID,
+    "rooms/ABC123/ratingsAtStart/light": 1200,
+    "rooms/ABC123/ratingsAtStart/dark": 1180,
+    "rooms/ABC123/ratedReplay": null,
+    "rooms/ABC123/turnStartedAt": serverTimestamp()
+  }));
+});
+
+test("srv_settlement cannot mutate presence while publishing rated pointer", async () => {
+  await seed("rooms/ABC123", pristineRoom({
+    presence: {
+      light: {
+        online: true,
+        lastSeen: CREATED_AT + 1000,
+        onlineSince: CREATED_AT + 500
+      },
+      dark: {
+        online: true,
+        lastSeen: CREATED_AT + 1000,
+        onlineSince: CREATED_AT + 500
+      }
+    }
+  }));
+  await seedIndex();
+
+  const { serverTimestamp } = await import("firebase/database");
+
+  await assertFails(update(ref(databaseFor(SERVER_UID)), {
+    "rooms/ABC123/ratedMatchId": MATCH_ID,
+    "rooms/ABC123/ratingsAtStart/light": 1200,
+    "rooms/ABC123/ratingsAtStart/dark": 1180,
+    "rooms/ABC123/ratedReplay": null,
+    "rooms/ABC123/turnStartedAt": serverTimestamp(),
+    "rooms/ABC123/presence/light/online": false
+  }));
+});
