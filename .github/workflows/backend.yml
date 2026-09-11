@@ -37,7 +37,7 @@ jobs:
         run: node --check worker/index.mjs
 
       - name: Worker unit tests
-        run: node --test tests/worker/worker-unit.test.mjs tests/worker/rated-replay-unit.test.mjs
+        run: node --test tests/worker/*.test.mjs
 
       - name: Settlement behavior tests
         run: node tests/settlement-behavior.test.js
