@@ -1257,7 +1257,6 @@ const RATED_JOIN_BACKOFF_MAX_MS = 30000;
 //
 // Смысловые: партия для регистрации не подходит, повтор ничего не изменит.
 const RATED_JOIN_TERMINAL_ERRORS = [
-    "room_already_started",
     "room_not_active", "stale_generation", "match_number_jump",
     "not_first_match", "not_a_player", "room_not_ready", "room_not_found",
     "card_mismatch", "card_conflict", "not_a_participant", "match_not_rated"
@@ -1300,48 +1299,6 @@ function registeredMatchIdForState(state, code) {
     const expected = expectedRatedMatchIdForState(state, code);
     if (!expected || state.ratedMatchId !== expected) return null;
     return expected;
-}
-
-// №23 start gate: рейтинговое поколение playable ТОЛЬКО когда каноническая
-// регистрация видна в САМОЙ КОМНАТЕ. Источник истины — room-visible pointer
-// (registeredMatchIdForState), а НЕ ratedJoinState.phase: между успешным
-// HTTP-ответом /rated/join и приходом pointer'а через room listener лежит
-// сетевой круг, и действие в этом окне ушло бы в legacy-путь мимо
-// protected log. Пока gate закрыт, ни одно authoritative изменение
-// состояния комнаты не выполняется: иначе protected replay, стартующий с
-// доверенной начальной позиции, никогда не увидит этих ходов, и партия
-// молча станет нерейтинговой.
-// №23: поколение доигрывается по narrow unrated fallback
-// (room_already_started), то есть Worker отверг регистрацию ДО claim
-// matchIndex. Значит matchIndex для этой комнаты не существует, и реванш
-// с matchNumber=1 получил бы от decideRegistration() not_first_match —
-// терминальную ошибку, которую gate не открывает: комната стала бы
-// активной, но неиграбельной. Поэтому реванш в такой комнате не
-// начинаем вовсе; выход в меню остаётся доступен.
-function rematchBlockedByUnratedFallback() {
-    if (!isOnlineGame || isBotGame || isSpectator) return false;
-    if (!currentState || !roomCode) return false;
-    if (registeredMatchIdForState(currentState, roomCode) !== null) return false;
-    const st = ratedJoinState[currentRatedGenerationKey()];
-    return !!(st && st.phase === "terminalFailed"
-        && st.errorCode === "room_already_started");
-}
-
-function ratedGenerationPlayable() {
-    if (!isOnlineGame || isBotGame || isSpectator) return true; // не rated-поток
-    if (!currentState || !roomCode) return false;
-    if (registeredMatchIdForState(currentState, roomCode) !== null) return true;
-    // Narrow unrated fallback. Историческая семантика "⭐ Без рейтинга"
-    // (rating_unrated) — доиграть партию без Elo, а не заморозить её; strict
-    // gate её ломал. Но открывать по одному phase нельзя: из 12 terminal-кодов
-    // безопасен ровно один. room_already_started выдаётся Worker'ом ТОЛЬКО
-    // когда поколение доказано то же (проверка sameGeneration в repair-path,
-    // CHAR-3), то есть комната валидна, игроки те же, отличие лишь в том, что
-    // ходы уже сделаны. Все прочие коды означают расхождение поколений или
-    // невалидную комнату — там продолжение игры опаснее заморозки.
-    const joinState = ratedJoinState[currentRatedGenerationKey()];
-    return !!(joinState && joinState.phase === "terminalFailed"
-        && joinState.errorCode === "room_already_started");
 }
 
 function currentRatedGenerationKey() {
@@ -1797,7 +1754,6 @@ let technicalResultInFlight = false;
 // СЕРВЕРНОМУ времени, а не часами телефона.
 function writeTechnicalResult(absentColor) {
     if (!canUseFirebase()) return false;
-    if (!ratedGenerationPlayable()) return false; // №23
     // --- контекст: только живая online-партия между людьми ---
     if (!isOnlineGame || isBotGame || isSpectator) return false;
     if (!roomCode || !currentState || !currentState.players) return false;
@@ -3109,14 +3065,7 @@ function requestRatedJoin(room) {
             // повторяются, пока то же поколение комнаты живо: счётчик
             // попыток больше не переводит партию в terminalFailed.
             if (isRatedJoinTerminalError(error)) {
-                // №23: помним ПРИЧИНУ окончательного отказа. По одному phase
-                // нельзя отличить безопасный unrated fallback
-                // (room_already_started — комната валидна, поколение то же,
-                // просто ходы уже сделаны) от фатального расхождения
-                // поколений (stale_generation, card_mismatch и пр.), где
-                // продолжать игру в этой комнате нельзя.
-                ratedJoinState[key] = { phase: "terminalFailed", attempts: attempts, matchId: null,
-                    errorCode: workerErrorCode(error) };
+                ratedJoinState[key] = { phase: "terminalFailed", attempts: attempts, matchId: null };
                 renderPlayerPanels();
                 return;
             }
@@ -3140,10 +3089,7 @@ function requestRatedJoin(room) {
                     ratedJoinState[key] = {
                         phase: "terminalFailed",
                         attempts: attempts,
-                        matchId: st2.matchId || null,
-                        // Комната завершилась, пока join висел: это НЕ
-                        // room_already_started и gate не открывает.
-                        errorCode: "room_not_active"
+                        matchId: st2.matchId || null
                     };
                     renderPlayerPanels();
                     return;
@@ -3781,12 +3727,6 @@ function submitRatedTurnEvent(matchId, path) {
 
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame && !canUseFirebase()) { showInfoModal(t("err_auth_required"), false); return; }
-    // №23: gate ДО attemptMove() и до любой optimistic-мутации/renderBoard.
-    // Проверка в точке ветвления protected/legacy оставила бы пользователя с
-    // уже отрисованным ходом, который затем не записывается, — это и есть
-    // "шашка вернулась назад". Закрывает и старт, и промежуточные сегменты
-    // multi-capture: цепочка не может начаться до регистрации.
-    if (!ratedGenerationPlayable()) return;
     if (isOnlineGame) {
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
@@ -5876,7 +5816,6 @@ if (btnSpectatorInterruptedOk) {
 btnResignYes.addEventListener("click", function () {
     closeModal(resignConfirmModal);
     if (!currentState) return;
-    if (!ratedGenerationPlayable()) return; // №23
 
     if (isOnlineGame) {
         if (!requireFirebaseAuth()) return;
@@ -5980,7 +5919,6 @@ function submitRatedDrawOffer() {
     btnOfferDraw.addEventListener("click", function () {
         if (!isOnlineGame || !currentState || currentState.winner) return;
         if (!requireFirebaseAuth()) return;
-        if (!ratedGenerationPlayable()) return; // №23
         if (currentState.ratedMatchId) {
             submitRatedDrawOffer();
             return;
@@ -6069,7 +6007,6 @@ function checkDrawProposal() {
 if (btnDrawAccept) {
     btnDrawAccept.addEventListener("click", function () {
         closeModal(drawOfferModal);
-        if (!ratedGenerationPlayable()) return; // №23
     // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
     // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
     // владеет presence обоих игроков. Причина техническая, а не игровая:
@@ -6125,7 +6062,6 @@ if (btnDrawAccept) {
 
 if (btnDrawDecline) {
     btnDrawDecline.addEventListener("click", function () {
-        if (!ratedGenerationPlayable()) return; // №23
         closeModal(drawOfferModal);
         if (!requireFirebaseAuth()) return;
         if (currentState && currentState.ratedMatchId) {
@@ -6138,7 +6074,6 @@ if (btnDrawDecline) {
 
 if (btnDrawCancel) {
     btnDrawCancel.addEventListener("click", function () {
-        if (!ratedGenerationPlayable()) return; // №23
         closeModal(drawOfferModal);
         if (!requireFirebaseAuth()) return;
         if (currentState && currentState.ratedMatchId) {
@@ -6248,7 +6183,6 @@ function cleanupFinishedRoom() {
 }
 
 btnNewGame.addEventListener("click", function () {
-    if (rematchBlockedByUnratedFallback()) { showInfoModal(t("rating_settlement_failed"), false); return; } // №23
     if (isOnlineGame) {
         if (!requireFirebaseAuth()) return;
         const codeAtClick = roomCode;
@@ -6306,7 +6240,6 @@ btnNewGame.addEventListener("click", function () {
 });
 
 function performRematchReset(expectedGenerationKey) {
-    if (rematchBlockedByUnratedFallback()) return; // №23 defense-in-depth
     if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
     // Defense-in-depth against double accept / stale async callbacks. If another
     // device (or an earlier click on this device) already started N+1, this
@@ -6489,7 +6422,6 @@ function waitForSettlementBeforeRematch() {
 }
 
 btnRematchAccept.addEventListener("click", function () {
-    if (rematchBlockedByUnratedFallback()) { showInfoModal(t("rating_settlement_failed"), false); return; } // №23
     closeModal(rematchRequestModal);
     const generationAtAccept = (currentState && roomCode)
         ? ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) : null;
@@ -6672,11 +6604,6 @@ function updatePresenceOnly() {
 
 function checkTimeout() {
     if (isSpectator) return;
-    // №23: до канонической регистрации часы не идут — turnStartedAt пишется
-    // ещё при waiting->active, задолго до неё, и Worker переставит его в
-    // момент публикации pointer'а. Считать elapsed раньше означало бы
-    // съесть первый ход и завершить комнату до регистрации.
-    if (!ratedGenerationPlayable()) return;
     if (!isOnlineGame || !currentState || currentState.winner) return;
     if (!canUseFirebase()) return;
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
