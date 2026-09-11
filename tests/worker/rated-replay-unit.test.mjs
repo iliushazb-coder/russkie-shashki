@@ -1142,6 +1142,30 @@ test("№23 (CHAR-1): permission_denied + pointer ЧУЖОГО поколени�
     "чужой pointer — это устаревшее поколение, а не начатая комната");
 });
 
+test("№23 (CHAR-3): permission_denied + комната уже generation N+1 -> stale_generation, НЕ room_already_started", async () => {
+  const { env, deps, rtdb } = makeEnvDeps();
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+  rtdb.store.data = joinStore(joinRoom());   // card строится для generation N (matchNumber 0)
+
+  // Пока PATCH летел, комната ушла в СЛЕДУЮЩЕЕ поколение (реванш): pointer
+  // ещё не опубликован, ходы уже сделаны. Без проверки поколения это
+  // выглядело бы как "просто начатая комната" того же поколения.
+  const origFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH") {
+      const r = rtdb.store.data.rooms.ABC123;
+      r.matchNumber = 1;
+      delete r.ratedMatchId;
+      r.moveCount = 1; r.turn = "dark";
+      return { ok: false, status: 401, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return origFetch(url, options);
+  };
+  await assert.rejects(() => joinRatedMatch(env, deps, "tg_111", "ABC123"),
+    /stale_generation/,
+    "card построена для поколения N, комната уже N+1 — это устаревшее поколение");
+});
+
 test("№23 (CHAR-1 negative control): pointer ОТСУТСТВУЕТ + комната начата -> по-прежнему room_already_started", async () => {
   const { env, deps, rtdb } = makeEnvDeps();
   const { joinRatedMatch } = await import("../../worker/index.mjs");

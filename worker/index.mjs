@@ -1157,6 +1157,18 @@ async function finalizePointer(env, deps, token, roomCode, matchId, card) {
     // failure. Комната при этом законно может быть уже не pristine.
     if (!isPermissionDeniedError(error)) throw error;
     const after = await dbGet(env, deps, token, "rooms/" + roomCode);
+    // №23 (CHAR-3): ПЕРВЫМ делом доказываем, что комната всё ещё относится к
+    // тому поколению, для которого построена card. Найдено characterization-
+    // тестом: если пока PATCH летел, комната перешла в generation N+1
+    // (matchNumber изменился, pointer ещё не опубликован, ходы уже сделаны),
+    // то ни registrationComplete(), ни ветка "чужой pointer" не срабатывают,
+    // и отказ классифицировался как room_already_started — то есть устаревшее
+    // поколение выглядело как "просто уже начатая комната". Проверка стоит до
+    // idempotent success и до room_already_started, иначе обе ветки могут
+    // сработать на ЧУЖОМ поколении.
+    if (after && !sameGeneration(card, roomCode, after)) {
+      throw new Error("stale_generation");
+    }
     if (registrationComplete(after, matchId)) return;
     // №23 (CHAR-1): pointer СУЩЕСТВУЕТ, но принадлежит ДРУГОМУ поколению —
     // это устаревшая generation, а не начатая комната. Без этой ветки обе
