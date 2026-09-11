@@ -72,6 +72,35 @@
 `APP_CHECK_REQUIRED` в production-конфигурации отсутствует; автоматически его
 не добавлять и не менять.
 
+### IAM / Service Account — проверка №7
+
+Фактическое project-level IAM-состояние проверено вручную 2026-09-11 в
+Google Cloud Console для проекта `russkie-shashki-online`.
+
+Проверенная сервисная учётная запись:
+
+    firebase-adminsdk-fbsvc@russkie-shashki-online.iam.gserviceaccount.com
+
+На момент проверки у неё назначена ровно одна project-level роль:
+
+    Firebase App Check Admin
+
+Роли `Owner` и `Editor` отсутствуют. Других project-level ролей в окне
+`Edit access` для этой сервисной учётной записи не отображалось.
+
+По текущему `worker/index.mjs` IAM-зависим только путь выпуска App Check
+токена. JWT подписываются локально приватным ключом сервисной учётной записи
+через `crypto.subtle`; Worker не вызывает `iamcredentials`/`signBlob`, поэтому
+`Service Account Token Creator` не требуется. Доступ к Realtime Database для
+server-side settlement выполняется через Firebase ID token для
+`uid=srv_settlement` и далее ограничивается Firebase Realtime Database Rules,
+а не project-level IAM-ролью сервисной учётной записи.
+
+В рамках этой проверки IAM-права не изменялись. Более узкую custom IAM role
+сейчас не вводить: текущая специализированная роль не даёт Owner/Editor-доступа
+к проекту, а изменение IAM во время незакрытой диагностики rated-settlement P0
+создало бы лишний production-риск.
+
 ### Firebase Realtime Database Rules
 
 Текущие production Rules опубликованы после завершения MASTER PLAN и затем
