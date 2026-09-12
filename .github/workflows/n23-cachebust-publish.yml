@@ -1,0 +1,50 @@
+name: n23-cachebust-publish
+
+on:
+  push:
+    branches:
+      - n23-cachebust-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout helper branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish exact index cache-bust to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "09d416a14025d27192081e26c3e9da577607bbc3"
+          git checkout --detach origin/main
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('index.html')
+          s = p.read_text(encoding='utf-8')
+          old = '<script src="script.js?v=206"></script>'
+          new = '<script src="script.js?v=207"></script>'
+          assert s.count(old) == 1, f'expected exactly one {old!r}, got {s.count(old)}'
+          assert new not in s, 'v207 already present unexpectedly'
+          p.write_text(s.replace(old, new), encoding='utf-8')
+          PY
+          git diff --check
+          mapfile -t changed < <(git diff --name-only)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "index.html"
+          grep -Fq '<script src="script.js?v=207"></script>' index.html
+          git config user.name "n23-cachebust-publisher"
+          git config user.email "n23-cachebust-publisher@local"
+          git add index.html
+          git commit -m "chore: bump script cache to v207"
+          new_sha="$(git rev-parse HEAD)"
+          git push origin HEAD:main
+          remote_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          test "$remote_sha" = "$new_sha"
+          echo "N23_CACHEBUST_MAIN_SHA=$new_sha"
