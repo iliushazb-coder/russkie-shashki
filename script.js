@@ -3725,8 +3725,28 @@ function submitRatedTurnEvent(matchId, path) {
     });
 }
 
+// №23: узкий барьер ТОЛЬКО для user gameplay mutations (ход/сдача/draw
+// offer/accept). Не путать с прежним общим предикатом на все rated-пути —
+// тот же gate стоял ещё и на checkTimeout/writeTechnicalResult и заморозил
+// комнату в production при неудачной регистрации; этот предикат туда
+// намеренно не подставляется.
+//
+// Единственное основание разрешить mutation — то, что комната САМА
+// доказывает каноническую регистрацию текущего generation
+// (registeredMatchIdForState). ratedJoinState.phase на решение не влияет
+// вообще — ни idle/inFlight/retryWait, ни success (между HTTP-ответом
+// join'а и появлением pointer'а в комнате лежит сетевой круг), ни
+// terminalFailed (включая room_already_started) сами по себе не дают
+// права на mutation, и никакая phase не может ЗАБЛОКИРОВАТЬ mutation,
+// если регистрация уже видна в комнате.
+function canMutateRatedGameplay() {
+    if (!isOnlineGame || isBotGame || isSpectator) return true;
+    return registeredMatchIdForState(currentState, roomCode) !== null;
+}
+
 function performMove(fromRow, fromCol, toRow, toCol) {
     if (isOnlineGame && !canUseFirebase()) { showInfoModal(t("err_auth_required"), false); return; }
+    if (!canMutateRatedGameplay()) return;
     if (isOnlineGame) {
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
@@ -5829,6 +5849,7 @@ btnResignYes.addEventListener("click", function () {
         // Локальный выход из партии этим guard'ом НЕ затрагивается —
         // защищается именно серверная транзакция сдачи.
         if (!isFirebaseConnected) return;
+        if (!canMutateRatedGameplay()) return; // №23
         if (currentState.ratedMatchId) {
             // №23: resign рейтинговой партии — protected event, не прямая
             // room-запись. Worker сам определяет winner (opposite color),
@@ -5919,6 +5940,7 @@ function submitRatedDrawOffer() {
     btnOfferDraw.addEventListener("click", function () {
         if (!isOnlineGame || !currentState || currentState.winner) return;
         if (!requireFirebaseAuth()) return;
+        if (!canMutateRatedGameplay()) return; // №23
         if (currentState.ratedMatchId) {
             submitRatedDrawOffer();
             return;
@@ -6018,6 +6040,7 @@ if (btnDrawAccept) {
         // подтвердит его при актуальном серверном состоянии.
         if (!requireFirebaseAuth()) return;
         if (!isFirebaseConnected) return;
+        if (!canMutateRatedGameplay()) return; // №23
         if (currentState.ratedMatchId) {
             // №23: draw_accept рейтинговой партии — protected event. Worker
             // сам находит текущий активный offer (client НЕ поставляет
