@@ -6109,6 +6109,19 @@ if (btnDrawCancel) {
 
 // ===== НОВАЯ ИГРА / ЗАКРЫТЬ =====
 
+// Завершивший online-игрок остаётся внутри Mini App: отписываемся от старой
+// комнаты, инвалидируем локальное поколение и возвращаемся в online-лобби.
+// Helper идемпотентен относительно cleanupFinishedRoom(): safe-cleanup уже
+// мог снять presence/сбросить roomCode, повторное локальное снятие безопасно.
+function leaveFinishedOnlineAndReturnToLobby() {
+    detachRoomListener();
+    detachMyPresence();
+    isOnlineGame = false;
+    roomCode = null;
+    currentState = null;
+    showGroupLobby();
+}
+
 btnCloseGame.addEventListener("click", function () {
     // Если мы зритель — просто отписываемся от комнаты и выходим в меню.
     if (isSpectator) {
@@ -6129,6 +6142,11 @@ btnCloseGame.addEventListener("click", function () {
 
         waitForSettlementBeforeRoomMutation().then(function (outcome) {
             closeModal(endGameModal);
+
+            // После settlement-barrier старый listener больше не нужен.
+            // Снимаем его ДО любых локальных Firebase-записей и ДО возможного
+            // remove комнаты, чтобы старый snapshot не переоткрыл end-game modal.
+            detachRoomListener();
             markMyselfLeftExplicitly();
 
             const stillSameFinished = outcome === "safe"
@@ -6139,18 +6157,21 @@ btnCloseGame.addEventListener("click", function () {
 
             if (stillSameFinished) {
                 cleanupFinishedRoom();
+                leaveFinishedOnlineAndReturnToLobby();
             } else {
                 // changed/blocked: локально закрыться можно, но НЕЛЬЗЯ стирать
                 // новую партию или finished outcome, который сервер не закрепил.
                 detachMyPresence();
                 isOnlineGame = false;
                 roomCode = null;
+                leaveFinishedOnlineAndReturnToLobby();
             }
-
-            if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
         }).catch(function (error) {
             console.error("Close after settlement failed:", error);
-            showInfoModal(t("err_join_failed"), false);
+            closeModal(endGameModal);
+            detachRoomListener();
+            markMyselfLeftExplicitly();
+            leaveFinishedOnlineAndReturnToLobby();
         });
         return;
     }
