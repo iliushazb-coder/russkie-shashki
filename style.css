@@ -171,6 +171,9 @@ h1 {
 #waiting-text {
     color: #f0d9ae;
     font-weight: 600;
+    font-size: 18px;
+    text-align: center;
+    margin: 0;
 }
 
 #game-screen {

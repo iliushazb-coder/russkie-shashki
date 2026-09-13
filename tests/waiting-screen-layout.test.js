@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+const css = fs.readFileSync(path.join(__dirname, '..', 'style.css'), 'utf8');
 let passed = 0;
 let failed = 0;
 
@@ -22,13 +23,26 @@ if (match) {
 
   check('order is link -> waiting status -> share -> back',
     linkPos !== -1 && statusPos > linkPos && sharePos > statusPos && backPos > sharePos);
-  check('waiting status is 18px', /id="waiting-text"[^>]*font-size:\s*18px/.test(block));
-  check('waiting status is centered', /id="waiting-text"[^>]*text-align:\s*center/.test(block));
-  check('waiting status resets default paragraph margin', /id="waiting-text"[^>]*margin:\s*0/.test(block));
+
+  const waitingTextTag = block.match(/<p id="waiting-text"[^>]*>/);
+  check('waiting-text has no inline style attribute (styling belongs in style.css)',
+    !!waitingTextTag && !/style\s*=/.test(waitingTextTag[0]));
+
   check('waiting Back button has no extra inline margin-top',
     !/id="btn-back-from-waiting"[^>]*margin-top/.test(block));
 }
 
+const cssRule = css.match(/#waiting-text\s*\{([\s\S]*?)\}/);
+check('#waiting-text rule is present in style.css', !!cssRule);
+
+if (cssRule) {
+  const rule = cssRule[1];
+  check('waiting status is 18px (in style.css)', /font-size:\s*18px/.test(rule));
+  check('waiting status is centered (in style.css)', /text-align:\s*center/.test(rule));
+  check('waiting status resets default paragraph margin (in style.css)', /margin:\s*0/.test(rule));
+}
+
+check('stylesheet cache-bust is v21', /<link rel="stylesheet" href="style\.css\?v=21">/.test(html));
 check('script cache-bust remains v209', /<script src="script\.js\?v=209"><\/script>/.test(html));
 
 console.log(`\nИТОГ waiting-screen layout: ${passed}/${passed + failed}`);
