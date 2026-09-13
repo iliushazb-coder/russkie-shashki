@@ -199,6 +199,24 @@ function resetEndGameUi(asSpectator) {
     check('1.4 stable spectator sees the same offline countdown class',
         st.cls === 'status-countdown' && /^status_offline\s+\d+sec$/.test(st.text), JSON.stringify(st));
 
+    resetStatusState();
+    global.isFirebaseConnected = false;
+    st = statusForColor('dark');
+    check('1.5 spectator alternate proof requires isFirebaseConnected',
+        st.cls === 'status-neutral' && st.text === 'status_connecting', JSON.stringify(st));
+
+    resetStatusState();
+    global.connectedSinceMono = null;
+    st = statusForColor('dark');
+    check('1.6 spectator alternate proof requires connectedSinceMono !== null',
+        st.cls === 'status-neutral' && st.text === 'status_connecting', JSON.stringify(st));
+
+    resetStatusState();
+    global.serverTimeOffsetReady = false;
+    st = statusForColor('dark');
+    check('1.7 spectator alternate proof requires serverTimeOffsetReady',
+        st.cls === 'status-neutral' && st.text === 'status_connecting', JSON.stringify(st));
+
     console.log('2. SPECTATOR MUST NOT RECEIVE DECISION MODALS');
     resetProposalUi();
     global.currentState = { winner: 'light', rematchProposal: { by: 'light', name: 'Tatiana' } };
@@ -239,6 +257,12 @@ function resetEndGameUi(asSpectator) {
     check('4.2 winning player keeps existing confirmed Elo delta',
         global.endGameRating.textContent === '⭐1110 → 1125  (+15)', global.endGameRating.textContent);
 
+    resetEndGameUi(false);
+    global.myTelegramId = 'LOSER';
+    renderEndGameModal();
+    check('4.1b losing player gets explicit resign-loss explanation',
+        global.endGameSubtext.textContent === 'You resigned. Opponent won.', global.endGameSubtext.textContent);
+
     resetEndGameUi(true);
     renderEndGameModal();
     check('4.3 spectator gets named, neutral resign result',
@@ -252,6 +276,14 @@ function resetEndGameUi(asSpectator) {
         /else\s*\{\s*closeModal\(endGameModal\);\s*\}/.test(renderEndSrc));
     check('5.2 deleted room returns spectator to menu',
         /if\s*\(!room\s*\|\|\s*!room\.pieces\)[\s\S]*?showScreen\(menuScreen\)/.test(watchSrc));
+
+    console.log('6. SPECTATOR ENTRY HIDES STALE REACTIONS UI');
+    const watchSrcForReactions = extractFunc('watchGroupRoomAsSpectator');
+    const hideIdx = watchSrcForReactions.search(/if\s*\(reactionsRow\)\s*reactionsRow\.classList\.add\(\s*['"]hidden['"]\s*\)/);
+    const gameScreenIdx = watchSrcForReactions.indexOf('showScreen(gameScreen)');
+    check('6.1 watchGroupRoomAsSpectator explicitly hides reactionsRow before entering the game screen',
+        hideIdx >= 0 && gameScreenIdx >= 0 && hideIdx < gameScreenIdx,
+        'hideIdx=' + hideIdx + ', gameScreenIdx=' + gameScreenIdx);
 
     console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
     if (failed) process.exitCode = 1;

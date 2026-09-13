@@ -163,7 +163,7 @@ console.log('=== 2. STRUCTURAL: положение вызова нового б�
         !!resign && resign.indexOf(PROPOSED_GATE_NAME + '()') !== -1 &&
         resign.indexOf(PROPOSED_GATE_NAME + '()') < resign.indexOf('.transaction('));
 
-    const drawOffer = blockAt('btnOfferDraw.addEventListener', 400);
+    const drawOffer = blockAt('btnOfferDraw.addEventListener', 450);
     const drawOfferBranchPos = drawOffer ? drawOffer.indexOf('if (currentState.ratedMatchId)') : -1;
     check('2.6 draw offer: gate ДО развилки protected/legacy, значит ДО ОБОИХ путей',
         !!drawOffer && drawOffer.indexOf(PROPOSED_GATE_NAME + '()') !== -1 && drawOfferBranchPos !== -1 &&
