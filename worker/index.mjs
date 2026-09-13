@@ -176,6 +176,15 @@ function replayNonTurnEvent(state, actorColor, ev, priorEvents) {
         if (offer.actorUid === ev.actorUid) throw new Error("self_accept_rejected");
         return Object.assign({}, state, { winner: "draw", winReason: "draw" });
     }
+    // №23 (technical disconnect/timeout): событие рождается ИСКЛЮЧИТЕЛЬНО
+    // через commitTerminalOutcome (см. ниже), не через обычный claim-путь
+    // commitRatedEvent/validateClaimShape -- winner/winReason уже
+    // верифицированы verifyDisconnectEvidence/verifyTimeoutEvidence в
+    // момент создания события и неизменяемы (append-only log), поэтому
+    // здесь просто доверяем persisted-полям, не пересчитываем заново.
+    if (ev.type === "technical_result") {
+        return Object.assign({}, state, { winner: ev.winner, winReason: ev.winReason });
+    }
     throw new Error("unknown_event_type");
 }
 
@@ -901,6 +910,140 @@ export async function dbPatchRoot(env, deps, token, updates) {
     throw err;
   }
   return true;
+}
+
+// №23 (technical disconnect/timeout): claim + protected event (+ projection
+// для technical) рождаются ТОЛЬКО одним atomic dbPatchRoot -- никогда
+// отдельным dbPutIfMatch на ratedTerminal перед этим. Rules на
+// ratedTerminal/$matchId/.write ("!data.exists() && newData.exists()")
+// делают create-once атомарно ВМЕСТЕ с остальными путями того же PATCH:
+// если ratedTerminal уже занят другим requestId, весь PATCH (включая
+// событие) отклоняется целиком -- задокументированная атомарность
+// multi-location update Firebase RTDB, не отдельное свойство этого узла.
+export function claimsMatch(a, b) {
+  if (!a || !b) return false;
+  if (a.requestId === b.requestId) return true;
+  // Разные requestId, но семантически один и тот же исход (например,
+  // localStorage-marker сброшен между попытками у ТОГО ЖЕ клиента, и
+  // generateNonTurnRequestId сгенерировал новый requestId) -- не считается
+  // конфликтом. Конфликт -- только когда РЕЗУЛЬТАТ действительно другой
+  // (другой победитель/причина), не когда просто другой requestId у того
+  // же самого исхода. Безопасно: verifyDisconnectEvidence/
+  // verifyTimeoutEvidence перепроверяются заново на КАЖДОМ вызове ДО того,
+  // как этот код вообще достижим, так что повторная заявка без реального
+  // основания сюда не дойдёт вовсе.
+  return a.source === b.source && a.kind === b.kind &&
+    a.winnerId === b.winnerId && a.loserId === b.loserId;
+}
+
+export async function commitTerminalOutcome(env, deps, token, matchId, candidate) {
+  const existing = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
+  if (existing) return classifyExistingTerminalClaim(env, deps, token, matchId, existing, candidate);
+
+  const patch = Object.assign(
+    { ["ratedTerminal/" + matchId]: candidate.claim,
+      ["ratedEvents/" + matchId + "/events/" + candidate.nextSeqStr]: candidate.eventPayload },
+    candidate.projectionUpdates || {}
+  );
+
+  try {
+    await dbPatchRoot(env, deps, token, patch);
+    return { ok: true, claim: candidate.claim };
+  } catch (error) {
+    // Permission-denied (Rules отклонили -- кто-то другой уже занял
+    // ratedTerminal) неотличим по HTTP-статусу от прочих сетевых сбоев на
+    // этом уровне без доп. чтения, поэтому в обоих случаях перечитываем и
+    // классифицируем по факту, а не гадаем по status.
+    const after = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
+    if (!after) throw error; // не наш конфликт -- настоящая retryable ошибка, пробрасываем как есть
+    return classifyExistingTerminalClaim(env, deps, token, matchId, after, candidate);
+  }
+}
+
+async function classifyExistingTerminalClaim(env, deps, token, matchId, existingClaim, candidate) {
+  if (!claimsMatch(existingClaim, candidate.claim)) {
+    return { ok: false, reason: "terminal_conflict" };
+  }
+  const event = await dbGet(env, deps, token, "ratedEvents/" + matchId + "/events/" + existingClaim.seq);
+  if (event) return { ok: true, claim: existingClaim };
+  // claim существует, событие -- нет: при корректном коде оба всегда
+  // рождаются одним PATCH, поэтому это структурная аномалия (баг/атака в
+  // обход commitTerminalOutcome), не штатный race. Fail closed, не чиним
+  // автоматически постфактум.
+  return { ok: false, reason: "fail_closed_incomplete_terminal", requiresManualReview: true };
+}
+
+export async function claimTechnicalOutcome(env, deps, token, matchId, card, callerUid, claimBody) {
+  const by = cardByColor(card);
+  const callerColor = card.participants[callerUid] && card.participants[callerUid].color;
+  if (callerColor !== "light" && callerColor !== "dark") throw new Error("not_a_participant");
+  const opponentColor = callerColor === "light" ? "dark" : "light";
+  const requestId = claimBody && claimBody.requestId;
+  if (!isValidRequestId(requestId)) throw new Error("invalid_request_id");
+  const reason = claimBody && claimBody.reason;
+  if (reason !== "disconnect" && reason !== "timeout") throw new Error("invalid_technical_reason");
+
+  const liveRoom = await dbGet(env, deps, token, "rooms/" + card.roomCode);
+  if (!liveRoom || liveRoom.ratedMatchId !== matchId) throw new Error("stale_generation");
+
+  const nowMs = deps.now();
+  // Caller всегда заявляет ПРОТИВНИКА проигравшим -- собственную сторону
+  // выбрать нельзя, она вычислена из card.participants[callerUid], не из
+  // тела запроса.
+  const evidenceOk = reason === "disconnect"
+    ? verifyDisconnectEvidence(liveRoom, opponentColor, callerColor, nowMs)
+    : verifyTimeoutEvidence(liveRoom, opponentColor, nowMs);
+  if (!evidenceOk) throw new Error("technical_evidence_insufficient");
+
+  const list = await fetchAllEvents(env, deps, token, matchId);
+  const nextSeqStr = formatSeq(list.length);
+
+  const winnerId = by[callerColor];
+  const loserId = by[opponentColor];
+  const eventPayload = {
+    requestId, type: "technical_result", actorUid: SRV_UID, color: callerColor,
+    matchId, roomCode: card.roomCode, createdAt: card.createdAt, matchNumber: card.matchNumber,
+    ts: serverTimestamp(), winner: callerColor, winReason: reason
+  };
+  const candidate = {
+    claim: { matchId, roomCode: card.roomCode, source: "technical", kind: reason, requestId, winnerId, loserId, seq: nextSeqStr, createdAt: serverTimestamp() },
+    nextSeqStr,
+    eventPayload,
+    // Та же форма, что уже пишет syncProjection для protected-исходов
+    // (winner/winReason/status) -- никакого отдельного result-объекта для
+    // rated-технического пути, чтобы клиентский рендер не нуждался в
+    // спец-ветке под источник исхода.
+    projectionUpdates: {
+      ["rooms/" + card.roomCode + "/winner"]: callerColor,
+      ["rooms/" + card.roomCode + "/winReason"]: reason,
+      ["rooms/" + card.roomCode + "/status"]: "finished"
+    }
+  };
+
+  const result = await commitTerminalOutcome(env, deps, token, matchId, candidate);
+  if (!result.ok) throw new Error(result.reason || "terminal_conflict");
+  return { winnerId, loserId, winner: callerColor, reason };
+}
+
+// verifyDisconnectEvidence/verifyTimeoutEvidence: осознанно РАЗНЫЕ функции,
+// не одна размытая проверка под общим именем -- каждая читает и требует
+// своих полей, ни одна не подменяет другую при незнакомом winReason.
+export function verifyDisconnectEvidence(liveRoom, loserColor, winnerColor, nowMs) {
+  const presence = liveRoom.presence || {};
+  const loser = presence[loserColor] || {};
+  const winner = presence[winnerColor] || {};
+  if (loser.online !== false) return false;
+  if (typeof loser.absentSince !== "number" || loser.absentSince + 60000 > nowMs) return false;
+  if (winner.online !== true) return false;
+  if (typeof winner.onlineSince !== "number" || winner.onlineSince + 60000 > nowMs) return false;
+  return true;
+}
+
+export function verifyTimeoutEvidence(liveRoom, loserColor, nowMs) {
+  if (liveRoom.turn !== loserColor) return false;
+  if (typeof liveRoom.turnStartedAt !== "number") return false;
+  if (typeof liveRoom.timeControlSeconds !== "number" || liveRoom.timeControlSeconds <= 0) return false;
+  return liveRoom.turnStartedAt + liveRoom.timeControlSeconds * 1000 <= nowMs;
 }
 
 // №25 fix: держит leaderboard's stats/$uid/name синхронным с текущим
@@ -2008,6 +2151,22 @@ async function handleSettlement(request, env, url) {
       const result = await commitRatedEvent(env, settlementDeps(), token, matchId, card, callerUid, claim);
       return jsonSettlementResponse(request, env, 200, { ok: true, ...result });
     }
+    if (url.pathname === "/rated/claim-technical") {
+      const matchId = body && body.matchId;
+      if (!validFirebasePathAtom(matchId, 149)) {
+        return jsonSettlementResponse(request, env, 400, { ok: false, error: "match_id_invalid" });
+      }
+      const token = await getServerIdToken(env, settlementDeps());
+      const card = await dbGet(env, settlementDeps(), token, "matches/" + matchId);
+      if (!card || card.roomCode !== roomCode) {
+        return jsonSettlementResponse(request, env, 409, { ok: false, error: "match_not_registered" });
+      }
+      const result = await claimTechnicalOutcome(env, settlementDeps(), token, matchId, card, callerUid, {
+        requestId: body && body.requestId,
+        reason: body && body.reason
+      });
+      return jsonSettlementResponse(request, env, 200, { ok: true, ...result });
+    }
     return jsonSettlementResponse(request, env, 404, { ok: false, error: "not_found" });
   } catch (error) {
     const publicCode = settlementPublicError(error);
@@ -2033,7 +2192,7 @@ export default {
       return jsonResponse(request, env, 200, { ok: true });
     }
 
-    if (request.method === "POST" && (url.pathname === "/rated/join" || url.pathname === "/rated/settle" || url.pathname === "/rated/event")) {
+    if (request.method === "POST" && (url.pathname === "/rated/join" || url.pathname === "/rated/settle" || url.pathname === "/rated/event" || url.pathname === "/rated/claim-technical")) {
       return handleSettlement(request, env, url);
     }
 
