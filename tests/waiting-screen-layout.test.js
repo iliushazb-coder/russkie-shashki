@@ -43,7 +43,7 @@ if (cssRule) {
 }
 
 check('stylesheet cache-bust is v21', /<link rel="stylesheet" href="style\.css\?v=21">/.test(html));
-check('script cache-bust remains v209', /<script src="script\.js\?v=209"><\/script>/.test(html));
+check('script cache-bust remains v210', /<script src="script\.js\?v=210"><\/script>/.test(html));
 
 console.log(`\nИТОГ waiting-screen layout: ${passed}/${passed + failed}`);
 if (failed) process.exitCode = 1;

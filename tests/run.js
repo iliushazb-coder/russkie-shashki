@@ -72,6 +72,7 @@ const FILES = [
   ['BB.17 №43 slice 5: startup-cover cluster extracted to shared/startup-cover-utils.js (global.Telegram adaptation)', 'shared-startup-cover-utils.test.js'],
   ['BB.18 №23 frontend: start gate — authoritative-действия заблокированы до канонической регистрации', 'rated-start-gate.test.js'],
   ['BB.19 UI: waiting-screen status layout', 'waiting-screen-layout.test.js'],
+  ['BB.20 SPECTATOR: status + readonly finish flow', 'spectator-readonly-status-finish.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.
@@ -99,10 +100,10 @@ function evaluateSuite(output, exitCode) {
     return { ok: false, pass: 0, fail: 0, reason: 'нет машинно-читаемой строки ИТОГ' };
   }
 
+  // 3. Итог обязан быть осмысленным.
   const pass = Number(last[1]);
   const total = Number(last[2]);
 
-  // 3. Итог обязан быть осмысленным.
   if (!Number.isFinite(pass) || !Number.isFinite(total)) {
     return { ok: false, pass: 0, fail: 0, reason: 'нечисловой итог' };
   }

@@ -987,7 +987,7 @@ function stateWithOpponentSilentFor(absenceSec, online) {
     check('24.7 у технической победы есть объяснение во всех трёх языках',
         (SRC.match(/win_reason_disconnect:/g) || []).length === 3);
     check('24.8 текст показывается ИМЕННО для technical, а не для любой победы',
-        /currentState\.winReason === TECHNICAL_WIN_REASON\) \? t\("win_reason_disconnect"\) : ""/.test(SRC));
+        /currentState\.winReason === TECHNICAL_WIN_REASON\)\s*\{\s*endGameSubtext\.textContent = t\("win_reason_disconnect"\);/.test(SRC));
     check('24.9 finished-комната не подметается лобби-sweep-ом',
         /if \(room\.status === "finished" \|\| room\.winner\) continue;/.test(SRC));
 

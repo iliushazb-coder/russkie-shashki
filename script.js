@@ -246,6 +246,10 @@ const translations = {
         draw_by_rule_header: "🤝 НИЧЬЯ ПО ПРАВИЛАМ",
         draw_reason_unknown: "Партия завершена автоматически по правилу ничьей",
         win_reason_disconnect: "Соперник не вернулся в игру",
+        win_reason_resign_win: "Сдача соперника. Вы выиграли.",
+        win_reason_resign_loss: "Вы сдались. Победа соперника.",
+        resign_result_label: "Сдача",
+        winner_label: "Победа",
         draw_reason_threefold: "Троекратное повторение позиции",
         draw_reason_kings15: "Лимит 15 ходов только дамками, без взятий",
         draw_reason_np5: "Лимит 5 ходов в окончании с 2\u20133 фигурами",
@@ -392,6 +396,10 @@ const translations = {
         draw_by_rule_header: "🤝 DRAW BY RULE",
         draw_reason_unknown: "The game ended automatically by a draw rule",
         win_reason_disconnect: "Opponent did not return",
+        win_reason_resign_win: "Opponent resigned. You won.",
+        win_reason_resign_loss: "You resigned. Opponent won.",
+        resign_result_label: "Resignation",
+        winner_label: "Winner",
         draw_reason_threefold: "Threefold repetition of the position",
         draw_reason_kings15: "15-move limit: kings only, no captures",
         draw_reason_np5: "5-move limit in a 2\u20133 piece ending",
@@ -535,6 +543,10 @@ const translations = {
         draw_by_rule_header: "🤝 PATTA PER REGOLA",
         draw_reason_unknown: "Partita terminata automaticamente per una regola di patta",
         win_reason_disconnect: "L'avversario non è tornato",
+        win_reason_resign_win: "Resa dell'altra parte. Hai vinto.",
+        win_reason_resign_loss: "Hai abbandonato la partita. Vittoria dell'altra parte.",
+        resign_result_label: "Resa",
+        winner_label: "Vittoria",
         draw_reason_threefold: "Triplice ripetizione della posizione",
         draw_reason_kings15: "Limite di 15 mosse: solo dame, senza catture",
         draw_reason_np5: "Limite di 5 mosse in un finale con 2\u20133 pezzi",
@@ -1444,7 +1456,20 @@ function statusForColor(color) {
     // Пока доказательство свежести не получено — нейтральный статус, который
     // сознательно не равен "ушёл" и потому не запускает отсчёт отсутствия.
     if (!roomSnapshotSeenSinceConnect) {
-        return { text: t("status_connecting"), cls: "status-neutral" };
+        // Зритель никогда не пишет player presence и потому никогда не
+        // взводит serverAckSinceConnect (см. комментарий у canDeleteStaleRoomFromLobby
+        // о том же классе проблемы для лобби-визитора). Доказываем свежесть
+        // тем же способом — только глобальными сигналами соединения,
+        // без единого изменения условия для игрока: ветка ниже физически
+        // недостижима, если isSpectator ложен.
+        const spectatorFreshnessProven = isSpectator
+            && isFirebaseConnected
+            && connectedSinceMono !== null
+            && getMonotonicNow() - connectedSinceMono >= CONNECTION_SETTLE_MS
+            && serverTimeOffsetReady;
+        if (!spectatorFreshnessProven) {
+            return { text: t("status_connecting"), cls: "status-neutral" };
+        }
     }
 
     // ВАЖНО: lastSeen — СЕРВЕРНЫЙ timestamp, поэтому сравнивать его с голым
@@ -2757,8 +2782,28 @@ function renderEndGameModal() {
             // v180: единственная победа, у которой есть пояснение — техническая.
             // Без него исход выглядел бы необъяснимо для обеих сторон.
             if (endGameSubtext) {
-                endGameSubtext.textContent =
-                    (currentState.winReason === TECHNICAL_WIN_REASON) ? t("win_reason_disconnect") : "";
+                if (currentState.winReason === TECHNICAL_WIN_REASON) {
+                    endGameSubtext.textContent = t("win_reason_disconnect");
+                } else if (currentState.winReason === "resign") {
+                    // UID из currentState.players, НЕ сырой myColor: цвета
+                    // могут смениться местами при реванше, а сравнение по
+                    // UID остаётся верным независимо от стороны доски.
+                    const winnerUid = currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].id;
+                    const loserUid = currentState.players && currentState.players[loserColor] && currentState.players[loserColor].id;
+                    if (!isSpectator && myTelegramId === winnerUid) {
+                        endGameSubtext.textContent = t("win_reason_resign_win");
+                    } else if (!isSpectator && myTelegramId === loserUid) {
+                        endGameSubtext.textContent = t("win_reason_resign_loss");
+                    } else {
+                        // Зритель: нейтральная, поимённая формулировка через
+                        // label-ключи — не требует согласования грамматического
+                        // рода с произвольным именем игрока.
+                        endGameSubtext.textContent =
+                            t("resign_result_label") + ": " + loserName + ". " + t("winner_label") + ": " + winnerName + ".";
+                    }
+                } else {
+                    endGameSubtext.textContent = "";
+                }
             }
         }
 
@@ -5923,6 +5968,7 @@ if (btnSpectatorInterruptedOk) {
 }
 
 btnResignYes.addEventListener("click", function () {
+    if (isSpectator) return;
     closeModal(resignConfirmModal);
     if (!currentState) return;
 
@@ -6027,6 +6073,7 @@ function submitRatedDrawOffer() {
 }
 
     btnOfferDraw.addEventListener("click", function () {
+        if (isSpectator) return;
         if (!isOnlineGame || !currentState || currentState.winner) return;
         if (!requireFirebaseAuth()) return;
         if (!canMutateRatedGameplay()) return; // №23
@@ -6092,6 +6139,7 @@ function triggerEmojiBurst(emoji) {
 
 function checkDrawProposal() {
     if (!drawOfferModal) return;
+    if (isSpectator) { closeModal(drawOfferModal); return; }
     if (!isOnlineGame || !currentState || currentState.winner) {
         closeModal(drawOfferModal);
         return;
@@ -6117,6 +6165,7 @@ function checkDrawProposal() {
 
 if (btnDrawAccept) {
     btnDrawAccept.addEventListener("click", function () {
+        if (isSpectator) return;
         closeModal(drawOfferModal);
     // ВРЕМЕННАЯ ИНВАРИАНТА ФАЗЫ 1: клиент без подтверждённой связи не создаёт
     // НОВУЮ транзакцию на весь узел комнаты, пока такая транзакция всё ещё
@@ -6174,6 +6223,7 @@ if (btnDrawAccept) {
 
 if (btnDrawDecline) {
     btnDrawDecline.addEventListener("click", function () {
+        if (isSpectator) return;
         closeModal(drawOfferModal);
         if (!requireFirebaseAuth()) return;
         if (currentState && currentState.ratedMatchId) {
@@ -6186,6 +6236,7 @@ if (btnDrawDecline) {
 
 if (btnDrawCancel) {
     btnDrawCancel.addEventListener("click", function () {
+        if (isSpectator) return;
         closeModal(drawOfferModal);
         if (!requireFirebaseAuth()) return;
         if (currentState && currentState.ratedMatchId) {
@@ -6329,6 +6380,7 @@ function cleanupFinishedRoom() {
 }
 
 btnNewGame.addEventListener("click", function () {
+    if (isSpectator) return;
     if (isOnlineGame) {
         if (!requireFirebaseAuth()) return;
         const codeAtClick = roomCode;
@@ -6386,6 +6438,7 @@ btnNewGame.addEventListener("click", function () {
 });
 
 function performRematchReset(expectedGenerationKey) {
+    if (isSpectator) return Promise.reject(new Error("spectator_cannot_mutate"));
     if (!canUseFirebase()) return Promise.reject(new Error("firebase_auth_required"));
     // Defense-in-depth against double accept / stale async callbacks. If another
     // device (or an earlier click on this device) already started N+1, this
@@ -6458,6 +6511,7 @@ function performRematchReset(expectedGenerationKey) {
 
 function checkRematchProposal() {
     if (!rematchRequestModal) return;
+    if (isSpectator) { closeModal(rematchRequestModal); return; }
     if (!isOnlineGame || !currentState) {
         closeModal(rematchRequestModal);
         return;
@@ -6568,6 +6622,7 @@ function waitForSettlementBeforeRematch() {
 }
 
 btnRematchAccept.addEventListener("click", function () {
+    if (isSpectator) return;
     closeModal(rematchRequestModal);
     const generationAtAccept = (currentState && roomCode)
         ? ratedGenerationKey(roomCode, currentState.matchNumber, currentState.createdAt) : null;
@@ -6618,6 +6673,7 @@ btnRematchAccept.addEventListener("click", function () {
 });
 
 btnRematchDecline.addEventListener("click", function () {
+    if (isSpectator) return;
     closeModal(rematchRequestModal);
     if (canUseFirebase()) database.ref("rooms/" + roomCode + "/rematchProposal").remove();
 });
@@ -9227,6 +9283,10 @@ function watchGroupRoomAsSpectator(code) {
         myCurrentSpectatorRef = myWatchRef;
     }
 
+    // Зритель read-only: не даём старым emoji-controls остаться визуально
+    // открытыми после сценария игрок -> меню -> зритель (startOnlineGame
+    // их показывает игроку, здесь явно скрываем для нового режима).
+    if (reactionsRow) reactionsRow.classList.add("hidden");
     showScreen(gameScreen);
     
     // Запускаем слушатель игры без установки Presence
