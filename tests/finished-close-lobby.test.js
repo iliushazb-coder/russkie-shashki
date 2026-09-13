@@ -26,13 +26,13 @@ const helperStart = section.indexOf("function " + helperName + "()");
 const handlerStart = section.indexOf('btnCloseGame.addEventListener("click"');
 const helperBody = helperStart >= 0 && handlerStart > helperStart ? section.slice(helperStart, handlerStart) : "";
 
-ok(helperStart >= 0, "2. есть отдельный helper выхода завершившего игрока в лобби");
+ok(helperStart >= 0, "2. есть отдельный helper выхода завершившего online-игрока");
 ok(helperBody.includes("detachRoomListener();"), "3. helper отписывает старый room-listener");
 ok(helperBody.includes("detachMyPresence();"), "4. helper снимает локальный presence");
 ok(helperBody.includes("isOnlineGame = false;"), "5. helper сбрасывает online-флаг");
 ok(helperBody.includes("roomCode = null;"), "6. helper инвалидирует roomCode");
 ok(helperBody.includes("currentState = null;"), "7. helper очищает старое состояние партии");
-ok(helperBody.includes("showGroupLobby();"), "8. helper возвращает именно в online-лобби");
+ok(helperBody.includes("showScreen(menuScreen);") && helperBody.includes("loadActiveRooms();") && !helperBody.includes("showGroupLobby();"), "8. helper возвращает в главное меню, не в «Кто играет?»");
 
 const onlineAnchor = "if (isOnlineGame && currentState && currentState.winner && roomCode) {";
 const onlineStart = section.indexOf(onlineAnchor, handlerStart);
@@ -46,7 +46,7 @@ ok(onlineBlock.includes("cleanupFinishedRoom();"), "11. безопасный cle
 ok(!onlineBlock.includes("Telegram.WebApp.close()"), "12. finished-online «Закрыть» больше НЕ закрывает Telegram Mini App");
 
 const helperCalls = (onlineBlock.match(/leaveFinishedOnlineAndReturnToLobby\(\);/g) || []).length;
-ok(helperCalls >= 2, "13. возврат в лобби выполняется и после normal outcome, и при settlement error");
+ok(helperCalls >= 2, "13. возврат из finished-online выполняется и после normal outcome, и при settlement error");
 
 console.log("\nИТОГ: " + passed + "/13, провалено: " + failed);
 process.exit(failed ? 1 : 0);

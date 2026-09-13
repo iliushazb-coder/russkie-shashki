@@ -47,6 +47,8 @@ function resetGlobals() {
   global.showGroupLobby = function () { global.showGroupLobbyCalls++; };
   global.setupPresenceCalls = 0;
   global.setupPresence = function () { global.setupPresenceCalls++; };
+  global.attachFriendWaitingStatusListenerCalls = [];
+  global.attachFriendWaitingStatusListener = function (code) { global.attachFriendWaitingStatusListenerCalls.push(code); };
   global.startOnlineGameCalls = 0;
   global.startOnlineGame = function () { global.startOnlineGameCalls++; };
   global.detachRoomListenerCalls = 0;
@@ -256,6 +258,8 @@ try {
         check('4.3 myPendingFriendRoomCode kept', global.myPendingFriendRoomCode === 'ABC123');
         check('4.4 showScreen(waitingScreen) called', global.showScreenCalls.indexOf(global.waitingScreen) !== -1);
         check('4.5 setupPresence called once', global.setupPresenceCalls === 1);
+        check('4.6 waiting status listener attached once for ABC123',
+          global.attachFriendWaitingStatusListenerCalls.length === 1 && global.attachFriendWaitingStatusListenerCalls[0] === 'ABC123');
       });
     })
     .then(function () {

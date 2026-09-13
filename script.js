@@ -5638,11 +5638,108 @@ timeOptionButtons.forEach(function (btn) {
     });
 });
 
+const btnBackFromWaiting = document.getElementById("btn-back-from-waiting");
 const btnBackFromTimeControl = document.getElementById("btn-back-from-time-control");
 if (btnBackFromTimeControl) {
     btnBackFromTimeControl.addEventListener("click", function() {
         showScreen(menuScreen);
     });
+}
+
+let friendWaitingStatusRef = null;
+let friendWaitingStatusHandler = null;
+
+function detachFriendWaitingStatusListener() {
+    if (friendWaitingStatusRef && friendWaitingStatusHandler) {
+        friendWaitingStatusRef.off("value", friendWaitingStatusHandler);
+    }
+    friendWaitingStatusRef = null;
+    friendWaitingStatusHandler = null;
+}
+
+function attachFriendWaitingStatusListener(code) {
+    detachFriendWaitingStatusListener();
+
+    const watchedCode = code;
+    friendWaitingStatusRef = database.ref("rooms/" + watchedCode + "/status");
+
+    friendWaitingStatusHandler = function (snapshot) {
+        if (snapshot.val() !== "active") return;
+
+        detachFriendWaitingStatusListener();
+        myWaitingRoomNoOpponent = false;
+        waitingText.textContent = t("friend_connected");
+
+        setTimeout(function () {
+            if (roomCode !== watchedCode || !isOnlineGame) return;
+            showScreen(gameScreen);
+            startOnlineGame();
+        }, 1000);
+    };
+
+    friendWaitingStatusRef.on("value", friendWaitingStatusHandler);
+}
+
+function cancelWaitingFriendRoomAndReturnToTimeControl() {
+    if (!canUseFirebase() || !roomCode || !myTelegramId) return;
+
+    const codeToCancel = roomCode;
+    const uidAtClick = myTelegramId;
+    const roomRef = database.ref("rooms/" + codeToCancel);
+
+    if (btnBackFromWaiting) btnBackFromWaiting.disabled = true;
+
+    roomRef.transaction(function (room) {
+        // Удаляем ТОЛЬКО свою ещё ожидающую комнату.
+        // Если dark уже появился / status уже active, transaction abort:
+        // join победил гонку, комнату трогать нельзя.
+        if (!room ||
+            room.status !== "waiting" ||
+            !room.players ||
+            !room.players.light ||
+            room.players.light.id !== uidAtClick ||
+            (room.players.dark && room.players.dark.id)) {
+            return;
+        }
+
+        return null;
+    }).then(function (result) {
+        if (btnBackFromWaiting) btnBackFromWaiting.disabled = false;
+
+        const snapshotGone = result.snapshot && !result.snapshot.exists();
+        const removedByUs = result.committed && snapshotGone;
+        const alreadyGone = !result.committed && snapshotGone;
+
+        // Если join/другое изменение победило гонку, ничего локально не
+        // откатываем: status-listener сам переведёт нас в игру при active.
+        if (!removedByUs && !alreadyGone) return;
+
+        detachFriendWaitingStatusListener();
+        detachMyPresence();
+
+        // Это собственный users-index; его можно убрать и после удаления room.
+        database.ref("users/" + uidAtClick + "/rooms/" + codeToCancel).remove()
+            .catch(function (error) {
+                console.error("Waiting room metadata cleanup failed:", error);
+            });
+
+        if (roomCode === codeToCancel) {
+            isOnlineGame = false;
+            roomCode = null;
+            myPendingFriendRoomCode = null;
+            myColor = null;
+            currentState = null;
+        }
+
+        showScreen(timeControlScreen);
+    }).catch(function (error) {
+        if (btnBackFromWaiting) btnBackFromWaiting.disabled = false;
+        console.error("Cancel waiting friend room failed:", error);
+    });
+}
+
+if (btnBackFromWaiting) {
+    btnBackFromWaiting.addEventListener("click", cancelWaitingFriendRoomAndReturnToTimeControl);
 }
 
 function createRoomAndShowWaiting() {
@@ -5710,16 +5807,7 @@ function createRoomAndShowWaiting() {
         
         showScreen(waitingScreen);
 
-        database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
-            if (snapshot.val() === "active") {
-                database.ref("rooms/" + roomCode + "/status").off();
-                waitingText.textContent = t("friend_connected");
-                setTimeout(function () {
-                    showScreen(gameScreen);
-                    startOnlineGame();
-                }, 1000);
-            }
-        });
+        attachFriendWaitingStatusListener(roomCode);
     }).catch(function (error) {
         // №24: тот же класс дефекта, что в createOnlineRoom — см. комментарий
         // там. Здесь ДО записи дополнительно вызваны detachRoomListener()/
@@ -5817,7 +5905,8 @@ function leaveSpectatorAndReturnToLobby() {
     isOnlineGame = false;
     isBotGame = false;
     currentState = null;
-    showGroupLobby();
+    showScreen(menuScreen);
+    loadActiveRooms();
 }
 
 if (btnBackSpectator) {
@@ -6119,7 +6208,8 @@ function leaveFinishedOnlineAndReturnToLobby() {
     isOnlineGame = false;
     roomCode = null;
     currentState = null;
-    showGroupLobby();
+    showScreen(menuScreen);
+    loadActiveRooms();
 }
 
 btnCloseGame.addEventListener("click", function () {
@@ -6133,6 +6223,18 @@ btnCloseGame.addEventListener("click", function () {
         return;
     }
 
+    // Если finished-room уже удалил ПЕРВЫЙ закрывший игрок, room-listener
+    // второго клиента успевает сбросить isOnlineGame/roomCode, но end-game
+    // modal ещё остаётся открытой. Это всё ещё завершённая online-партия,
+    // поэтому второй "Закрыть" должен вернуть в главное меню, а НЕ закрывать
+    // Telegram Mini App через общий fallback.
+    if (!isOnlineGame && !isBotGame && currentState && currentState.winner && !roomCode) {
+        closeModal(endGameModal);
+        currentState = null;
+        showScreen(menuScreen);
+        loadActiveRooms();
+        return;
+    }
     // ONLINE finished-room нельзя удалять, пока Worker ещё читает outcome.
     // Это та же гонка, что у быстрого реванша: cleanupFinishedRoom() стирает
     // единственный авторитетный результат партии.
@@ -6842,16 +6944,7 @@ function checkForInviteLink() {
 
                 // Тот же слушатель, что и в createRoomAndShowWaiting() — без него
                 // экран ожидания не переключится сам на игру, когда друг подключится.
-                database.ref("rooms/" + roomCode + "/status").on("value", function (snapshot) {
-                    if (snapshot.val() === "active") {
-                        database.ref("rooms/" + roomCode + "/status").off();
-                        waitingText.textContent = t("friend_connected");
-                        setTimeout(function () {
-                            showScreen(gameScreen);
-                            startOnlineGame();
-                        }, 1000);
-                    }
-                });
+                attachFriendWaitingStatusListener(roomCode);
 
                 return;
             }
