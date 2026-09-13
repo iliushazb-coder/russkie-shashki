@@ -71,6 +71,7 @@ const FILES = [
   ['BB.16 №43 slice 4: capturedDepthOpacity extracted to shared/captured-stack-utils.js (index/clamp coverage)', 'shared-captured-stack-utils.test.js'],
   ['BB.17 №43 slice 5: startup-cover cluster extracted to shared/startup-cover-utils.js (global.Telegram adaptation)', 'shared-startup-cover-utils.test.js'],
   ['BB.18 №23 frontend: start gate — authoritative-действия заблокированы до канонической регистрации', 'rated-start-gate.test.js'],
+  ['BB.19 UI: waiting-screen status layout', 'waiting-screen-layout.test.js'],
 ];
 
 // Строка итога: ТОЛЬКО отдельной строкой целиком, от начала и до конца.
