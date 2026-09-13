@@ -31,5 +31,5 @@ if (match) {
 
 check('script cache-bust remains v209', /<script src="script\.js\?v=209"><\/script>/.test(html));
 
-console.log(`\nWAITING_LAYOUT_RESULT: ${passed}/${passed + failed} passed, ${failed} failed`);
+console.log(`\nИТОГ waiting-screen layout: ${passed}/${passed + failed}`);
 if (failed) process.exitCode = 1;
