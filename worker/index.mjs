@@ -1288,6 +1288,25 @@ async function finalizePointer(env, deps, token, roomCode, matchId, card) {
     // перехода pointer'а, что и сброс ratedReplay выше, поэтому stale или
     // повторный join (pointer уже наш) сюда не заходит и время не дарит.
     updates["rooms/" + roomCode + "/turnStartedAt"] = serverTimestamp();
+    // №23 (review): closing the pre-registration presence-forge gap.
+    // Participant-controlled onlineSince/absentSince written BEFORE
+    // ratedMatchId existed survives untouched otherwise (Rules only
+    // validate on write, not retroactively) -- becoming trustable evidence
+    // for /rated/claim-technical long after being forged. Refreshing both
+    // colors' timestamp to genuinely-fresh server time, atomically WITH the
+    // ratedMatchId publish, closes the window structurally: the moment
+    // ratedMatchId becomes visible, so does the refresh (same commit) --
+    // preserves whichever online/offline boolean was ALREADY live (never
+    // flips it), only replaces the numeric proof of WHEN.
+    const presenceNow = latestRoom.presence || {};
+    for (const color of ["light", "dark"]) {
+      const p = presenceNow[color] || {};
+      if (p.online === true) {
+        updates["rooms/" + roomCode + "/presence/" + color + "/onlineSince"] = serverTimestamp();
+      } else if (p.online === false) {
+        updates["rooms/" + roomCode + "/presence/" + color + "/absentSince"] = serverTimestamp();
+      }
+    }
   }
   try {
     await dbPatchRoot(env, deps, token, updates);

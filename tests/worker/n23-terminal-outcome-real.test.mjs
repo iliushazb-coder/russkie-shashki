@@ -13,6 +13,7 @@ import { commitTerminalOutcome, verifyDisconnectEvidence, verifyTimeoutEvidence 
 
 const require = createRequire(import.meta.url);
 const { createFakeRtdb } = require("../helpers/fake-rtdb.js");
+const { createInitialPieces } = require("../../shared/game-engine.js");
 
 const FIREBASE_DB_URL = "https://fake-db.example.com";
 const MATCH_ID = "elo_ABC123_1700000000000_0";
@@ -158,6 +159,40 @@ test("verifyTimeoutEvidence: not yet elapsed -> false", () => {
   const now = 1_700_000_100_000;
   const room = { turn: "dark", turnStartedAt: now - 10000, timeControlSeconds: 30 };
   assert.equal(verifyTimeoutEvidence(room, "dark", now), false);
+});
+
+test("CORE INVARIANT end-to-end: joinRatedMatch (first registration) refreshes a pre-seeded, deeply-forged onlineSince atomically with ratedMatchId -- the forged value never becomes valid disconnect evidence", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  const NOW = 1_700_000_100_000;
+  const { joinRatedMatch } = await import("../../worker/index.mjs");
+
+  store.data = {
+    rooms: { ABC123: {
+      players: { light: { id: "tg_111", name: "Alice" }, dark: { id: "tg_222", name: "Bob" } },
+      status: "active", createdAt: NOW - 5000, matchNumber: 0,
+      pieces: createInitialPieces(), turn: "light", moveCount: 0,
+      // Forged BEFORE registration, ratedMatchId absent at this point --
+      // allowed under the unrated exemption (already tested separately).
+      presence: {
+        light: { online: true, onlineSince: NOW - 999999999, absentSince: null, lastSeen: NOW - 1000 },
+        dark: { online: false, absentSince: NOW - 999999999, onlineSince: NOW - 2000000000 }
+      }
+    } },
+    stats: { tg_111: { rating: 1200 }, tg_222: { rating: 1180 } }
+  };
+
+  const result = await joinRatedMatch(env, deps, "tg_111", "ABC123");
+  const room = store.data.rooms.ABC123;
+
+  assert.equal(room.ratedMatchId, result.matchId, "registration completed");
+  assert.notEqual(room.presence.light.onlineSince, NOW - 999999999,
+    "the pre-registration forged onlineSince must NOT survive -- it must have been refreshed atomically with ratedMatchId");
+  assert.ok(room.presence.light.onlineSince >= NOW - 100 && room.presence.light.onlineSince <= NOW + 5000,
+    "refreshed value must be genuinely close to real server time, not another arbitrary number");
+  assert.notEqual(room.presence.dark.absentSince, NOW - 999999999,
+    "the SAME closure must apply to the offline side's absentSince -- both colors refreshed, not just the joiner's own");
+  assert.equal(room.presence.light.online, true, "the refresh must NOT flip the online boolean -- only the timestamp proof");
+  assert.equal(room.presence.dark.online, false, "same for dark -- boolean preserved exactly as it already was live");
 });
 
 test("verifyTimeoutEvidence: claimed loser does not match room.turn -> false (prevents claiming against the wrong side)", () => {
