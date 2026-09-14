@@ -90,6 +90,53 @@ const REAL_ROOM_VALIDATE = REAL_RULES.rules.rooms['$room']['.validate'];
 const REAL_PRESENCE_VALIDATE = REAL_RULES.rules.rooms['$room'].presence.light['.validate'];
 const REAL_RT_WRITE = REAL_RULES.rules.ratedTerminal['$matchId']['.write'];
 
+// ---------- PRODUCTION REGRESSION (found via live human-vs-human test after deploy) ----------
+// Root cause: finalizePointer()'s presence-refresh (this session, closing the
+// pre-registration presence-forge gap) writes presence/light|dark/onlineSince
+// as PART of the SAME combined PATCH that publishes ratedMatchId. But the
+// PRE-EXISTING (pre-#23) srv_settlement branch of $room/.write required ALL
+// presence fields to remain byte-identical unchanged for ANY srv_settlement
+// write to $room to be permitted -- with an exemption already present for
+// ratingsAtStart when ratedMatchId genuinely changes, but NOT for presence.
+// This meant the registration PATCH was denied wholesale, ratedMatchId never
+// published, and the client's canMutateRatedGameplay() gate then permanently
+// blocked move/resign/draw for the whole room -- exactly the reported symptom.
+// Fix: move presence-unchanged inside the SAME "ratedMatchId changing"
+// exemption already used for ratingsAtStart (0 character length change --
+// restructured, not added, given $room/.write's tight budget).
+const REAL_ROOM_WRITE = REAL_RULES.rules.rooms['$room']['.write'];
+
+test('PRODUCTION REGRESSION FIX: srv_settlement registration PATCH (ratedMatchId publish + presence onlineSince refresh together) is now ALLOWED', () => {
+  const NOW = 1_789_398_366_564;
+  const MATCH_ID = 'elo_ABC123_' + NOW + '_0';
+  const before = {
+    players: { light: { id: 'tg_111', name: 'Ilyusha' }, dark: { id: 'tg_222', name: 'Tatiana' } },
+    createdAt: NOW, matchNumber: 0, groupId: 'g1', timeControlSeconds: 0,
+    presence: { light: { online: true, lastSeen: NOW }, dark: { online: true, lastSeen: NOW } }
+  };
+  const after = JSON.parse(JSON.stringify(before));
+  after.ratedMatchId = MATCH_ID;
+  after.ratingsAtStart = { light: 1200, dark: 1180 };
+  after.presence.light.onlineSince = NOW;
+  after.presence.dark.onlineSince = NOW;
+  const allowed = evalRule(REAL_ROOM_WRITE, { authUid: 'srv_settlement', rootTree: before, rootTree2: after, now: NOW });
+  assert.equal(allowed, true, 'this exact combined PATCH is what a real registration performs -- must be allowed');
+});
+
+test('PRODUCTION REGRESSION FIX: security preserved -- srv_settlement CANNOT tamper with presence when ratedMatchId is NOT changing (ordinary move)', () => {
+  const NOW = 1_789_398_366_564;
+  const before = {
+    players: { light: { id: 'tg_111', name: 'A' }, dark: { id: 'tg_222', name: 'B' } },
+    createdAt: NOW, matchNumber: 0, groupId: 'g1', timeControlSeconds: 0,
+    ratedMatchId: 'M1', ratingsAtStart: { light: 1200, dark: 1180 },
+    presence: { light: { online: true, onlineSince: NOW - 200000 }, dark: { online: true, onlineSince: NOW - 200000 } }
+  };
+  const after = JSON.parse(JSON.stringify(before));
+  after.presence.light.onlineSince = NOW; // ratedMatchId unchanged, but presence tampered with
+  const allowed = evalRule(REAL_ROOM_WRITE, { authUid: 'srv_settlement', rootTree: before, rootTree2: after, now: NOW });
+  assert.equal(allowed, false);
+});
+
 // ---------- Late protected event after a technical win (found in independent review) ----------
 // Технический исход больше НЕ пишет room.result (унифицирован с protected:
 // только winner/winReason/status) -- старый !hasChild('result') guard в
