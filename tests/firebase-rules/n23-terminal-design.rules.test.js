@@ -355,3 +355,17 @@ test('ratedTerminal schema now requires winnerId/loserId/seq (found missing befo
   assert.equal(allowedFull, true);
   assert.equal(allowedIncomplete, false);
 });
+
+test('HARNESS REGRESSION (found on PR #6 real Firebase Emulator CI): calling .matches() directly on a RuleDataSnapshot (no .val()) must THROW in this harness, exactly like the real emulator rejects it with "No such method/property \'matches\'" -- proves the harness can no longer give a false GREEN for this class of mistake', () => {
+  const brokenPattern = "newData.child('seq').matches(/^[0-9]{6}$/)";
+  assert.throws(() => {
+    evalRule(brokenPattern, { rootTree: null, rootTree2: { seq: '000005' }, now: NOW });
+  }, /is not a function/, 'FakeSnapshot must NOT expose .matches() -- it does not exist on real RuleDataSnapshot');
+});
+
+test('HARNESS REGRESSION: the two REAL, valid .matches() forms both still work -- $wildcard.matches(...) directly, and newData.child(...).val().matches(...) after unwrapping', () => {
+  const wildcardForm = evalRule('$seq.matches(/^[0-9]{6}$/)', { rootTree: null, rootTree2: {}, now: NOW, wildcards: { $seq: '000005' } });
+  const valForm = evalRule("newData.child('seq').val().matches(/^[0-9]{6}$/)", { rootTree: null, rootTree2: { seq: '000005' }, now: NOW });
+  assert.equal(wildcardForm, true);
+  assert.equal(valForm, true);
+});

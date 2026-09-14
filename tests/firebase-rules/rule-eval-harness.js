@@ -3,6 +3,26 @@
 // целиком. Тестирует РЕАЛЬНОЕ ИСПОЛНЕНИЕ конкретных строк-предикатов
 // (buildRoomWrite/.validate и т.д.) против сконструированных data/newData,
 // используя ту же JS-грамматику, в которой написаны сами правила.
+//
+// НАЙДЕНО НА PR #6 CI (официальный Firebase Emulator, backend suite):
+// harness раньше давал FakeSnapshot собственный .matches() -- метод,
+// которого у RuleDataSnapshot в РЕАЛЬНОМ Firebase RTDB Rules нет вовсе.
+// Задокументированные методы snapshot: val/exists/child/parent/hasChild/
+// hasChildren/isString/isNumber/isBoolean/getPriority -- matches() среди
+// них отсутствует. .matches() существует только как метод СТРОКИ (уже
+// подтверждено собственным, годами работающим кодом в этом же файле:
+// "$seq.matches(...)" на wildcard-переменной и "newData.val().matches(...)"
+// после явного .val()). Из-за этого расхождения harness давал ложный
+// GREEN на newData.child('seq').matches(...) -- невалидное выражение,
+// которое реальный emulator корректно отклонил с
+// "No such method/property 'matches'". Теперь FakeSnapshot НЕ имеет
+// .matches(), а String.prototype.matches полифиллится ниже -- та же
+// граница возможностей, что у настоящих Firebase Rules.
+
+if (typeof String.prototype.matches !== "function") {
+  // eslint-disable-next-line no-extend-native
+  String.prototype.matches = function (regex) { return regex.test(this); };
+}
 
 class FakeSnapshot {
   constructor(root, path) {
@@ -37,10 +57,7 @@ class FakeSnapshot {
   isString() { return typeof this._resolve() === 'string'; }
   isNumber() { return typeof this._resolve() === 'number'; }
   isBoolean() { return typeof this._resolve() === 'boolean'; }
-  matches(regex) {
-    const v = this._resolve();
-    return typeof v === 'string' && regex.test(v);
-  }
+  // НЕТ .matches() здесь намеренно -- см. комментарий вверху файла.
   parent() {
     if (this._path.length === 0) return this;
     return new FakeSnapshot(this._root, this._path.slice(0, -1));

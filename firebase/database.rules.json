@@ -412,7 +412,7 @@
     "ratedTerminal": {
       "$matchId": {
         ".write": "auth != null && auth.uid === 'srv_settlement' && !data.exists() && newData.exists()",
-        ".validate": "newData.hasChildren(['matchId','roomCode','source','kind','requestId','winnerId','loserId','seq','createdAt']) && newData.child('matchId').isString() && newData.child('roomCode').isString() && newData.child('source').isString() && newData.child('kind').isString() && newData.child('requestId').isString() && newData.child('winnerId').isString() && newData.child('loserId').isString() && newData.child('seq').matches(/^[0-9]{6}$/) && newData.child('createdAt').isNumber()"
+        ".validate": "newData.hasChildren(['matchId','roomCode','source','kind','requestId','winnerId','loserId','seq','createdAt']) && newData.child('matchId').isString() && newData.child('roomCode').isString() && newData.child('source').isString() && newData.child('kind').isString() && newData.child('requestId').isString() && newData.child('winnerId').isString() && newData.child('loserId').isString() && newData.child('seq').val().matches(/^[0-9]{6}$/) && newData.child('createdAt').isNumber()"
       }
     }
   }
