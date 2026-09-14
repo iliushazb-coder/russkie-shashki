@@ -300,10 +300,32 @@ test("participant по-прежнему обновляет turnStartedAt на з
     ratedMatchId: MATCH_ID,
     ratingsAtStart: { light: 1200, dark: 1180 }
   }));
+  // №23 review: Guard B изначально замораживал turnStartedAt для
+  // participant полностью (unchanged-only) -- ломало именно этот, ранее
+  // задокументированный (см. шапку файла, п.4) легитимный сценарий.
+  // Исправлено на unchanged-ИЛИ-СВЕЖЕЕ (тот же паттерн, что уже у
+  // presence): обычное завершение хода всегда ставит turnStartedAt в
+  // "сейчас", никогда не отматывает в прошлое -- поэтому фикстура здесь
+  // обязана использовать реальное текущее время, не фиксированный
+  // символьный CREATED_AT+N (тот больше не проходит новый now-window,
+  // и корректно не должен -- это и есть искомая атака "отмотать в
+  // прошлое").
   await assertSucceeds(update(ref(databaseFor("alice"), "rooms/ABC123"), {
     turn: "dark",
     moveCount: 1,
-    turnStartedAt: CREATED_AT + 10_000
+    turnStartedAt: Date.now()
+  }));
+});
+
+test("participant NOT МОЖЕТ отмотать turnStartedAt в прошлое даже на завершённом ходу -- ровно та атака, ради которой существует этот guard", async () => {
+  await seed("rooms/ABC123", pristineRoom({
+    ratedMatchId: MATCH_ID,
+    ratingsAtStart: { light: 1200, dark: 1180 }
+  }));
+  await assertFails(update(ref(databaseFor("alice"), "rooms/ABC123"), {
+    turn: "dark",
+    moveCount: 1,
+    turnStartedAt: Date.now() - 999999999
   }));
 });
 

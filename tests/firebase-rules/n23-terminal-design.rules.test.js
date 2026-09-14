@@ -246,14 +246,21 @@ test('GREEN: true unrated (no matchIndex at all) -- ALLOW', () => {
   assert.equal(allowed, true);
 });
 
-// ---------- Guard B: turnStartedAt pin ----------
-const GUARD_B = "auth != null && auth.uid === 'srv_settlement' || !data.exists() || !data.child('ratedMatchId').exists() || (newData.child('turnStartedAt').exists() === data.child('turnStartedAt').exists() && newData.child('turnStartedAt').val() === data.child('turnStartedAt').val())";
+// ---------- Guard B: turnStartedAt pin (unchanged OR fresh -- found on review: bare "unchanged" broke a pre-existing, intentionally-legitimate "participant completes an ordinary move" case) ----------
+const GUARD_B = "auth != null && auth.uid === 'srv_settlement' || !data.exists() || !data.child('ratedMatchId').exists() || (newData.child('turnStartedAt').exists() === data.child('turnStartedAt').exists() && newData.child('turnStartedAt').val() === data.child('turnStartedAt').val()) || (newData.child('turnStartedAt').isNumber() && newData.child('turnStartedAt').val() <= now && newData.child('turnStartedAt').val() > now - 10000)";
 
-test('RED 5: rated active room, participant sets arbitrary turnStartedAt -- Guard B must DENY', () => {
+test('RED 5: rated active room, participant backdates turnStartedAt far outside the fresh window -- Guard B must DENY (the actual attack this guard exists for)', () => {
   const before = baseRoom({ turnStartedAt: 1_700_000_050_000 });
   const after = Object.assign({}, before, { turnStartedAt: 1_699_999_000_000 });
   const allowed = evalRule(GUARD_B, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW });
   assert.equal(allowed, false);
+});
+
+test('GREEN: rated active room, participant sets a genuinely FRESH turnStartedAt (ordinary move completion) -- Guard B must ALLOW (found missing before commit, fixed)', () => {
+  const before = baseRoom({ turnStartedAt: 1_700_000_050_000 });
+  const after = Object.assign({}, before, { turnStartedAt: NOW });
+  const allowed = evalRule(GUARD_B, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW });
+  assert.equal(allowed, true);
 });
 
 test('GREEN: rated active room, srv_settlement sets a fresh turnStartedAt -- Guard B must ALLOW', () => {
