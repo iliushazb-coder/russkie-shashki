@@ -936,8 +936,78 @@ export function claimsMatch(a, b) {
     a.winnerId === b.winnerId && a.loserId === b.loserId;
 }
 
+// ===== TEMP DIAGNOSTIC (claim-technical 409 root cause) — START =====
+// Удалить целиком после установления root cause: этот блок + все
+// вызовы withPhase()/logClaimTechnicalDiagnostic() ниже + условный вызов
+// в catch handleSettlement(). Ничего в бизнес-логике/ответах не меняет.
+const CLAIM_TECHNICAL_KNOWN_PHASES = new Set([
+  "server_identity", "read_match_card", "verify_participant", "validate_claim",
+  "read_live_room", "verify_evidence", "read_events", "read_terminal",
+  "read_terminal_event", "commit_terminal", "terminal_recheck"
+]);
+const CLAIM_TECHNICAL_KNOWN_REASONS = new Set([
+  "not_a_participant", "invalid_request_id", "invalid_technical_reason",
+  "stale_generation", "technical_evidence_insufficient",
+  "terminal_conflict", "fail_closed_incomplete_terminal",
+  "db_read_failed", "db_write_failed", "event_log_corrupt",
+  "server_identity_failed", "server_signer_missing",
+  "match_not_registered", "match_id_invalid", "room_code_invalid"
+]);
+// Отслеживает уже залогированные error-объекты по ссылке, НЕ мутируя их
+// (WeakSet.add()/has() не трогает свойства самого объекта -- безопасно и
+// для frozen Error). WeakSet принимает только объекты, не примитивы --
+// поэтому typeof-проверка ниже обязательна, а не просто перестраховка.
+const claimTechnicalLoggedErrors = new WeakSet();
+// Безопасное чтение .message/.status: произвольный/враждебный error может
+// иметь throwing getter или быть Proxy -- само чтение свойства обязано
+// никогда не бросать наружу диагностического хелпера.
+function safeReadErrorMessage(error) {
+  try {
+    return (error && typeof error.message === "string") ? error.message : null;
+  } catch (_) {
+    return null;
+  }
+}
+function safeReadErrorStatus(error) {
+  try {
+    return (error && typeof error.status === "number") ? error.status : null;
+  } catch (_) {
+    return null;
+  }
+}
+function logClaimTechnicalDiagnostic(phase, error) {
+  try {
+    if (error && typeof error === "object") {
+      if (claimTechnicalLoggedErrors.has(error)) return;
+      claimTechnicalLoggedErrors.add(error);
+    }
+  } catch (_) {
+    // Учёт "уже залогировано" -- не более чем оптимизация; сбой здесь
+    // не должен помешать самому логированию ниже.
+  }
+  const safePhase = CLAIM_TECHNICAL_KNOWN_PHASES.has(phase) ? phase : "unexpected_internal";
+  const msg = safeReadErrorMessage(error);
+  const safeReason = (msg !== null && CLAIM_TECHNICAL_KNOWN_REASONS.has(msg)) ? msg : "unexpected_internal";
+  const status = safeReadErrorStatus(error);
+  const httpStatus = (safePhase === "commit_terminal" && safeReason === "db_write_failed" && status !== null) ? status : null;
+  try {
+    console.error("claim_technical_diagnostic", { phase: safePhase, reason: safeReason, httpStatus });
+  } catch (_) {
+    // Сам вызов логирования никогда не должен пробрасываться в бизнес-логику.
+  }
+}
+async function withPhase(phase, promise) {
+  try {
+    return await promise;
+  } catch (error) {
+    try { logClaimTechnicalDiagnostic(phase, error); } catch (_) { /* диагностика не маскирует реальную ошибку */ }
+    throw error; // тот же самый объект, ни одного изменённого свойства
+  }
+}
+// ===== TEMP DIAGNOSTIC — END (helper) =====
+
 export async function commitTerminalOutcome(env, deps, token, matchId, candidate) {
-  const existing = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
+  const existing = await withPhase("read_terminal", dbGet(env, deps, token, "ratedTerminal/" + matchId)); // TEMP DIAGNOSTIC
   if (existing) return classifyExistingTerminalClaim(env, deps, token, matchId, existing, candidate);
 
   const patch = Object.assign(
@@ -947,6 +1017,9 @@ export async function commitTerminalOutcome(env, deps, token, matchId, candidate
   );
 
   try {
+    // TEMP DIAGNOSTIC: dbPatchRoot НЕ обёрнут withPhase здесь намеренно --
+    // его сбой не окончателен (см. recovery ниже, может оказаться
+    // idempotent success). Логируем только ПОДТВЕРЖДЁННЫЙ финальный исход.
     await dbPatchRoot(env, deps, token, patch);
     return { ok: true, claim: candidate.claim };
   } catch (error) {
@@ -954,8 +1027,17 @@ export async function commitTerminalOutcome(env, deps, token, matchId, candidate
     // ratedTerminal) неотличим по HTTP-статусу от прочих сетевых сбоев на
     // этом уровне без доп. чтения, поэтому в обоих случаях перечитываем и
     // классифицируем по факту, а не гадаем по status.
-    const after = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
-    if (!after) throw error; // не наш конфликт -- настоящая retryable ошибка, пробрасываем как есть
+    let after;
+    try {
+      after = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
+    } catch (recheckError) {
+      logClaimTechnicalDiagnostic("terminal_recheck", recheckError); // TEMP DIAGNOSTIC
+      throw recheckError;
+    }
+    if (!after) {
+      logClaimTechnicalDiagnostic("commit_terminal", error); // TEMP DIAGNOSTIC -- окончательный сбой, recovery не нашёл ничего
+      throw error; // не наш конфликт -- настоящая retryable ошибка, пробрасываем как есть
+    }
     return classifyExistingTerminalClaim(env, deps, token, matchId, after, candidate);
   }
 }
@@ -964,7 +1046,7 @@ async function classifyExistingTerminalClaim(env, deps, token, matchId, existing
   if (!claimsMatch(existingClaim, candidate.claim)) {
     return { ok: false, reason: "terminal_conflict" };
   }
-  const event = await dbGet(env, deps, token, "ratedEvents/" + matchId + "/events/" + existingClaim.seq);
+  const event = await withPhase("read_terminal_event", dbGet(env, deps, token, "ratedEvents/" + matchId + "/events/" + existingClaim.seq)); // TEMP DIAGNOSTIC
   if (event) return { ok: true, claim: existingClaim };
   // claim существует, событие -- нет: при корректном коде оба всегда
   // рождаются одним PATCH, поэтому это структурная аномалия (баг/атака в
@@ -976,15 +1058,31 @@ async function classifyExistingTerminalClaim(env, deps, token, matchId, existing
 export async function claimTechnicalOutcome(env, deps, token, matchId, card, callerUid, claimBody) {
   const by = cardByColor(card);
   const callerColor = card.participants[callerUid] && card.participants[callerUid].color;
-  if (callerColor !== "light" && callerColor !== "dark") throw new Error("not_a_participant");
+  if (callerColor !== "light" && callerColor !== "dark") {
+    const err = new Error("not_a_participant"); // TEMP DIAGNOSTIC: один объект на log+throw
+    logClaimTechnicalDiagnostic("verify_participant", err);
+    throw err;
+  }
   const opponentColor = callerColor === "light" ? "dark" : "light";
   const requestId = claimBody && claimBody.requestId;
-  if (!isValidRequestId(requestId)) throw new Error("invalid_request_id");
+  if (!isValidRequestId(requestId)) {
+    const err = new Error("invalid_request_id"); // TEMP DIAGNOSTIC
+    logClaimTechnicalDiagnostic("validate_claim", err);
+    throw err;
+  }
   const reason = claimBody && claimBody.reason;
-  if (reason !== "disconnect" && reason !== "timeout") throw new Error("invalid_technical_reason");
+  if (reason !== "disconnect" && reason !== "timeout") {
+    const err = new Error("invalid_technical_reason"); // TEMP DIAGNOSTIC
+    logClaimTechnicalDiagnostic("validate_claim", err);
+    throw err;
+  }
 
-  const liveRoom = await dbGet(env, deps, token, "rooms/" + card.roomCode);
-  if (!liveRoom || liveRoom.ratedMatchId !== matchId) throw new Error("stale_generation");
+  const liveRoom = await withPhase("read_live_room", dbGet(env, deps, token, "rooms/" + card.roomCode)); // TEMP DIAGNOSTIC
+  if (!liveRoom || liveRoom.ratedMatchId !== matchId) {
+    const err = new Error("stale_generation"); // TEMP DIAGNOSTIC
+    logClaimTechnicalDiagnostic("read_live_room", err);
+    throw err;
+  }
 
   const nowMs = deps.now();
   // Caller всегда заявляет ПРОТИВНИКА проигравшим -- собственную сторону
@@ -993,9 +1091,13 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
   const evidenceOk = reason === "disconnect"
     ? verifyDisconnectEvidence(liveRoom, opponentColor, callerColor, nowMs)
     : verifyTimeoutEvidence(liveRoom, opponentColor, nowMs);
-  if (!evidenceOk) throw new Error("technical_evidence_insufficient");
+  if (!evidenceOk) {
+    const err = new Error("technical_evidence_insufficient"); // TEMP DIAGNOSTIC
+    logClaimTechnicalDiagnostic("verify_evidence", err);
+    throw err;
+  }
 
-  const list = await fetchAllEvents(env, deps, token, matchId);
+  const list = await withPhase("read_events", fetchAllEvents(env, deps, token, matchId)); // TEMP DIAGNOSTIC
   const nextSeqStr = formatSeq(list.length);
 
   const winnerId = by[callerColor];
@@ -1021,7 +1123,11 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
   };
 
   const result = await commitTerminalOutcome(env, deps, token, matchId, candidate);
-  if (!result.ok) throw new Error(result.reason || "terminal_conflict");
+  if (!result.ok) {
+    const err = new Error(result.reason || "terminal_conflict"); // TEMP DIAGNOSTIC
+    logClaimTechnicalDiagnostic("commit_terminal", err);
+    throw err;
+  }
   return { winnerId, loserId, winner: callerColor, reason };
 }
 
@@ -2175,9 +2281,10 @@ async function handleSettlement(request, env, url) {
       if (!validFirebasePathAtom(matchId, 149)) {
         return jsonSettlementResponse(request, env, 400, { ok: false, error: "match_id_invalid" });
       }
-      const token = await getServerIdToken(env, settlementDeps());
-      const card = await dbGet(env, settlementDeps(), token, "matches/" + matchId);
+      const token = await withPhase("server_identity", getServerIdToken(env, settlementDeps())); // TEMP DIAGNOSTIC
+      const card = await withPhase("read_match_card", dbGet(env, settlementDeps(), token, "matches/" + matchId)); // TEMP DIAGNOSTIC
       if (!card || card.roomCode !== roomCode) {
+        logClaimTechnicalDiagnostic("read_match_card", new Error("match_not_registered")); // TEMP DIAGNOSTIC
         return jsonSettlementResponse(request, env, 409, { ok: false, error: "match_not_registered" });
       }
       const result = await claimTechnicalOutcome(env, settlementDeps(), token, matchId, card, callerUid, {
@@ -2188,6 +2295,7 @@ async function handleSettlement(request, env, url) {
     }
     return jsonSettlementResponse(request, env, 404, { ok: false, error: "not_found" });
   } catch (error) {
+    if (url.pathname === "/rated/claim-technical") logClaimTechnicalDiagnostic("unexpected_internal", error); // TEMP DIAGNOSTIC
     const publicCode = settlementPublicError(error);
     const forbidden = publicCode === "not_a_player" || publicCode === "not_a_participant";
     return jsonSettlementResponse(request, env, forbidden ? 403 : 409, { ok: false, error: publicCode });
