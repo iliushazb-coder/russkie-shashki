@@ -1,14 +1,22 @@
 // №23 production investigation: TEMP diagnostic logging added to
 // /rated/claim-technical to pin down the exact cause of a real production
-// 409 (root cause not yet fixed by this commit -- this file only proves
-// the diagnostic logging itself is correct, safe, and does not alter
-// business logic/HTTP semantics). Driven through the REAL exported Worker
-// functions against an in-memory fake RTDB (tests/helpers/fake-rtdb.js) --
-// no real network, no emulator, Rules are NOT applied here.
+// 409 (root cause not yet fixed by this file -- this is observability
+// only, to be removed once the real cause is found).
 //
-// This whole file, and the TEMP DIAGNOSTIC block it tests in
-// worker/index.mjs, should be deleted together once the real production
-// root cause has been found and fixed.
+// Design under test: REQUEST-SCOPED ctx = { logged: false }, created fresh
+// inside handleSettlement() for every HTTP request, passed through the
+// whole claim-technical call chain (handleSettlement -> claimTechnicalOutcome
+// -> commitTerminalOutcome -> classifyExistingTerminalClaim). No
+// module-global diagnostic state of any kind -- a prior WeakSet-based
+// design was replaced specifically because it could not deduplicate
+// primitive/null thrown values, causing a real double-log through the
+// full HTTP path (inner withPhase + outer handleSettlement catch).
+//
+// Driven through the REAL exported Worker functions against an in-memory
+// fake RTDB (tests/helpers/fake-rtdb.js) -- no real network, no emulator,
+// Rules are NOT applied here. Several tests go through the REAL
+// worker.default.fetch(request, env) HTTP entrypoint specifically, because
+// the cross-catch dedup invariant can only be proven at that level.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -37,31 +45,20 @@ const { privateKey } = crypto.generateKeyPairSync("rsa", {
 
 const FIREBASE_DB_URL = "https://fake-db.example.com";
 
-// Перехватывает console.error за время выполнения fn, возвращает и
-// результат/ошибку, и список перехваченных вызовов -- не полагается на
-// побочные эффекты снаружи текущего теста.
-async function withCapturedDiagnostics(fn) {
+function withCapturedDiagnostics(fn) {
   const original = console.error;
   const captured = [];
   console.error = function () { captured.push(Array.prototype.slice.call(arguments)); };
-  try {
-    const result = await fn();
-    return { result, error: null, captured };
-  } catch (error) {
-    return { result: null, error, captured };
-  } finally {
-    console.error = original;
-  }
+  return Promise.resolve().then(fn).then(
+    function (result) { console.error = original; return { result: result, error: null, captured: captured }; },
+    function (error) { console.error = original; return { result: null, error: error, captured: captured }; }
+  );
 }
-
 function diagnosticEventsOnly(captured) {
   return captured.filter(function (args) { return args[0] === "claim_technical_diagnostic"; });
 }
 
-// Строит реальную рейтинговую активную комнату через настоящую регистрацию
-// (joinRatedMatch), затем сдвигает время на 3 минуты и переводит dark в
-// authoritative offline -- ровно тот сценарий, что воспроизводит реальный
-// production-repro (3-минутный disconnect, второй игрок online).
+// ---------- direct-call (claimTechnicalOutcome) scenario builder ----------
 async function setupGenuineDisconnectScenario() {
   resetServerTokenCache();
   const NOW = 1_700_000_000_000;
@@ -113,145 +110,15 @@ async function setupGenuineDisconnectScenario() {
   const card = await dbGet(env, deps, token, "matches/" + matchId);
 
   return {
-    env, deps, rtdb, token, matchId, card,
-    setNow: function (v) { currentNow = v; },
-    getNow: function () { return currentNow; }
+    env: env, deps: deps, rtdb: rtdb, token: token, matchId: matchId, card: card,
+    setNow: function (v) { currentNow = v; }, getNow: function () { return currentNow; }
   };
 }
 
-// ---------- 1. PATCH fail + recovered idempotent success -> 200 и 0 diagnostic logs ----------
-test("PATCH fail, recheck находит уже успешно созданный terminal claim -> HTTP-успех, 0 diagnostic events", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  let patchAttempted = false;
-  const deps = Object.assign({}, s.deps, {
-    fetch: function (url, options) {
-      const u = typeof url === "string" ? url : url.url;
-      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
-      if (options && options.method === "PATCH" && !patchAttempted) {
-        patchAttempted = true;
-        // PATCH реально применяется на сервере (fake-rtdb фактически
-        // коммитит), но КЛИЕНТ получает сетевую ошибку в самом ответе --
-        // классический "ложный timeout", ради которого существует recovery.
-        return s.rtdb.fetch(url, options).then(function () {
-          return { ok: false, status: 504, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } };
-        });
-      }
-      return s.rtdb.fetch(url, options);
-    }
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-recovered", reason: "disconnect" });
-  });
-  assert.equal(outcome.error, null, "ожидался успех (idempotent recovery), а не ошибка");
-  assert.equal(outcome.result.winner, "light");
-  assert.deepEqual(diagnosticEventsOnly(outcome.captured), [], "успешный идемпотентный recovery не должен создавать diagnostic events");
-});
-
-// ---------- 2. PATCH fail + empty recheck -> ровно 1 commit_terminal/db_write_failed ----------
-test("PATCH fail, recheck не находит ничего -> ровно 1 event phase=commit_terminal reason=db_write_failed с сохранённым status", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  const deps = Object.assign({}, s.deps, {
-    fetch: function (url, options) {
-      const u = typeof url === "string" ? url : url.url;
-      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
-      if (options && options.method === "PATCH") {
-        return Promise.resolve({ ok: false, status: 403, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
-      }
-      return s.rtdb.fetch(url, options);
-    }
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-empty-recheck", reason: "disconnect" });
-  });
-  assert.ok(outcome.error, "ожидалась ошибка");
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1, "ожидался ровно 1 diagnostic event");
-  assert.deepEqual(events[0][1], { phase: "commit_terminal", reason: "db_write_failed", httpStatus: 403 });
-});
-
-// ---------- 3. PATCH fail + recheck failure -> ровно 1 terminal_recheck/db_read_failed ----------
-test("PATCH fail, сам recheck тоже падает -> ровно 1 event phase=terminal_recheck reason=db_read_failed", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  let patchHappened = false;
-  const deps = Object.assign({}, s.deps, {
-    fetch: function (url, options) {
-      const u = typeof url === "string" ? url : url.url;
-      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
-      if (options && options.method === "PATCH") {
-        patchHappened = true;
-        return Promise.resolve({ ok: false, status: 500, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
-      }
-      if (patchHappened && u.indexOf("ratedTerminal") !== -1 && (!options || !options.method || options.method === "GET")) {
-        return Promise.resolve({ ok: false, status: 500, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
-      }
-      return s.rtdb.fetch(url, options);
-    }
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-recheck-fails", reason: "disconnect" });
-  });
-  assert.ok(outcome.error);
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0][1], { phase: "terminal_recheck", reason: "db_read_failed", httpStatus: null });
-});
-
-// ---------- 4. Conflicting terminal -> ровно 1 terminal_conflict ----------
-test("уже существующий КОНФЛИКТУЮЩИЙ terminal claim (другой requestId/исход) -> ровно 1 event phase=commit_terminal reason=terminal_conflict", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  await s.rtdb.fetch(FIREBASE_DB_URL + "/ratedTerminal/" + encodeURIComponent(s.matchId) + ".json", {
-    method: "PUT",
-    body: JSON.stringify({
-      matchId: s.matchId, roomCode: "ABC123", source: "technical", kind: "timeout",
-      requestId: "OTHER_REQ", winnerId: "tg_999", loserId: "tg_888", seq: "000000", createdAt: s.getNow()
-    })
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, s.deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-conflict", reason: "disconnect" });
-  });
-  assert.ok(outcome.error);
-  assert.equal(outcome.error.message, "terminal_conflict");
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0][1], { phase: "commit_terminal", reason: "terminal_conflict", httpStatus: null });
-});
-
-// ---------- 5. Direct success -> 0 logs ----------
-test("обычный прямой успешный claim (без единого сбоя) -> 0 diagnostic events", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, s.deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-happy", reason: "disconnect" });
-  });
-  assert.equal(outcome.error, null);
-  assert.equal(outcome.result.winner, "light");
-  assert.deepEqual(diagnosticEventsOnly(outcome.captured), []);
-});
-
-// ---------- 6. Explicit classified throw -> ровно 1 log ----------
-test("explicit throw (technical_evidence_insufficient -- оба игрока online) -> ровно 1 event phase=verify_evidence", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  // Возвращаем dark обратно в online -- доказательств недостаточно.
-  s.rtdb.store.data.rooms.ABC123.presence.dark = { online: true, onlineSince: s.getNow(), lastSeen: s.getNow() };
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, s.deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-insufficient", reason: "disconnect" });
-  });
-  assert.ok(outcome.error);
-  assert.equal(outcome.error.message, "technical_evidence_insufficient");
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0][1], { phase: "verify_evidence", reason: "technical_evidence_insufficient", httpStatus: null });
-});
-
-// ---------- 7. match_not_registered early-return -> диагностируется отдельно ----------
-// В отличие от остальных тестов этого файла (прямой вызов
-// claimTechnicalOutcome), match_not_registered формируется РАНЬШЕ, в самом
-// route-обработчике handleSettlement -- поэтому проверяем через ПОЛНЫЙ
-// HTTP-стек (worker.default.fetch), тем же паттерном, что уже установлен
-// в n23-claim-technical-http.test.mjs. Заодно доказывает требование
-// "клиентские HTTP status/body не меняются" именно для этой ветки.
-function cardWithParticipantsHttp(matchId) {
+// ---------- full HTTP-stack (worker.default.fetch) scenario builder ----------
+function cardWithParticipantsHttp(roomCode) {
   return {
-    roomCode: "ABC123", createdAt: 1_700_000_000_000, matchNumber: 0, replayVersion: 1,
+    roomCode: roomCode, createdAt: 1_700_000_000_000, matchNumber: 0, replayVersion: 1,
     participants: {
       tg_111: { color: "light", ratingAtJoin: 1200, name: "Alice" },
       tg_222: { color: "dark", ratingAtJoin: 1180, name: "Bob" }
@@ -286,35 +153,397 @@ const httpEnv = {
   FIREBASE_WEB_API_KEY: "fake-web-key"
 };
 
-test("HTTP: match_not_registered (early return, не throw) -> ровно 1 diagnostic event phase=read_match_card, HTTP-ответ клиенту не изменён (409 + тот же error code)", async () => {
-  const MATCH_ID_HTTP = "elo_ABC123_1700000000000_0";
-  const rtdb = createFakeRtdb("https://fake-db.example.com", () => 1_700_000_100_000);
-  rtdb.store.data = {
-    rooms: { ABC123: { ratedMatchId: MATCH_ID_HTTP, status: "active" } },
-    // card с ДРУГИМ roomCode -- воспроизводит найденную дыру раннего return.
-    matches: { [MATCH_ID_HTTP]: Object.assign(cardWithParticipantsHttp(MATCH_ID_HTTP), { roomCode: "SOME_OTHER_ROOM" }) }
-  };
-  const restore = setupFakeGlobalFetchHttp(rtdb, "tg_111");
+async function runHttpClaim(rtdbSeed, callerUid, requestBody, brokenFetchOverride) {
+  const rtdb = createFakeRtdb(FIREBASE_DB_URL, () => 1_700_000_100_000);
+  rtdb.store.data = rtdbSeed;
+  const restore = setupFakeGlobalFetchHttp(rtdb, callerUid);
+  if (brokenFetchOverride) {
+    const inner = global.fetch;
+    global.fetch = async (url, options) => brokenFetchOverride(url, options, inner);
+  }
   const original = console.error;
   const captured = [];
-  console.error = function () { captured.push(Array.prototype.slice.call(arguments)); };
+  console.error = (...args) => { captured.push(args); };
   try {
-    const request = makeHttpRequest({ roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-mnr-1", reason: "disconnect" }, "fake-caller-token-long-enough-1234567890");
+    const request = makeHttpRequest(requestBody, "fake-caller-token-long-enough-1234567890");
     const response = await worker.default.fetch(request, httpEnv);
     const data = await response.json();
-    assert.equal(response.status, 409, "HTTP status должен остаться 409, как и до диагностики");
-    assert.deepEqual(data, { ok: false, error: "match_not_registered" }, "тело ответа клиенту должно остаться прежним, byte-for-byte");
-    const events = diagnosticEventsOnly(captured);
-    assert.equal(events.length, 1, "ожидался ровно 1 diagnostic event для этой ранее непокрытой ветки");
-    assert.deepEqual(events[0][1], { phase: "read_match_card", reason: "match_not_registered", httpStatus: null });
+    return { response, data, captured: diagnosticEventsOnly(captured) };
   } finally {
     console.error = original;
     restore();
   }
+}
+
+// =====================================================================
+// J. Happy path -> 0 events (direct call)
+// =====================================================================
+test("J. обычный прямой успешный claim (без единого сбоя) -> 0 diagnostic events", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, s.deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-happy", reason: "disconnect" });
+  });
+  assert.equal(outcome.error, null);
+  assert.equal(outcome.result.winner, "light");
+  assert.deepEqual(diagnosticEventsOnly(outcome.captured), []);
 });
 
-// ---------- 8. Frozen Error ----------
-test("frozen Error, брошенный внутри dbGet -- тот же объект долетает НЕмутированным, ровно 1 event unexpected_internal", async () => {
+// =====================================================================
+// K. Recovered idempotent PATCH failure -> success + 0 events
+// =====================================================================
+test("K. PATCH fail, recheck находит уже успешно созданный terminal claim -> HTTP-успех, 0 diagnostic events", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  let patchAttempted = false;
+  const deps = Object.assign({}, s.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+      if (options && options.method === "PATCH" && !patchAttempted) {
+        patchAttempted = true;
+        return s.rtdb.fetch(url, options).then(function () {
+          return { ok: false, status: 504, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } };
+        });
+      }
+      return s.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-recovered", reason: "disconnect" }, ctx);
+  });
+  assert.equal(outcome.error, null, "ожидался успех (idempotent recovery)");
+  assert.equal(outcome.result.winner, "light");
+  assert.deepEqual(diagnosticEventsOnly(outcome.captured), []);
+});
+
+// =====================================================================
+// L. Empty recheck -> ровно 1 commit_terminal/db_write_failed (status сохранён)
+// =====================================================================
+test("L. PATCH fail, recheck не находит ничего -> ровно 1 event phase=commit_terminal reason=db_write_failed с сохранённым валидным status", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  const deps = Object.assign({}, s.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+      if (options && options.method === "PATCH") {
+        return Promise.resolve({ ok: false, status: 403, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
+      }
+      return s.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-empty-recheck", reason: "disconnect" }, ctx);
+  });
+  assert.ok(outcome.error);
+  const events = diagnosticEventsOnly(outcome.captured);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0][1], { phase: "commit_terminal", reason: "db_write_failed", httpStatus: 403 });
+});
+
+// F (валидация статуса): невалидный (не-integer / вне диапазона) status -> httpStatus=null, валидный -> проходит.
+test("F. commit_terminal/db_write_failed: валидный integer 100..599 status проходит в httpStatus; невалидный -> httpStatus=null", async () => {
+  const badStatuses = [
+    { value: 0, label: "zero" },
+    { value: -1, label: "negative" },
+    { value: 700, label: "toohigh" },
+    { value: 99, label: "toolow" },
+    { value: NaN, label: "nan" },
+    { value: 200.5, label: "fractional" }
+  ];
+  for (const { value: badStatus, label } of badStatuses) {
+    const s = await setupGenuineDisconnectScenario();
+    const deps = Object.assign({}, s.deps, {
+      fetch: function (url, options) {
+        const u = typeof url === "string" ? url : url.url;
+        if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+        if (options && options.method === "PATCH") {
+          return Promise.resolve({ ok: false, status: badStatus, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
+        }
+        return s.rtdb.fetch(url, options);
+      }
+    });
+    const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+      return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-badstatus-" + label, reason: "disconnect" }, ctx);
+    });
+    const events = diagnosticEventsOnly(outcome.captured);
+    assert.equal(events.length, 1);
+    assert.equal(events[0][1].phase, "commit_terminal");
+    assert.equal(events[0][1].reason, "db_write_failed");
+    assert.equal(events[0][1].httpStatus, null, "невалидный status (" + badStatus + ") должен дать httpStatus=null, не сырое значение");
+  }
+  const s2 = await setupGenuineDisconnectScenario();
+  const deps2 = Object.assign({}, s2.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s2.deps.fetch(url, options);
+      if (options && options.method === "PATCH") {
+        return Promise.resolve({ ok: false, status: 503, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
+      }
+      return s2.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  const outcome2 = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s2.env, deps2, s2.token, s2.matchId, s2.card, "tg_111", { requestId: "req-goodstatus", reason: "disconnect" }, ctx);
+  });
+  const events2 = diagnosticEventsOnly(outcome2.captured);
+  assert.equal(events2[0][1].httpStatus, 503);
+});
+
+// =====================================================================
+// M. terminal_recheck failure -> ровно 1 terminal_recheck/db_read_failed
+// =====================================================================
+test("M. PATCH fail, сам recheck тоже падает -> ровно 1 event phase=terminal_recheck reason=db_read_failed", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  let patchHappened = false;
+  const deps = Object.assign({}, s.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+      if (options && options.method === "PATCH") {
+        patchHappened = true;
+        return Promise.resolve({ ok: false, status: 500, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
+      }
+      if (patchHappened && u.indexOf("ratedTerminal") !== -1 && (!options || !options.method || options.method === "GET")) {
+        return Promise.resolve({ ok: false, status: 500, headers: { get: function () { return null; } }, json: function () { return Promise.resolve({}); } });
+      }
+      return s.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-recheck-fails", reason: "disconnect" }, ctx);
+  });
+  assert.ok(outcome.error);
+  const events = diagnosticEventsOnly(outcome.captured);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0][1], { phase: "terminal_recheck", reason: "db_read_failed", httpStatus: null });
+});
+
+// =====================================================================
+// N. Conflicting terminal -> ровно 1 terminal_conflict
+// =====================================================================
+test("N. уже существующий КОНФЛИКТУЮЩИЙ terminal claim -> ровно 1 event phase=commit_terminal reason=terminal_conflict", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  await s.rtdb.fetch(FIREBASE_DB_URL + "/ratedTerminal/" + encodeURIComponent(s.matchId) + ".json", {
+    method: "PUT",
+    body: JSON.stringify({
+      matchId: s.matchId, roomCode: "ABC123", source: "technical", kind: "timeout",
+      requestId: "OTHER_REQ", winnerId: "tg_999", loserId: "tg_888", seq: "000000", createdAt: s.getNow()
+    })
+  });
+  const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, s.deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-conflict", reason: "disconnect" }, ctx);
+  });
+  assert.ok(outcome.error);
+  assert.equal(outcome.error.message, "terminal_conflict");
+  const events = diagnosticEventsOnly(outcome.captured);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0][1], { phase: "commit_terminal", reason: "terminal_conflict", httpStatus: null });
+});
+
+// =====================================================================
+// I. match_not_rated -> phase=validate_match_card, ровно 1 event
+// =====================================================================
+test("I. cardByColor() бросает match_not_rated (малформed card.participants) -> ровно 1 event phase=validate_match_card reason=match_not_rated", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  const malformedCard = Object.assign({}, s.card, { participants: { onlyOneUid: { color: "light" } } });
+  const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, s.deps, s.token, s.matchId, malformedCard, "tg_111", { requestId: "req-badcard", reason: "disconnect" }, ctx);
+  });
+  assert.ok(outcome.error);
+  assert.equal(outcome.error.message, "match_not_rated");
+  const events = diagnosticEventsOnly(outcome.captured);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0][1], { phase: "validate_match_card", reason: "match_not_rated", httpStatus: null });
+});
+
+// =====================================================================
+// H. app_check_unavailable сохраняется как safe reason
+// =====================================================================
+test("H. app_check_unavailable (реальный код из dbHeaders()) остаётся собственным safe reason, не unexpected_internal", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  const deps = Object.assign({}, s.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+      if (u.indexOf("/rooms/ABC123") !== -1) return Promise.reject(new Error("app_check_unavailable"));
+      return s.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  const outcome = await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-appcheck", reason: "disconnect" }, ctx);
+  });
+  const events = diagnosticEventsOnly(outcome.captured);
+  assert.equal(events.length, 1);
+  assert.deepEqual(events[0][1], { phase: "read_live_room", reason: "app_check_unavailable", httpStatus: null });
+});
+
+// =====================================================================
+// G. message getter читается максимум 1 раз
+// =====================================================================
+test("G. message getter читается максимум ОДИН раз за диагностируемую ошибку", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  let messageReadCount = 0;
+  const countingErr = {};
+  Object.defineProperty(countingErr, "message", { get: function () { messageReadCount++; return "stale_generation"; } });
+  const deps = Object.assign({}, s.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+      if (u.indexOf("/rooms/ABC123") !== -1) return Promise.reject(countingErr);
+      return s.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-counting-msg", reason: "disconnect" }, ctx);
+  });
+  assert.equal(messageReadCount, 1, "message getter должен быть прочитан ровно 1 раз");
+});
+
+// =====================================================================
+// E. unrelated phase -> status getter 0 обращений
+// =====================================================================
+test("E. status getter НИ РАЗУ не вызывается, если phase/reason не commit_terminal/db_write_failed", async () => {
+  const s = await setupGenuineDisconnectScenario();
+  let statusReadCount = 0;
+  const hostileErr = new Error("stale_generation");
+  Object.defineProperty(hostileErr, "status", { get: function () { statusReadCount++; return 500; } });
+  const deps = Object.assign({}, s.deps, {
+    fetch: function (url, options) {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
+      if (u.indexOf("/rooms/ABC123") !== -1) return Promise.reject(hostileErr);
+      return s.rtdb.fetch(url, options);
+    }
+  });
+  const ctx = { logged: false };
+  await withCapturedDiagnostics(function () {
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-counting-status", reason: "disconnect" }, ctx);
+  });
+  assert.equal(statusReadCount, 0, "status getter не должен вызываться вовсе для phase!=commit_terminal");
+});
+
+// =====================================================================
+// O/Q. match_not_registered early return -> ровно 1 event, HTTP не меняется
+// =====================================================================
+test("O/Q. HTTP: match_not_registered (early return) -> ровно 1 event phase=read_match_card, HTTP status/body не изменены", async () => {
+  const MATCH_ID_HTTP = "elo_ABC123_1700000000000_0";
+  const seed = {
+    rooms: { ABC123: { ratedMatchId: MATCH_ID_HTTP, status: "active" } },
+    matches: { [MATCH_ID_HTTP]: Object.assign(cardWithParticipantsHttp("ABC123"), { roomCode: "SOME_OTHER_ROOM" }) }
+  };
+  const { response, data, captured } = await runHttpClaim(seed, "tg_111", { roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-mnr-1", reason: "disconnect" });
+  assert.equal(response.status, 409);
+  assert.deepEqual(data, { ok: false, error: "match_not_registered" });
+  assert.equal(captured.length, 1);
+  assert.deepEqual(captured[0][1], { phase: "read_match_card", reason: "match_not_registered", httpStatus: null });
+});
+
+// =====================================================================
+// A/D. full HTTP path, primitive thrown deep inside -> ровно 1 event
+// =====================================================================
+test("A/D. HTTP: примитивная строка брошена внутри read_live_room -> ровно 1 diagnostic event на весь HTTP request (не 2)", async () => {
+  const MATCH_ID_HTTP = "elo_ABC123_1700000000000_0";
+  const seed = {
+    rooms: { ABC123: { ratedMatchId: MATCH_ID_HTTP, status: "active", presence: { light: { online: true }, dark: { online: false } } } },
+    matches: { [MATCH_ID_HTTP]: cardWithParticipantsHttp("ABC123") }
+  };
+  const { response, data, captured } = await runHttpClaim(seed, "tg_111",
+    { roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-primitive-1", reason: "disconnect" },
+    async (url, options, inner) => {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("/rooms/ABC123.json") !== -1 && (!options || !options.method || options.method === "GET")) {
+        throw "a_primitive_thrown_value";
+      }
+      return inner(url, options);
+    });
+  assert.equal(response.status, 409);
+  assert.equal(data.ok, false);
+  assert.equal(captured.length, 1, "должно быть РОВНО 1 событие, не 2 (было бы 2 при старом WeakSet-дизайне)");
+  assert.deepEqual(captured[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
+});
+
+// =====================================================================
+// B. full HTTP path, null/undefined thrown -> ровно 1 event
+// =====================================================================
+test("B. HTTP: null брошен внутри read_live_room -> ровно 1 diagnostic event", async () => {
+  const MATCH_ID_HTTP = "elo_ABC123_1700000000000_0";
+  const seed = {
+    rooms: { ABC123: { ratedMatchId: MATCH_ID_HTTP, status: "active", presence: { light: { online: true }, dark: { online: false } } } },
+    matches: { [MATCH_ID_HTTP]: cardWithParticipantsHttp("ABC123") }
+  };
+  const { response, captured } = await runHttpClaim(seed, "tg_111",
+    { roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-null-1", reason: "disconnect" },
+    async (url, options, inner) => {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("/rooms/ABC123.json") !== -1 && (!options || !options.method || options.method === "GET")) {
+        throw null;
+      }
+      return inner(url, options);
+    });
+  assert.equal(response.status, 409);
+  assert.equal(captured.length, 1);
+  assert.deepEqual(captured[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
+});
+
+test("B2. HTTP: undefined брошен внутри read_live_room -> ровно 1 diagnostic event", async () => {
+  const MATCH_ID_HTTP = "elo_ABC123_1700000000000_0";
+  const seed = {
+    rooms: { ABC123: { ratedMatchId: MATCH_ID_HTTP, status: "active", presence: { light: { online: true }, dark: { online: false } } } },
+    matches: { [MATCH_ID_HTTP]: cardWithParticipantsHttp("ABC123") }
+  };
+  const { response, captured } = await runHttpClaim(seed, "tg_111",
+    { roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-undef-1", reason: "disconnect" },
+    async (url, options, inner) => {
+      const u = typeof url === "string" ? url : url.url;
+      if (u.indexOf("/rooms/ABC123.json") !== -1 && (!options || !options.method || options.method === "GET")) {
+        throw undefined;
+      }
+      return inner(url, options);
+    });
+  assert.equal(response.status, 409);
+  assert.equal(captured.length, 1);
+  assert.deepEqual(captured[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
+});
+
+// =====================================================================
+// C. два разных request ctx + тот же Error object -> по 1 событию на request
+// =====================================================================
+test("C. одна и та же (переиспользованная) Error-инстанция брошена в ДВУХ независимых HTTP-запросах -> каждый запрос получает СВОЁ 1 событие (нет cross-request suppression)", async () => {
+  const sharedErr = new Error("stale_generation");
+  const MATCH_ID_HTTP = "elo_ABC123_1700000000000_0";
+  const seed = () => ({
+    rooms: { ABC123: { ratedMatchId: MATCH_ID_HTTP, status: "active", presence: { light: { online: true }, dark: { online: false } } } },
+    matches: { [MATCH_ID_HTTP]: cardWithParticipantsHttp("ABC123") }
+  });
+  const brokenFetch = async (url, options, inner) => {
+    const u = typeof url === "string" ? url : url.url;
+    if (u.indexOf("/rooms/ABC123.json") !== -1 && (!options || !options.method || options.method === "GET")) {
+      throw sharedErr;
+    }
+    return inner(url, options);
+  };
+
+  const first = await runHttpClaim(seed(), "tg_111", { roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-shared-1", reason: "disconnect" }, brokenFetch);
+  const second = await runHttpClaim(seed(), "tg_111", { roomCode: "ABC123", matchId: MATCH_ID_HTTP, requestId: "http-shared-2", reason: "disconnect" }, brokenFetch);
+
+  assert.equal(first.captured.length, 1, "первый запрос должен получить своё событие");
+  assert.equal(second.captured.length, 1, "второй запрос ДОЛЖЕН тоже получить событие -- не подавлен тем, что тот же Error object уже 'видели' в первом запросе");
+  assert.deepEqual(first.captured[0][1], { phase: "read_live_room", reason: "stale_generation", httpStatus: null });
+  assert.deepEqual(second.captured[0][1], { phase: "read_live_room", reason: "stale_generation", httpStatus: null });
+});
+
+// =====================================================================
+// Frozen Error
+// =====================================================================
+test("Frozen Error, брошенный внутри dbGet -- тот же объект долетает немутированным, ровно 1 event unexpected_internal", async () => {
   const s = await setupGenuineDisconnectScenario();
   const frozenErr = Object.freeze(new Error("weird_native_failure"));
   const deps = Object.assign({}, s.deps, {
@@ -325,61 +554,20 @@ test("frozen Error, брошенный внутри dbGet -- тот же объ�
       return s.rtdb.fetch(url, options);
     }
   });
+  const ctx = { logged: false };
   const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-frozen", reason: "disconnect" });
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-frozen", reason: "disconnect" }, ctx);
   });
-  assert.equal(outcome.error, frozenErr, "должен долететь ТОТ ЖЕ объект (identity), не пересозданный");
-  assert.equal(Object.isFrozen(frozenErr), true, "объект не должен был перестать быть frozen (доказывает отсутствие мутации)");
+  assert.equal(outcome.error, frozenErr);
+  assert.equal(Object.isFrozen(frozenErr), true);
   const events = diagnosticEventsOnly(outcome.captured);
   assert.equal(events.length, 1);
   assert.deepEqual(events[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
 });
 
-// ---------- 9. Primitive/null thrown ----------
-test("примитив (строка) брошен вместо Error -- не роняет диагностику, 1 event unexpected_internal, raw-значение НЕ в логе", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  const deps = Object.assign({}, s.deps, {
-    fetch: function (url, options) {
-      const u = typeof url === "string" ? url : url.url;
-      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
-      if (u.indexOf("/rooms/ABC123") !== -1) return Promise.reject("just_a_raw_string_secret_lookalike");
-      return s.rtdb.fetch(url, options);
-    }
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-primitive", reason: "disconnect" });
-  });
-  assert.equal(outcome.error, "just_a_raw_string_secret_lookalike");
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
-  const serialized = JSON.stringify(outcome.captured);
-  assert.equal(serialized.indexOf("just_a_raw_string_secret_lookalike"), -1, "сырое примитивное значение не должно попасть в лог");
-});
-
-test("null брошен -- не роняет диагностику, не мутирует (мутация невозможна), 1 event unexpected_internal", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  const deps = Object.assign({}, s.deps, {
-    fetch: function (url, options) {
-      const u = typeof url === "string" ? url : url.url;
-      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
-      if (u.indexOf("/rooms/ABC123") !== -1) return Promise.reject(null);
-      return s.rtdb.fetch(url, options);
-    }
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-null", reason: "disconnect" });
-  });
-  assert.equal(outcome.error, null);
-  // outcome.error===null здесь означает "поймали null" (см. withCapturedDiagnostics: catch(error) { return {error} }) --
-  // отличаем от "успеха" по отсутствию result.
-  assert.equal(outcome.result, null);
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
-});
-
-// ---------- 10. Proxy с throwing message/status getter ----------
+// =====================================================================
+// Proxy с throwing message/status getter
+// =====================================================================
 test("Proxy с throwing message/status getter-ловушками -- диагностика не падает, не мутирует, 1 event unexpected_internal", async () => {
   const s = await setupGenuineDisconnectScenario();
   const proxyErr = new Proxy({}, {
@@ -396,39 +584,20 @@ test("Proxy с throwing message/status getter-ловушками -- диагно
       return s.rtdb.fetch(url, options);
     }
   });
+  const ctx = { logged: false };
   const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-proxy", reason: "disconnect" });
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-proxy", reason: "disconnect" }, ctx);
   });
-  assert.equal(outcome.error, proxyErr, "должен долететь тот же Proxy-объект");
+  assert.equal(outcome.error, proxyErr);
   const events = diagnosticEventsOnly(outcome.captured);
   assert.equal(events.length, 1);
   assert.deepEqual(events[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
 });
 
-// ---------- 11. Unknown phase/reason -> unexpected_internal (структурная проверка closed-set) ----------
-test("неизвестное сообщение ошибки (не входит в closed-set) -> reason=unexpected_internal, а не сырой текст", async () => {
-  const s = await setupGenuineDisconnectScenario();
-  const strangeErr = new Error("some_totally_unlisted_internal_code");
-  const deps = Object.assign({}, s.deps, {
-    fetch: function (url, options) {
-      const u = typeof url === "string" ? url : url.url;
-      if (u.indexOf("identitytoolkit.googleapis.com") !== -1) return s.deps.fetch(url, options);
-      if (u.indexOf("/rooms/ABC123") !== -1) return Promise.reject(strangeErr);
-      return s.rtdb.fetch(url, options);
-    }
-  });
-  const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: "req-unknown", reason: "disconnect" });
-  });
-  const events = diagnosticEventsOnly(outcome.captured);
-  assert.equal(events.length, 1);
-  assert.deepEqual(events[0][1], { phase: "read_live_room", reason: "unexpected_internal", httpStatus: null });
-  const serialized = JSON.stringify(outcome.captured);
-  assert.equal(serialized.indexOf("some_totally_unlisted_internal_code"), -1, "неизвестный, невнесённый в closed-set текст не должен попасть в лог");
-});
-
-// ---------- 12. Никаких секретов/чувствительных полей в логах ----------
-test("диагностический лог никогда не содержит Authorization/токены/requestId/uid/matchId/roomCode/тело запроса", async () => {
+// =====================================================================
+// P. Secret non-leak
+// =====================================================================
+test("P. диагностический лог никогда не содержит Authorization/токены/requestId/uid/matchId/roomCode/тело запроса; payload строго {phase,reason,httpStatus}", async () => {
   const s = await setupGenuineDisconnectScenario();
   const deps = Object.assign({}, s.deps, {
     fetch: function (url, options) {
@@ -441,17 +610,17 @@ test("диагностический лог никогда не содержит
     }
   });
   const secretRequestId = "req-SECRET-should-never-leak-anywhere";
+  const ctx = { logged: false };
   const outcome = await withCapturedDiagnostics(function () {
-    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: secretRequestId, reason: "disconnect" });
+    return claimTechnicalOutcome(s.env, deps, s.token, s.matchId, s.card, "tg_111", { requestId: secretRequestId, reason: "disconnect" }, ctx);
   });
   const events = diagnosticEventsOnly(outcome.captured);
   assert.ok(events.length >= 1);
   const serialized = JSON.stringify(events);
-  assert.equal(serialized.indexOf(secretRequestId), -1, "requestId не должен попадать в diagnostic-лог");
-  assert.equal(serialized.indexOf(s.matchId), -1, "matchId не должен попадать в diagnostic-лог");
-  assert.equal(serialized.indexOf("tg_111"), -1, "uid не должен попадать в diagnostic-лог");
-  assert.equal(serialized.indexOf(s.token), -1, "server id token не должен попадать в diagnostic-лог");
-  // Разрешённые ключи -- строго только phase/reason/httpStatus.
+  assert.equal(serialized.indexOf(secretRequestId), -1);
+  assert.equal(serialized.indexOf(s.matchId), -1);
+  assert.equal(serialized.indexOf("tg_111"), -1);
+  assert.equal(serialized.indexOf(s.token), -1);
   for (const e of events) {
     assert.deepEqual(Object.keys(e[1]).sort(), ["httpStatus", "phase", "reason"]);
   }
