@@ -1809,6 +1809,21 @@ function writeTechnicalResult(absentColor) {
     const myOnlineMs = getOnlineSessionMs(presence[winnerColor]);
     if (myOnlineMs === null || myOnlineMs < RECONNECT_GRACE_MS) return false;
 
+    // №23: рейтинговая партия -- Elo-authoritative исход обязан идти через
+    // Worker (claimTechnicalOutcome), не через прямую участническую запись
+    // room.result/winner (для replayVersion>=1 они НИКОГДА не Elo truth).
+    // Пока регистрация ЕЩЁ идёт (ratedMatchId ещё не опубликован, но
+    // попытка регистрации для этой generation уже стартовала) -- fail
+    // closed: НЕ пишем ни рейтинговый, ни legacy-исход, чтобы не потерять
+    // уже начатую регистрацию и не выдать заведомо unrated результат за
+    // партию, которая должна была стать рейтинговой.
+    if (currentState.ratedMatchId) {
+        submitRatedTechnicalClaim(currentState.ratedMatchId, absentColor === "light" ? "dark" : "light", "disconnect");
+        return true;
+    }
+    const genKey = typeof currentRatedGenerationKey === "function" ? currentRatedGenerationKey() : null;
+    if (genKey && ratedJoinState[genKey]) return false;
+
     const targetRoom = roomCode;
     technicalResultInFlight = true;
     database.ref("rooms/" + targetRoom).update({
@@ -1836,6 +1851,28 @@ function writeTechnicalResult(absentColor) {
         console.log("Technical result not applied:", error && error.message);
     });
     return true;
+}
+
+// №23: единая точка входа для рейтингового technical-исхода (disconnect
+// ИЛИ timeout) -- клиент только СИГНАЛИЗИРУЕТ Worker'у, не пишет
+// авторитетный результат сам. requestId персистентен на попытку (тот же
+// паттерн, что generateNonTurnRequestId уже даёт turn/resign/draw), чтобы
+// повторный вызов после сетевого сбоя был идемпотентным retry, а не новой
+// попыткой.
+function submitRatedTechnicalClaim(matchId, loserColorHint, reason) {
+    const requestId = generateNonTurnRequestId(myColor, "technical_" + reason, currentState ? currentState.moveCount : 0, matchId);
+    return callWorker("/rated/claim-technical", {
+        roomCode: roomCode, matchId: matchId, requestId: requestId, reason: reason
+    }).then(function () {
+        clearPendingRatedActionId(matchId, "technical_" + reason);
+    }).catch(function (error) {
+        // technical_evidence_insufficient/stale_generation -- штатные отказы
+        // (соперник успел вернуться, генерация сменилась); не считаем их
+        // окончательными для requestId, естественный повторный вызов при
+        // следующем срабатывании локальных условий переиспользует тот же id.
+        if (isDefinitiveRatedActionOutcome(error)) clearPendingRatedActionId(matchId, "technical_" + reason);
+        console.log("Rated technical claim failed:", workerErrorCode(error));
+    });
 }
 
 function getOpponentAbsenceMs(oppColor) {
@@ -6835,6 +6872,15 @@ function checkTimeout() {
     // серверно значимую транзакцию — тем более что его собственные данные о
     // партии могли устареть за время обрыва.
     if (!isFirebaseConnected) return;
+
+    // №23: та же rated/fail-closed развилка, что и в writeTechnicalResult().
+    if (currentState.ratedMatchId) {
+        submitRatedTechnicalClaim(currentState.ratedMatchId, loser, "timeout");
+        return;
+    }
+    const genKeyForTimeout = typeof currentRatedGenerationKey === "function" ? currentRatedGenerationKey() : null;
+    if (genKeyForTimeout && ratedJoinState[genKeyForTimeout]) return;
+
     database.ref("rooms/" + roomCode).transaction(function (room) {
         // v180 ГОНКА ОБЫЧНОГО И ТЕХНИЧЕСКОГО ИСХОДА. Если технический
         // результат уже создан, обычное завершение ОТМЕНЯЕТСЯ: одна партия —
