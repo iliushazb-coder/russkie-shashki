@@ -18,6 +18,7 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { evalRule } = require('./rule-eval-harness.js');
+const { createInitialPieces } = require('../../shared/game-engine.js');
 
 const NOW = 1_700_000_100_000;
 
@@ -553,4 +554,139 @@ test('HARNESS REGRESSION: the two REAL, valid .matches() forms both still work -
   const valForm = evalRule("newData.child('seq').val().matches(/^[0-9]{6}$/)", { rootTree: null, rootTree2: { seq: '000005' }, now: NOW });
   assert.equal(wildcardForm, true);
   assert.equal(valForm, true);
+});
+
+// ---------- disconnect-specific $room/.validate schema conflict (found via live production test) ----------
+// Root cause: a pre-#23 (commit 2a9e296) schema conjunct in $room/.validate
+// required newData.hasChild('result') === (winReason==='disconnect') -- i.e.
+// whenever winReason is 'disconnect', a matching room.result object MUST
+// also exist. This protected the LEGACY unrated participant-direct-write
+// disconnect path (which does write result, verified against live presence
+// by the separate `result` node's own .validate). #23's rated technical
+// path (commit 0955d96, claimTechnicalOutcome/commitTerminalOutcome) was
+// deliberately designed to skip result entirely -- unified with the plain
+// protected-outcome shape (winner/winReason/status only), matching every
+// OTHER protected terminal outcome (resign, draw). This was a documented,
+// intentional design choice (see the comment above REAL_EVENT_WRITE) but
+// this ONE schema conjunct was never updated to match it, silently denying
+// every rated technical DISCONNECT commit since #23's very first commit.
+// timeout is a distinct winReason value, so it was never subject to this
+// conjunct at all (verified separately below).
+//
+// Fix: exempt srv_settlement from this legacy schema requirement -- same
+// trust-boundary pattern used by every other #23 guard. Does not touch the
+// `result` node's own .validate (unaffected), Guard A/B, G1/G2, or any
+// other room-write conjunct.
+
+function ratedRoomFixture(overrides = {}) {
+  const MATCH_ID = 'elo_ABC123_1700000000000_0';
+  return Object.assign({
+    players: { light: { id: 'tg_111', name: 'Ilyusha' }, dark: { id: 'tg_222', name: 'Tatiana' } },
+    status: 'active', createdAt: NOW - 500000, matchNumber: 0, groupId: 'g1', timeControlSeconds: 0,
+    pieces: createInitialPieces(), turn: 'dark', moveCount: 5,
+    ratedMatchId: MATCH_ID, ratingsAtStart: { light: 1200, dark: 1180 },
+    turnStartedAt: NOW - 70000,
+    ratedReplay: { matchId: MATCH_ID, acceptedSeq: 5, boardSeq: 5 },
+    presence: {
+      light: { online: true, onlineSince: NOW - 400000, absentSince: null, lastSeen: NOW - 500 },
+      dark: { online: false, onlineSince: NOW - 400000, absentSince: NOW - 70000, lastSeen: NOW - 70000 }
+    }
+  }, overrides);
+}
+
+function combinedRoomAllowed(before, after) {
+  const w = evalRule(REAL_ROOM_WRITE, { authUid: 'srv_settlement', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  const v = evalRule(REAL_ROOM_VALIDATE, { authUid: 'srv_settlement', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  return w && v;
+}
+
+test('DISCONNECT REGRESSION FIX: rated technical DISCONNECT commit (winner+winReason+status, no result) is now ALLOWED -- the exact PATCH commitTerminalOutcome() performs', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, { winner: 'light', winReason: 'disconnect', status: 'finished' });
+  assert.equal(combinedRoomAllowed(before, after), true,
+    'this is the real combined write commitTerminalOutcome() makes for a genuine disconnect -- was silently denied since #23\'s first commit');
+});
+
+test('DISCONNECT REGRESSION: rated TIMEOUT commit was already ALLOWED before this fix and remains so -- distinct winReason value, never subject to this conjunct', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, { winner: 'light', winReason: 'timeout', status: 'finished' });
+  assert.equal(combinedRoomAllowed(before, after), true);
+});
+
+test('DISCONNECT REGRESSION FIX: normal move (srv_settlement) unaffected', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, {
+    pieces: { c3: { color: 'dark', king: false } }, turn: 'light', moveCount: 6, turnStartedAt: NOW,
+    ratedReplay: { matchId: before.ratedMatchId, acceptedSeq: 6, boardSeq: 6 }
+  });
+  assert.equal(combinedRoomAllowed(before, after), true);
+});
+
+test('DISCONNECT REGRESSION FIX: draw accept (terminal, srv_settlement) unaffected', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, { winner: null, winReason: 'draw', status: 'finished' });
+  assert.equal(combinedRoomAllowed(before, after), true);
+});
+
+test('DISCONNECT REGRESSION FIX: draw offer (direct participant write) unaffected', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, { drawProposal: { by: 'light', name: 'Ilyusha' } });
+  const w = evalRule(REAL_ROOM_WRITE, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  const v = evalRule(REAL_ROOM_VALIDATE, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  assert.equal(w && v, true);
+});
+
+test('DISCONNECT REGRESSION FIX: resign (terminal, srv_settlement) unaffected', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, { winner: 'dark', winReason: 'resign', status: 'finished' });
+  assert.equal(combinedRoomAllowed(before, after), true);
+});
+
+test('DISCONNECT REGRESSION FIX: rated registration (finalizePointer, incl. presence refresh) unaffected', () => {
+  const MATCH_ID = 'elo_ABC123_1700000000000_0';
+  const before = {
+    players: { light: { id: 'tg_111', name: 'Ilyusha' }, dark: { id: 'tg_222', name: 'Tatiana' } },
+    createdAt: NOW, matchNumber: 0, groupId: 'g1', timeControlSeconds: 0,
+    status: 'active', turn: 'light', pieces: createInitialPieces(), moveCount: 0,
+    presence: { light: { online: true, lastSeen: NOW }, dark: { online: true, lastSeen: NOW } }
+  };
+  const after = Object.assign({}, before, {
+    ratedMatchId: MATCH_ID, ratingsAtStart: { light: 1200, dark: 1180 },
+    presence: {
+      light: Object.assign({}, before.presence.light, { onlineSince: NOW }),
+      dark: Object.assign({}, before.presence.dark, { onlineSince: NOW })
+    }
+  });
+  assert.equal(combinedRoomAllowed(before, after), true);
+});
+
+test('DISCONNECT REGRESSION FIX: legacy unrated disconnect WITHOUT result is still DENIED (participant, not srv_settlement -- exemption does not leak)', () => {
+  const before = {
+    players: { light: { id: 'tg_111', name: 'A' }, dark: { id: 'tg_222', name: 'B' } },
+    status: 'active', createdAt: NOW - 500000, matchNumber: 0, turn: 'light',
+    pieces: createInitialPieces(),
+    presence: { light: { online: true, lastSeen: NOW - 500 }, dark: { online: false, lastSeen: NOW - 70000 } }
+  };
+  const after = Object.assign({}, before, { winner: 'light', winReason: 'disconnect', status: 'finished' });
+  const w = evalRule(REAL_ROOM_WRITE, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  const v = evalRule(REAL_ROOM_VALIDATE, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  assert.equal(w && v, false);
+});
+
+test('DISCONNECT REGRESSION FIX: malicious srv_settlement tampering an unrelated room field (players/light/id) in the same commit is still DENIED', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, {
+    players: { light: { id: 'tg_999', name: 'Ilyusha' }, dark: before.players.dark },
+    pieces: { c3: { color: 'dark', king: false } }, turn: 'light', moveCount: 6, turnStartedAt: NOW,
+    ratedReplay: { matchId: before.ratedMatchId, acceptedSeq: 6, boardSeq: 6 }
+  });
+  assert.equal(combinedRoomAllowed(before, after), false);
+});
+
+test('DISCONNECT REGRESSION FIX: a participant impersonating the server (faking a technical disconnect outcome themselves) is still DENIED', () => {
+  const before = ratedRoomFixture();
+  const after = Object.assign({}, before, { winner: 'light', winReason: 'disconnect', status: 'finished' });
+  const w = evalRule(REAL_ROOM_WRITE, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  const v = evalRule(REAL_ROOM_VALIDATE, { authUid: 'tg_111', rootTree: before, rootTree2: after, now: NOW, wildcards: { $room: 'ABC123' } });
+  assert.equal(w && v, false);
 });
