@@ -486,3 +486,114 @@ test("Z4: обычный terminal durable-записан в тот же next seq
   const finalWinner = await verifiedReplayOutcome(env, deps, "fake-token", MATCH_ID, cardWithParticipants());
   assert.equal(finalWinner, "light", "финальный лог replay'ится в единственный terminal, без event_after_terminal");
 });
+
+// =====================================================================
+// Перенесено из удалённого tests/worker/n23-claim-technical-diagnostic.test.mjs
+// как ЧИСТЫЕ production-регрессии (без какой-либо проверки diagnostic
+// logging): это единственное место, где такое покрытие существует.
+//
+// Все три K/L/M проверяют recovery-семантику commitTerminalOutcome:
+//
+//   try { await dbPatchRoot(...); return success; }
+//   catch (error) {
+//     const after = await dbGet(...);
+//     if (!after) throw error;
+//     return classifyExistingTerminalClaim(...);
+//   }
+//
+// K -- PATCH фактически прошёл, но ответ потерян -> recheck восстанавливает SUCCESS;
+// L -- ничего не записалось -> наружу уходит ИСХОДНАЯ write-ошибка со своим status;
+// M -- сам recheck упал -> наружу уходит ЕГО read-ошибка, не замаскированная write-ошибкой.
+// =====================================================================
+
+test("K. REAL commitTerminalOutcome: ambiguous write -- PATCH фактически применился, но вызывающая сторона получила non-ok/504; recheck находит СВОЙ ЖЕ claim -> SUCCESS без второго event", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  store.data = {};
+  const candidate = candidateFor("r-ambiguous", "technical", "000000", { kind: "disconnect" });
+
+  // Это НЕ сценарий B2: там побеждает ДРУГОЙ writer и корректный исход --
+  // terminal_conflict. Здесь запись наша собственная и она реально прошла,
+  // потерян только ответ сети.
+  let patchCalls = 0;
+  const originalFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH" && patchCalls === 0) {
+      patchCalls++;
+      await originalFetch(url, options); // запись РЕАЛЬНО применяется на сервере
+      return { ok: false, status: 504, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return originalFetch(url, options);
+  };
+
+  const r = await commitTerminalOutcome(env, deps, "fake-token", MATCH_ID, candidate);
+  assert.equal(r.ok, true, "потерянный ответ при фактически успешной записи обязан восстановиться как SUCCESS");
+  assert.equal(r.claim.requestId, "r-ambiguous", "восстановлен именно НАШ claim");
+  assert.deepEqual(Object.keys(store.data.ratedEvents[MATCH_ID].events), ["000000"], "второй event не создан");
+  assert.equal(store.data.ratedTerminal[MATCH_ID].requestId, "r-ambiguous");
+});
+
+test("L. REAL commitTerminalOutcome: PATCH упал окончательно и recheck вернул null -> наружу уходит ИСХОДНАЯ db_write_failed с сохранённым status", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  store.data = {};
+  const originalFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    if (options && options.method === "PATCH") {
+      return { ok: false, status: 403, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return originalFetch(url, options);
+  };
+
+  let thrown = null;
+  try {
+    await commitTerminalOutcome(env, deps, "fake-token", MATCH_ID, candidateFor("r-lost", "technical", "000000", { kind: "timeout" }));
+  } catch (e) { thrown = e; }
+
+  assert.ok(thrown, "ошибка обязана быть проброшена, а не проглочена");
+  assert.equal(thrown.message, "db_write_failed", "именно исходная write-ошибка, не что-то другое");
+  assert.equal(thrown.status, 403, "status исходной write-ошибки обязан сохраниться");
+  assert.equal(store.data.ratedTerminal, undefined, "ничего не записано");
+});
+
+test("M. REAL commitTerminalOutcome: PATCH упал и САМ recheck тоже упал -> наружу уходит db_read_failed от recheck, не замаскированная исходной write-ошибкой", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  store.data = {};
+  let patched = false;
+  const originalFetch = deps.fetch;
+  deps.fetch = async (url, options) => {
+    const u = typeof url === "string" ? url : url.url;
+    if (options && options.method === "PATCH") {
+      patched = true;
+      return { ok: false, status: 500, headers: { get: () => null }, json: async () => ({}) };
+    }
+    // Первое (до PATCH) чтение ratedTerminal обязано пройти нормально --
+    // ломаем только recheck ПОСЛЕ неудачного PATCH.
+    if (patched && u.indexOf("ratedTerminal") !== -1) {
+      return { ok: false, status: 500, headers: { get: () => null }, json: async () => ({}) };
+    }
+    return originalFetch(url, options);
+  };
+
+  let thrown = null;
+  try {
+    await commitTerminalOutcome(env, deps, "fake-token", MATCH_ID, candidateFor("r-recheck-fail", "technical", "000000", { kind: "timeout" }));
+  } catch (e) { thrown = e; }
+
+  assert.ok(thrown);
+  assert.equal(thrown.message, "db_read_failed", "наружу обязана уйти ошибка recheck, а не исходная db_write_failed");
+  assert.equal(store.data.ratedTerminal, undefined);
+});
+
+test("I. claimTechnicalOutcome: малформед rated match card (participants не валидная пара) -> match_not_rated, ничего не записано", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  store.data = {};
+  const malformedCard = Object.assign({}, cardWithParticipants(), { participants: { onlyOneUid: { color: "light" } } });
+
+  let thrown = null;
+  try {
+    await claimTechnicalOutcome(env, deps, "fake-token", MATCH_ID, malformedCard, "tg_111", { requestId: "r-badcard", reason: "disconnect" });
+  } catch (e) { thrown = e; }
+
+  assert.ok(thrown, "малформед card обязан быть отвергнут");
+  assert.equal(thrown.message, "match_not_rated");
+  assert.deepEqual(store.data, {}, "ничего не записано");
+});

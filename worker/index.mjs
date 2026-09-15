@@ -936,89 +936,9 @@ export function claimsMatch(a, b) {
     a.winnerId === b.winnerId && a.loserId === b.loserId;
 }
 
-// ===== TEMP DIAGNOSTIC (claim-technical 409 root cause) — START =====
-// Удалить целиком после установления root cause: этот блок + все
-// вызовы withPhase()/logClaimTechnicalDiagnostic() ниже + ctx в
-// handleSettlement(). Ничего в бизнес-логике/ответах не меняет.
-//
-// Диагностика REQUEST-SCOPED, не module-global: Cloudflare Workers могут
-// переиспользовать один isolate между независимыми HTTP-запросами, и
-// module-global состояние (например WeakSet по identity исключения)
-// давало бы диагностике течь между чужими друг другу request'ами --
-// и не могло различить примитивы/null (WeakSet их не принимает вовсе).
-// ctx = { logged: false } создаётся заново в handleSettlement() на КАЖДЫЙ
-// HTTP-запрос и передаётся по всей claim-technical цепочке -- гарантирует
-// максимум один event на request, независимо от типа/identity ошибки.
-const CLAIM_TECHNICAL_KNOWN_PHASES = new Set([
-  "server_identity", "read_match_card", "validate_match_card", "verify_participant",
-  "validate_claim", "read_live_room", "verify_evidence", "read_events", "read_terminal",
-  "read_terminal_event", "commit_terminal", "terminal_recheck"
-]);
-const CLAIM_TECHNICAL_KNOWN_REASONS = new Set([
-  "not_a_participant", "invalid_request_id", "invalid_technical_reason",
-  "stale_generation", "technical_evidence_insufficient",
-  "terminal_conflict", "fail_closed_incomplete_terminal",
-  "db_read_failed", "db_write_failed", "event_log_corrupt",
-  "server_identity_failed", "server_signer_missing",
-  "match_not_registered", "match_id_invalid", "room_code_invalid",
-  "match_not_rated", "app_check_unavailable", "match_already_terminal"
-]);
-// Безопасное чтение .message/.status: произвольный/враждебный error может
-// иметь throwing getter или быть Proxy -- каждое свойство читается РОВНО
-// ОДИН раз (сохраняется в локальную переменную, не читается повторно в
-// ternary-условии), и чтение никогда не бросает наружу диагностического
-// хелпера.
-function safeReadErrorMessage(error) {
-  try {
-    const value = error && error.message;
-    return typeof value === "string" ? value : null;
-  } catch (_) {
-    return null;
-  }
-}
-function safeReadErrorStatus(error) {
-  try {
-    const value = error && error.status;
-    return (typeof value === "number" && Number.isInteger(value) && value >= 100 && value <= 599) ? value : null;
-  } catch (_) {
-    return null;
-  }
-}
-function logClaimTechnicalDiagnostic(ctx, phase, error) {
-  if (!ctx || ctx.logged === true) return;
-  // Выставляем ДО любых потенциально опасных операций (чтение свойств
-  // произвольного error, сам console.error) -- диагностика никогда не
-  // должна породить второй event для этого request, что бы ни случилось
-  // дальше в этой же функции.
-  ctx.logged = true;
-  const safePhase = CLAIM_TECHNICAL_KNOWN_PHASES.has(phase) ? phase : "unexpected_internal";
-  const msg = safeReadErrorMessage(error);
-  const safeReason = (msg !== null && CLAIM_TECHNICAL_KNOWN_REASONS.has(msg)) ? msg : "unexpected_internal";
-  // status читаем ТОЛЬКО в единственной доказанной точке (dbPatchRoot сам
-  // ставит валидный .status на объекте, который бросает) -- у любой другой
-  // ошибки .status-getter вообще не вызывается, даже безобидный на вид.
-  const httpStatus = (safePhase === "commit_terminal" && safeReason === "db_write_failed")
-    ? safeReadErrorStatus(error)
-    : null;
-  try {
-    console.error("claim_technical_diagnostic", { phase: safePhase, reason: safeReason, httpStatus });
-  } catch (_) {
-    // Сам вызов логирования никогда не должен пробрасываться в бизнес-логику.
-  }
-}
-async function withPhase(ctx, phase, promise) {
-  try {
-    return await promise;
-  } catch (error) {
-    try { logClaimTechnicalDiagnostic(ctx, phase, error); } catch (_) { /* диагностика не маскирует реальную ошибку */ }
-    throw error; // тот же самый объект/значение, ни одного изменённого свойства
-  }
-}
-// ===== TEMP DIAGNOSTIC — END (helper) =====
-
-export async function commitTerminalOutcome(env, deps, token, matchId, candidate, ctx = null) {
-  const existing = await withPhase(ctx, "read_terminal", dbGet(env, deps, token, "ratedTerminal/" + matchId)); // TEMP DIAGNOSTIC
-  if (existing) return classifyExistingTerminalClaim(env, deps, token, matchId, existing, candidate, ctx);
+export async function commitTerminalOutcome(env, deps, token, matchId, candidate) {
+  const existing = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
+  if (existing) return classifyExistingTerminalClaim(env, deps, token, matchId, existing, candidate);
 
   // ПОРЯДОК КРИТИЧЕН: этот guard стоит СТРОГО ПОСЛЕ проверки existing
   // ratedTerminal. Идемпотентный retry уже успешно записанного
@@ -1038,9 +958,6 @@ export async function commitTerminalOutcome(env, deps, token, matchId, candidate
   );
 
   try {
-    // TEMP DIAGNOSTIC: dbPatchRoot НЕ обёрнут withPhase здесь намеренно --
-    // его сбой не окончателен (см. recovery ниже, может оказаться
-    // idempotent success). Логируем только ПОДТВЕРЖДЁННЫЙ финальный исход.
     await dbPatchRoot(env, deps, token, patch);
     return { ok: true, claim: candidate.claim };
   } catch (error) {
@@ -1048,26 +965,17 @@ export async function commitTerminalOutcome(env, deps, token, matchId, candidate
     // ratedTerminal) неотличим по HTTP-статусу от прочих сетевых сбоев на
     // этом уровне без доп. чтения, поэтому в обоих случаях перечитываем и
     // классифицируем по факту, а не гадаем по status.
-    let after;
-    try {
-      after = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
-    } catch (recheckError) {
-      logClaimTechnicalDiagnostic(ctx, "terminal_recheck", recheckError); // TEMP DIAGNOSTIC
-      throw recheckError;
-    }
-    if (!after) {
-      logClaimTechnicalDiagnostic(ctx, "commit_terminal", error); // TEMP DIAGNOSTIC -- окончательный сбой, recovery не нашёл ничего
-      throw error; // не наш конфликт -- настоящая retryable ошибка, пробрасываем как есть
-    }
-    return classifyExistingTerminalClaim(env, deps, token, matchId, after, candidate, ctx);
+    const after = await dbGet(env, deps, token, "ratedTerminal/" + matchId);
+    if (!after) throw error; // не наш конфликт -- настоящая retryable ошибка, пробрасываем как есть
+    return classifyExistingTerminalClaim(env, deps, token, matchId, after, candidate);
   }
 }
 
-async function classifyExistingTerminalClaim(env, deps, token, matchId, existingClaim, candidate, ctx) {
+async function classifyExistingTerminalClaim(env, deps, token, matchId, existingClaim, candidate) {
   if (!claimsMatch(existingClaim, candidate.claim)) {
     return { ok: false, reason: "terminal_conflict" };
   }
-  const event = await withPhase(ctx, "read_terminal_event", dbGet(env, deps, token, "ratedEvents/" + matchId + "/events/" + existingClaim.seq)); // TEMP DIAGNOSTIC
+  const event = await dbGet(env, deps, token, "ratedEvents/" + matchId + "/events/" + existingClaim.seq);
   if (event) return { ok: true, claim: existingClaim };
   // claim существует, событие -- нет: при корректном коде оба всегда
   // рождаются одним PATCH, поэтому это структурная аномалия (баг/атака в
@@ -1076,40 +984,18 @@ async function classifyExistingTerminalClaim(env, deps, token, matchId, existing
   return { ok: false, reason: "fail_closed_incomplete_terminal", requiresManualReview: true };
 }
 
-export async function claimTechnicalOutcome(env, deps, token, matchId, card, callerUid, claimBody, ctx = null) {
-  let by;
-  try {
-    by = cardByColor(card); // TEMP DIAGNOSTIC: cardByColor синхронна, бросает match_not_rated
-  } catch (error) {
-    logClaimTechnicalDiagnostic(ctx, "validate_match_card", error); // TEMP DIAGNOSTIC
-    throw error; // тот же самый объект
-  }
+export async function claimTechnicalOutcome(env, deps, token, matchId, card, callerUid, claimBody) {
+  const by = cardByColor(card);
   const callerColor = card.participants[callerUid] && card.participants[callerUid].color;
-  if (callerColor !== "light" && callerColor !== "dark") {
-    const err = new Error("not_a_participant"); // TEMP DIAGNOSTIC: один объект на log+throw
-    logClaimTechnicalDiagnostic(ctx, "verify_participant", err);
-    throw err;
-  }
+  if (callerColor !== "light" && callerColor !== "dark") throw new Error("not_a_participant");
   const opponentColor = callerColor === "light" ? "dark" : "light";
   const requestId = claimBody && claimBody.requestId;
-  if (!isValidRequestId(requestId)) {
-    const err = new Error("invalid_request_id"); // TEMP DIAGNOSTIC
-    logClaimTechnicalDiagnostic(ctx, "validate_claim", err);
-    throw err;
-  }
+  if (!isValidRequestId(requestId)) throw new Error("invalid_request_id");
   const reason = claimBody && claimBody.reason;
-  if (reason !== "disconnect" && reason !== "timeout") {
-    const err = new Error("invalid_technical_reason"); // TEMP DIAGNOSTIC
-    logClaimTechnicalDiagnostic(ctx, "validate_claim", err);
-    throw err;
-  }
+  if (reason !== "disconnect" && reason !== "timeout") throw new Error("invalid_technical_reason");
 
-  const liveRoom = await withPhase(ctx, "read_live_room", dbGet(env, deps, token, "rooms/" + card.roomCode)); // TEMP DIAGNOSTIC
-  if (!liveRoom || liveRoom.ratedMatchId !== matchId) {
-    const err = new Error("stale_generation"); // TEMP DIAGNOSTIC
-    logClaimTechnicalDiagnostic(ctx, "read_live_room", err);
-    throw err;
-  }
+  const liveRoom = await dbGet(env, deps, token, "rooms/" + card.roomCode);
+  if (!liveRoom || liveRoom.ratedMatchId !== matchId) throw new Error("stale_generation");
 
   const nowMs = deps.now();
   // Caller всегда заявляет ПРОТИВНИКА проигравшим -- собственную сторону
@@ -1118,13 +1004,9 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
   const evidenceOk = reason === "disconnect"
     ? verifyDisconnectEvidence(liveRoom, opponentColor, callerColor, nowMs)
     : verifyTimeoutEvidence(liveRoom, opponentColor, nowMs);
-  if (!evidenceOk) {
-    const err = new Error("technical_evidence_insufficient"); // TEMP DIAGNOSTIC
-    logClaimTechnicalDiagnostic(ctx, "verify_evidence", err);
-    throw err;
-  }
+  if (!evidenceOk) throw new Error("technical_evidence_insufficient");
 
-  const list = await withPhase(ctx, "read_events", fetchAllEvents(env, deps, token, matchId)); // TEMP DIAGNOSTIC
+  const list = await fetchAllEvents(env, deps, token, matchId);
   // Настоящий replay уже персистентного protected-лога. Без него technical_result
   // мог быть добавлен ПОСЛЕ уже durable terminal-события (resign/draw_accept/
   // финальный turn), чей syncProjection ещё не успел или упал: комната тогда
@@ -1163,7 +1045,7 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
     }
   };
 
-  const result = await commitTerminalOutcome(env, deps, token, matchId, candidate, ctx);
+  const result = await commitTerminalOutcome(env, deps, token, matchId, candidate);
   if (!result.ok) {
     if (result.reason === "match_already_terminal") {
       // Та же repair-семантика, что уже есть в commitRatedEvent: обычное
@@ -1178,9 +1060,7 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
       // доказанный финал при всё ещё несинхронизированной комнате.
       await syncProjection(env, deps, token, matchId, card);
     }
-    const err = new Error(result.reason || "terminal_conflict"); // TEMP DIAGNOSTIC
-    logClaimTechnicalDiagnostic(ctx, "commit_terminal", err);
-    throw err;
+    throw new Error(result.reason || "terminal_conflict");
   }
   return { winnerId, loserId, winner: callerColor, reason };
 }
@@ -2293,13 +2173,6 @@ async function handleSettlement(request, env, url) {
     return jsonSettlementResponse(request, env, 400, { ok: false, error: "invalid_json" });
   }
 
-  // TEMP DIAGNOSTIC: request-scoped, создаётся заново на каждый вызов
-  // handleSettlement (то есть на каждый HTTP-запрос) -- ДО try, чтобы быть
-  // видимым и внутри ветки маршрута, и в итоговом catch. null для всех
-  // остальных маршрутов -- logClaimTechnicalDiagnostic() безопасно
-  // no-op'ает на null ctx.
-  const claimTechnicalDiag = url.pathname === "/rated/claim-technical" ? { logged: false } : null;
-
   try {
     const roomCode = body && body.roomCode;
     if (!validFirebasePathAtom(roomCode, 50)) {
@@ -2342,21 +2215,19 @@ async function handleSettlement(request, env, url) {
       if (!validFirebasePathAtom(matchId, 149)) {
         return jsonSettlementResponse(request, env, 400, { ok: false, error: "match_id_invalid" });
       }
-      const token = await withPhase(claimTechnicalDiag, "server_identity", getServerIdToken(env, settlementDeps())); // TEMP DIAGNOSTIC
-      const card = await withPhase(claimTechnicalDiag, "read_match_card", dbGet(env, settlementDeps(), token, "matches/" + matchId)); // TEMP DIAGNOSTIC
+      const token = await getServerIdToken(env, settlementDeps());
+      const card = await dbGet(env, settlementDeps(), token, "matches/" + matchId);
       if (!card || card.roomCode !== roomCode) {
-        logClaimTechnicalDiagnostic(claimTechnicalDiag, "read_match_card", new Error("match_not_registered")); // TEMP DIAGNOSTIC
         return jsonSettlementResponse(request, env, 409, { ok: false, error: "match_not_registered" });
       }
       const result = await claimTechnicalOutcome(env, settlementDeps(), token, matchId, card, callerUid, {
         requestId: body && body.requestId,
         reason: body && body.reason
-      }, claimTechnicalDiag);
+      });
       return jsonSettlementResponse(request, env, 200, { ok: true, ...result });
     }
     return jsonSettlementResponse(request, env, 404, { ok: false, error: "not_found" });
   } catch (error) {
-    logClaimTechnicalDiagnostic(claimTechnicalDiag, "unexpected_internal", error); // TEMP DIAGNOSTIC -- no-op если claimTechnicalDiag===null (другой маршрут) или уже залогировано
     const publicCode = settlementPublicError(error);
     const forbidden = publicCode === "not_a_player" || publicCode === "not_a_participant";
     return jsonSettlementResponse(request, env, forbidden ? 403 : 409, { ok: false, error: publicCode });
