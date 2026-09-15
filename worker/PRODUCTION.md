@@ -1,6 +1,6 @@
 # Соответствие production-состоянию
 
-Актуализировано: 2026-09-11.
+Актуализировано: 2026-09-15.
 
 Этот документ — текущая доказательная база пункта №1 MASTER PLAN. Он фиксирует
 фактически подтверждённое production-состояние после завершения пунктов №1–44
@@ -12,7 +12,8 @@
 ### Cloudflare Worker
 
     Worker                    russkie-shashki-auth
-    активная Version ID       db07d6a5-4067-4ac2-a2e7-d4b827e93218
+    активная Version ID       455b5258-dc40-4ac3-8023-da6c62a5e353
+    traffic                   100%
     production URL            https://russkie-shashki-auth.iliushazb.workers.dev
     compatibility_date        2026-08-30
     placement                 Default
@@ -20,36 +21,43 @@
     cache                     Disabled
     способ последнего deploy  Wrangler CLI после успешного dry-run
 
-Предыдущая активная версия перед этим deploy:
+Предшествующие production-версии в истории Cloudflare остаются доступными как
+rollback-кандидаты; автоматически на них не откатываться. Конкретная Version ID
+непосредственного предшественника в этом документе не фиксируется: независимого
+подтверждения из Cloudflare на момент актуализации нет.
 
-    b4ddde49-7a6a-4ee4-9acd-75f8571fdbc7
+Отдельно отмечается: версия
 
-Она остаётся только в истории Cloudflare как rollback-кандидат; автоматически
-на неё не откатываться.
+    dd34b0fb-a4c3-48f0-9d08-9c07d20c31df
+
+была более ранней TEMP diagnostic сборкой и НЕ является непосредственным
+предшественником текущей cleanup-версии.
 
 Последний production-deploy Worker был выполнен полным модульным графом:
 
     worker/index.mjs
     shared/game-engine.js
 
-Проверенные локальные артефакты deploy-пакета:
+Проверенные локальные артефакты текущего repository state (пересчитаны на базе
+runtime source c0cf301a557eccd7e5e1b9eaa969bdcc81658dc9):
 
     worker/index.mjs
-      105 804 байт
-      SHA-256 89cccf5b1c8ff33fc195a222ac85430cb763be881fdcde599f3da6b9c1398f8b
+      126 985 байт
+      SHA-256 ab489937546ec40cb6dd66abd18f357dd3f6bacbab2c169e7b5a674ed6cc2668
 
     shared/game-engine.js
       27 307 байт
       SHA-256 37c7c2ebae6d7548c8b41e7dbbbff3285029526e25d2749a9fcc27bd1897973b
 
     worker/wrangler.toml
-      2 568 байт на момент deploy-пакета
-      SHA-256 5647246062a119e009cba8851c96f8f7f48c6d40100d2a0da9f0a6c4f9223bee
+      2 105 байт
+      SHA-256 0f085fe3e57289b7ec0e03e565d088adc82e929f5d0e855f0ef6400d8c42027f
 
 Перед реальным deploy dry-run с compatibility_date 2026-08-30 прошёл без
-предупреждений. Реальный deploy завершился успешно; `/rated/event` после него
-работает в production, что подтверждено реальной онлайн-партией: вход, ходы и
-взятия проходят корректно.
+предупреждений. Реальный cleanup-deploy завершился успешно: активная версия
+455b5258-dc40-4ac3-8023-da6c62a5e353, traffic 100%, compatibility_date
+2026-08-30 подтверждены. Этот deploy удалил только TEMP-диагностику
+(PR #11) и не менял production-семантику.
 
 ### Cloudflare bindings
 
@@ -103,16 +111,19 @@ server-side settlement выполняется через Firebase ID token дл�
 
 ### Firebase Realtime Database Rules
 
-Текущие production Rules опубликованы после завершения MASTER PLAN и затем
-повторно опубликованы после диагностического rollback, когда было доказано,
-что предыдущий баг с отскакивающим ходом вызван не Rules, а старой production-
-версией Worker.
+Текущие production Rules задеплоены из состояния merge-коммита PR #10:
+
+    3046c493b882452835b33fa00e9489d5cc9245c8
+
+После cleanup PR #11 Rules НЕ менялись и повторно НЕ публиковались: cleanup
+затрагивал только Worker и тесты. Проверено, что current main содержит тот же
+blob `firebase/database.rules.json`, что и 3046c493 (blob abb07805).
 
 Текущий canonical файл:
 
     firebase/database.rules.json
-    35 292 байт
-    SHA-256 b00e10da4b8764a5973ee61ab15b21b1c2bdb6f344377b359c7ee897f7c81408
+    43 317 байт
+    SHA-256 a7b78795b4ac5f124bd33b9e0d2696456b273864229a1177b908ce98451af3f7
 
 Production Rules соответствуют финальной архитектуре с `roomSpectators`,
 `ratedEvents`, server-only settlement/stats boundaries и другими изменениями
@@ -135,13 +146,30 @@ Firebase Functions deploy для этого проекта не использу
 Он меняет только `.github/workflows/backend.yml` и не меняет production-код
 Worker, Firebase Rules или игровую логику.
 
-## Известный текущий production-дефект
+Source commit текущего deployed Worker runtime:
 
-После обновления Worker онлайн-игра работает: вход, обычные ходы, взятия и
-визуальное завершение через surrender подтверждены. Однако после surrender
-постоянные `games/wins/losses/rating` не изменились. Причина settlement/final-
-ization пока не доказана и не должна подменяться гипотезой. До диагностики
-этот дефект считается P0 для rated-результатов.
+    c0cf301a557eccd7e5e1b9eaa969bdcc81658dc9
+
+## История rated-настройки (закрыто)
+
+Ранее в этом документе значился текущий P0: после surrender постоянные
+`games/wins/losses/rating` не изменялись. Этот дефект **закрыт**.
+
+Ручной production acceptance был завершён на post-fix production Worker ДО
+cleanup и охватил:
+
+    обычные онлайн-ходы
+    ничья + Elo
+    сдача + Elo
+    timeout + Elo
+    disconnect + Elo
+
+Последующий cleanup-deploy (версия 455b5258-dc40-4ac3-8023-da6c62a5e353)
+удалил только TEMP-диагностику и был semantics-neutral. Повторный ручной
+gameplay-acceptance на 455b5258 отдельно не проводился.
+
+Новых P0 в этом acceptance scope не заявляется: без доказательства такие
+утверждения в этот документ не вносятся.
 
 ## Исторический baseline 2026-09-02
 
