@@ -2115,3 +2115,340 @@ test("matchmakingQueue: cross-user delete of another entry is denied (#21 -- pat
   await seed("matchmakingQueue/bob", queueEntry());
   await assertFails(remove(ref(databaseFor("alice"), "matchmakingQueue/bob")));
 });
+
+// =====================================================================
+// №23 technical terminal (timeout/disconnect): REAL Emulator regressions.
+//
+// Эти тесты закрывают ДВА production blocker'а, которые не могли быть
+// обнаружены прежним покрытием, потому что единственный файл, трогавший
+// ratedTerminal/technical_result -- tests/firebase-rules/
+// n23-terminal-design.rules.test.js -- имеет расширение .js и НЕ входит
+// в emulator-glob ("tests/firebase-rules/*.rules.test.mjs" в
+// package.json), а исполняется против самодельной симуляции
+// rule-eval-harness.js, которая не моделирует ни $other-wildcard, ни
+// .read-правила вовсе:
+//   1) ratedTerminal/$matchId не имел .read -> commitTerminalOutcome()
+//      падал на ПЕРВОМ же чтении (production: phase=read_terminal,
+//      reason=db_read_failed);
+//   2) technical_result пишет winner/winReason, у которых не было
+//      именованных правил -> они попадали в "$other": false и
+//      отклоняли ВЕСЬ атомарный multi-location PATCH.
+//
+// Здесь всё проверяется настоящим @firebase/rules-unit-testing против
+// реального firebase/database.rules.json, включая полный корневой
+// update() ровно той формы, что строит commitTerminalOutcome().
+// =====================================================================
+
+const TECH_MATCH_ID = "elo_ABC123_1700000000000_0";
+
+// Realistic registered ACTIVE rated room -- должен удовлетворять ВСЕМ
+// текущим room-валидациям (pieces/players/turn/status + rated-поля).
+function techRatedRoom(overrides = {}) {
+  return {
+    pieces: { b6: { color: "light", king: false }, c3: { color: "dark", king: false } },
+    players: { light: { id: "alice", name: "Alice" }, dark: { id: "bob", name: "Bob" } },
+    turn: "dark",
+    status: "active",
+    createdAt: 1700000000000,
+    matchNumber: 0,
+    ratedMatchId: TECH_MATCH_ID,
+    ratingsAtStart: { light: 1200, dark: 1180 },
+    timeControlSeconds: 60,
+    turnStartedAt: 1700000000000,
+    presence: {
+      light: { online: true, onlineSince: 1700000000000, lastSeen: 1700000000000 },
+      dark: { online: false, absentSince: 1700000000000, lastSeen: 1700000000000 }
+    },
+    ...overrides
+  };
+}
+
+function techMatchCard() {
+  return {
+    roomCode: "ABC123",
+    createdAt: 1700000000000,
+    matchNumber: 0,
+    replayVersion: 1,
+    participants: {
+      alice: { color: "light", ratingAtJoin: 1200, name: "Alice" },
+      bob: { color: "dark", ratingAtJoin: 1180, name: "Bob" }
+    }
+  };
+}
+
+// Точная форма candidate.claim из claimTechnicalOutcome().
+function techClaim(kind = "timeout") {
+  return {
+    matchId: TECH_MATCH_ID,
+    roomCode: "ABC123",
+    source: "technical",
+    kind,
+    requestId: "light_0_technical_" + kind,
+    winnerId: "alice",
+    loserId: "bob",
+    seq: "000000",
+    createdAt: serverTimestamp()
+  };
+}
+
+// Точная форма eventPayload из claimTechnicalOutcome(): все реальные
+// поля, ts через .sv timestamp ровно как пишет production Worker.
+function techEvent(kind = "timeout", overrides = {}) {
+  return {
+    requestId: "light_0_technical_" + kind,
+    type: "technical_result",
+    actorUid: "srv_settlement",
+    color: "light",
+    matchId: TECH_MATCH_ID,
+    roomCode: "ABC123",
+    createdAt: 1700000000000,
+    matchNumber: 0,
+    ts: serverTimestamp(),
+    winner: "light",
+    winReason: kind,
+    ...overrides
+  };
+}
+
+// Точная форма атомарного корневого PATCH из commitTerminalOutcome():
+// claim + event + projectionUpdates одной операцией.
+function techRootPatch(kind = "timeout", eventOverrides = {}) {
+  return {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim(kind),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: techEvent(kind, eventOverrides),
+    "rooms/ABC123/winner": "light",
+    "rooms/ABC123/winReason": kind,
+    "rooms/ABC123/status": "finished"
+  };
+}
+
+async function seedTechScenario() {
+  await seed("rooms/ABC123", techRatedRoom());
+  await seed("matches/" + TECH_MATCH_ID, techMatchCard());
+}
+
+// ---------- A-E: ratedTerminal read ----------
+
+test("№23 A: srv_settlement CAN read a MISSING ratedTerminal/$matchId and gets null (самое первое чтение commitTerminalOutcome)", async () => {
+  await seedTechScenario();
+  const snap = await assertSucceeds(get(ref(databaseFor("srv_settlement"), "ratedTerminal/" + TECH_MATCH_ID)));
+  assert.equal(snap.exists(), false);
+  assert.equal(snap.val(), null);
+});
+
+test("№23 B: srv_settlement CAN read an EXISTING ratedTerminal/$matchId", async () => {
+  await seedTechScenario();
+  await seed("ratedTerminal/" + TECH_MATCH_ID, { ...techClaim("timeout"), createdAt: 1700000000000 });
+  const snap = await assertSucceeds(get(ref(databaseFor("srv_settlement"), "ratedTerminal/" + TECH_MATCH_ID)));
+  assert.equal(snap.exists(), true);
+  assert.equal(snap.val().matchId, TECH_MATCH_ID);
+});
+
+test("№23 C: unauthenticated CANNOT read ratedTerminal/$matchId", async () => {
+  await seedTechScenario();
+  await seed("ratedTerminal/" + TECH_MATCH_ID, { ...techClaim("timeout"), createdAt: 1700000000000 });
+  await assertFails(get(ref(databaseFor(null), "ratedTerminal/" + TECH_MATCH_ID)));
+});
+
+test("№23 D: обычный аутентифицированный участник CANNOT read ratedTerminal/$matchId", async () => {
+  await seedTechScenario();
+  await seed("ratedTerminal/" + TECH_MATCH_ID, { ...techClaim("timeout"), createdAt: 1700000000000 });
+  await assertFails(get(ref(databaseFor("alice"), "ratedTerminal/" + TECH_MATCH_ID)));
+});
+
+test("№23 E: даже srv_settlement CANNOT read/enumerate РОДИТЕЛЯ /ratedTerminal (.read только на $matchId)", async () => {
+  await seedTechScenario();
+  await seed("ratedTerminal/" + TECH_MATCH_ID, { ...techClaim("timeout"), createdAt: 1700000000000 });
+  await assertFails(get(ref(databaseFor("srv_settlement"), "ratedTerminal")));
+});
+
+// ---------- F/G: полный реальный атомарный корневой update ----------
+
+test("№23 F: ПОЛНЫЙ атомарный root update точной формы commitTerminalOutcome (TIMEOUT) -> ALLOWED, состояние записано целиком", async () => {
+  await seedTechScenario();
+  await assertSucceeds(update(ref(databaseFor("srv_settlement"), "/"), techRootPatch("timeout")));
+
+  const terminal = await assertSucceeds(get(ref(databaseFor("srv_settlement"), "ratedTerminal/" + TECH_MATCH_ID)));
+  assert.equal(terminal.exists(), true, "ratedTerminal должен быть создан");
+  assert.equal(terminal.val().kind, "timeout");
+  assert.equal(terminal.val().winnerId, "alice");
+
+  const event = await assertSucceeds(get(ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000")));
+  assert.equal(event.exists(), true, "protected event должен быть создан");
+  assert.equal(event.val().type, "technical_result");
+  assert.equal(event.val().winner, "light");
+  assert.equal(event.val().winReason, "timeout");
+  assert.equal(typeof event.val().ts, "number", "serverTimestamp должен зарезолвиться в число");
+
+  const room = await assertSucceeds(get(ref(databaseFor("alice"), "rooms/ABC123")));
+  assert.equal(room.val().status, "finished");
+  assert.equal(room.val().winner, "light");
+  assert.equal(room.val().winReason, "timeout");
+});
+
+test("№23 G: ПОЛНЫЙ атомарный root update точной формы commitTerminalOutcome (DISCONNECT) -> ALLOWED, состояние записано целиком", async () => {
+  await seedTechScenario();
+  await assertSucceeds(update(ref(databaseFor("srv_settlement"), "/"), techRootPatch("disconnect")));
+
+  const terminal = await assertSucceeds(get(ref(databaseFor("srv_settlement"), "ratedTerminal/" + TECH_MATCH_ID)));
+  assert.equal(terminal.exists(), true);
+  assert.equal(terminal.val().kind, "disconnect");
+
+  const event = await assertSucceeds(get(ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000")));
+  assert.equal(event.val().winReason, "disconnect");
+  assert.equal(event.val().winner, "light");
+
+  const room = await assertSucceeds(get(ref(databaseFor("alice"), "rooms/ABC123")));
+  assert.equal(room.val().status, "finished");
+  assert.equal(room.val().winner, "light");
+  assert.equal(room.val().winReason, "disconnect");
+  assert.equal(room.val().result === undefined || room.val().result === null, true,
+    "rated technical путь НЕ пишет room.result -- projection остаётся winner/winReason/status");
+});
+
+// ---------- H-L: negative, technical_result ----------
+
+test("№23 H: technical_result БЕЗ winner -> DENIED", async () => {
+  await seedTechScenario();
+  const ev = techEvent("timeout");
+  delete ev.winner;
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim("timeout"),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: ev
+  }));
+});
+
+test("№23 I: technical_result БЕЗ winReason -> DENIED", async () => {
+  await seedTechScenario();
+  const ev = techEvent("timeout");
+  delete ev.winReason;
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim("timeout"),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: ev
+  }));
+});
+
+test("№23 J: technical_result с winner !== color -> DENIED (winner всегда сторона заявителя)", async () => {
+  await seedTechScenario();
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim("timeout"),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: techEvent("timeout", { winner: "dark" })
+  }));
+});
+
+test("№23 K: technical_result с winReason вне {disconnect,timeout} -> DENIED", async () => {
+  await seedTechScenario();
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim("timeout"),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: techEvent("timeout", { winReason: "resign" })
+  }));
+});
+
+test("№23 L: technical_result с actorUid !== 'srv_settlement' -> DENIED", async () => {
+  await seedTechScenario();
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim("timeout"),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: techEvent("timeout", { actorUid: "alice" })
+  }));
+});
+
+// ---------- M-O: negative, обычные события не должны нести technical-поля ----------
+
+test("№23 M: НЕ-technical событие (turn) с полем winner -> DENIED", async () => {
+  await seedTechScenario();
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000"),
+    {
+      requestId: "light_0_2-1_0-3", type: "turn", actorUid: "alice", color: "light",
+      matchId: TECH_MATCH_ID, roomCode: "ABC123", createdAt: 1700000000000,
+      matchNumber: 0, ts: serverTimestamp(), winner: "light"
+    }
+  ));
+});
+
+test("№23 N: НЕ-technical событие (resign) с полем winReason -> DENIED", async () => {
+  await seedTechScenario();
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000"),
+    {
+      requestId: "light_0_resign", type: "resign", actorUid: "alice", color: "light",
+      matchId: TECH_MATCH_ID, roomCode: "ABC123", createdAt: 1700000000000,
+      matchNumber: 0, ts: serverTimestamp(), winReason: "resign"
+    }
+  ));
+});
+
+test("№23 O: событие с посторонним неизвестным полем по-прежнему DENIED ($other не ослаблен)", async () => {
+  await seedTechScenario();
+  await assertFails(update(ref(databaseFor("srv_settlement"), "/"), {
+    ["ratedTerminal/" + TECH_MATCH_ID]: techClaim("timeout"),
+    ["ratedEvents/" + TECH_MATCH_ID + "/events/000000"]: techEvent("timeout", { bogusField: "x" })
+  }));
+});
+
+// ---------- P: обычный участник не может выполнить terminal PATCH ----------
+
+test("№23 P: обычный участник НЕ может выполнить technical terminal root PATCH -> DENIED", async () => {
+  await seedTechScenario();
+  await assertFails(update(ref(databaseFor("alice"), "/"), techRootPatch("timeout")));
+});
+
+// ---------- Q-T: regression, обычные пути не сломаны ----------
+
+test("№23 Q: обычный turn append остаётся ALLOWED", async () => {
+  await seedTechScenario();
+  await assertSucceeds(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000"),
+    {
+      requestId: "light_0_2-1_0-3", type: "turn", actorUid: "alice", color: "light",
+      matchId: TECH_MATCH_ID, roomCode: "ABC123", createdAt: 1700000000000,
+      matchNumber: 0, ts: serverTimestamp(),
+      path: { 0: { row: 2, col: 1 }, 1: { row: 3, col: 0 } }
+    }
+  ));
+});
+
+test("№23 R: resign append остаётся ALLOWED", async () => {
+  await seedTechScenario();
+  await assertSucceeds(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000"),
+    {
+      requestId: "light_0_resign", type: "resign", actorUid: "alice", color: "light",
+      matchId: TECH_MATCH_ID, roomCode: "ABC123", createdAt: 1700000000000,
+      matchNumber: 0, ts: serverTimestamp()
+    }
+  ));
+});
+
+test("№23 S: draw_offer / draw_accept / draw_cancel остаются ALLOWED", async () => {
+  await seedTechScenario();
+  const base = {
+    matchId: TECH_MATCH_ID, roomCode: "ABC123", createdAt: 1700000000000,
+    matchNumber: 0, ts: serverTimestamp()
+  };
+  await assertSucceeds(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000000"),
+    { ...base, requestId: "light_0_draw_offer", type: "draw_offer", actorUid: "alice", color: "light" }
+  ));
+  await assertSucceeds(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000001"),
+    { ...base, requestId: "dark_0_draw_accept", type: "draw_accept", actorUid: "bob", color: "dark", offerSeq: "000000" }
+  ));
+  await assertSucceeds(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000002"),
+    { ...base, requestId: "light_0_draw_cancel", type: "draw_cancel", actorUid: "alice", color: "light" }
+  ));
+});
+
+test("№23 T: поздний НЕ-technical append при уже существующем ratedTerminal остаётся DENIED", async () => {
+  await seedTechScenario();
+  await seed("ratedTerminal/" + TECH_MATCH_ID, { ...techClaim("timeout"), createdAt: 1700000000000 });
+  await assertFails(set(
+    ref(databaseFor("srv_settlement"), "ratedEvents/" + TECH_MATCH_ID + "/events/000001"),
+    {
+      requestId: "light_0_resign", type: "resign", actorUid: "alice", color: "light",
+      matchId: TECH_MATCH_ID, roomCode: "ABC123", createdAt: 1700000000000,
+      matchNumber: 0, ts: serverTimestamp()
+    }
+  ));
+});
