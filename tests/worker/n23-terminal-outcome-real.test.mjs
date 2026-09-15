@@ -309,3 +309,180 @@ test("retry with a DIFFERENT requestId AND a genuinely DIFFERENT claimed winner 
   );
 });
 
+
+// =====================================================================
+// Z1-Z4: SERVER RACE -- technical_result не должен append'иться ПОСЛЕ уже
+// durable обычного terminal-события (resign/draw_accept/финальный turn).
+//
+// Обычный commitRatedEvent делает fetchAllEvents -> replayEvents ->
+// dbPutIfMatch, и только ПОТОМ отдельный await syncProjection(). Значит
+// существует реальное окно, когда terminal-событие уже durable, а room
+// projection ещё active/без winner -- и все evidence-проверки technical
+// пути в этот момент проходят. Без настоящего replay в
+// claimTechnicalOutcome в лог попадал ВТОРОЙ terminal, после чего
+// replayEvents() на settlement бросал event_after_terminal и Elo не
+// начислялся вовсе.
+// =====================================================================
+
+// Обычное terminal-событие resign от dark (проигравшего), durable в логе.
+function persistedResignEvent() {
+  return {
+    requestId: "dark_0_resign", type: "resign", actorUid: "tg_222", color: "dark",
+    matchId: MATCH_ID, roomCode: "ABC123", createdAt: 1_700_000_000_000,
+    matchNumber: 0, ts: 1_700_000_050_000
+  };
+}
+
+// Комната, в которой обычный terminal УЖЕ durable, но его syncProjection
+// ещё не отработал: status active, winner отсутствует. Evidence для
+// technical claim при этом полностью валиден.
+function raceStore(now) {
+  return {
+    rooms: { ABC123: {
+      ratedMatchId: MATCH_ID, status: "active",
+      players: { light: { id: "tg_111", name: "Alice" }, dark: { id: "tg_222", name: "Bob" } },
+      presence: { light: { online: true, onlineSince: now - 61000 }, dark: { online: false, absentSince: now - 61000 } }
+    } },
+    matches: { [MATCH_ID]: cardWithParticipants() }
+  };
+}
+
+function eventsOf(store) {
+  const node = store.data.ratedEvents && store.data.ratedEvents[MATCH_ID];
+  return (node && node.events) || {};
+}
+
+// ---------- Z1: PRE-EXISTING NORMAL TERMINAL ----------
+test("Z1: technical claim при уже durable resign (room ещё active, ratedTerminal нет) -> match_already_terminal, лог не испорчен, projection отремонтирована", async () => {
+  const now = 1_700_000_100_000;
+  const { env, deps, store } = makeEnvDeps(now);
+  store.data = raceStore(now);
+  store.data.ratedEvents = { [MATCH_ID]: { events: { "000000": persistedResignEvent() } } };
+
+  assert.equal(store.data.rooms.ABC123.status, "active", "предусловие: комната ещё active");
+  assert.equal(store.data.rooms.ABC123.winner, undefined, "предусловие: winner ещё нет");
+  assert.equal(store.data.ratedTerminal, undefined, "предусловие: ratedTerminal отсутствует");
+
+  let thrown = null;
+  try {
+    await claimTechnicalOutcome(env, deps, "fake-token", MATCH_ID, cardWithParticipants(), "tg_111", { requestId: "r-tech-1", reason: "disconnect" });
+  } catch (e) { thrown = e; }
+
+  assert.ok(thrown, "вызов обязан завершиться ошибкой");
+  assert.equal(thrown.message, "match_already_terminal");
+
+  const events = eventsOf(store);
+  assert.deepEqual(Object.keys(events), ["000000"], "второй terminal НЕ добавлен -- в логе только исходный resign");
+  assert.equal(events["000000"].type, "resign", "исходный resign остаётся единственным terminal");
+  assert.equal(store.data.ratedTerminal, undefined, "ratedTerminal НЕ создан");
+
+  // syncProjection обязана была отремонтировать комнату из authoritative лога.
+  const room = store.data.rooms.ABC123;
+  assert.equal(room.status, "finished", "projection отремонтирована: status");
+  assert.equal(room.winner, "light", "winner выведен из resign (сдался dark -> победил light)");
+  assert.equal(room.winReason, "resign", "winReason выведен из resign");
+});
+
+// ---------- Z2: IDEMPOTENT TECHNICAL RETRY ----------
+test("Z2: идемпотентный повтор ТОГО ЖЕ technical claim остаётся SUCCESS (existing ratedTerminal классифицируется ДО нового guard)", async () => {
+  const now = 1_700_000_100_000;
+  const { env, deps, store } = makeEnvDeps(now);
+  store.data = raceStore(now);
+  const body = { requestId: "r-tech-idem", reason: "disconnect" };
+
+  const first = await claimTechnicalOutcome(env, deps, "fake-token", MATCH_ID, cardWithParticipants(), "tg_111", body);
+  assert.equal(first.winner, "light");
+  const afterFirst = Object.keys(eventsOf(store));
+  assert.equal(afterFirst.length, 1, "первый claim создал ровно одно событие");
+  assert.ok(store.data.ratedTerminal[MATCH_ID], "первый claim создал ratedTerminal");
+
+  // Теперь protectedLogAlreadyTerminal === true (technical_result уже в логе).
+  // Порядок guard'ов обязан оставить это SUCCESS, а не превратить в
+  // match_already_terminal.
+  const retry = await claimTechnicalOutcome(env, deps, "fake-token", MATCH_ID, cardWithParticipants(), "tg_111", body);
+  assert.equal(retry.winner, "light", "повтор обязан остаться SUCCESS");
+
+  const afterRetry = Object.keys(eventsOf(store));
+  assert.deepEqual(afterRetry, afterFirst, "количество событий не выросло");
+  assert.equal(afterRetry.length, 1, "второй technical_result НЕ создан");
+});
+
+// ---------- Z3: LOW-LEVEL GUARD ----------
+test("Z3: commitTerminalOutcome с protectedLogAlreadyTerminal=true и отсутствующим ratedTerminal -> match_already_terminal, ничего не записано", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  store.data = {};
+  const candidate = candidateFor("r-guard", "technical", "000003", { kind: "timeout" });
+  candidate.protectedLogAlreadyTerminal = true;
+
+  const r = await commitTerminalOutcome(env, deps, "fake-token", MATCH_ID, candidate);
+  assert.equal(r.ok, false);
+  assert.equal(r.reason, "match_already_terminal");
+  assert.deepEqual(store.data, {}, "ни claim, ни event, ни projection не записаны");
+});
+
+test("Z3b: тот же candidate с protectedLogAlreadyTerminal=false пишется как обычно (guard не задевает здоровый путь)", async () => {
+  const { env, deps, store } = makeEnvDeps(1_700_000_100_000);
+  store.data = {};
+  const candidate = candidateFor("r-ok", "technical", "000003", { kind: "timeout" });
+  candidate.protectedLogAlreadyTerminal = false;
+
+  const r = await commitTerminalOutcome(env, deps, "fake-token", MATCH_ID, candidate);
+  assert.equal(r.ok, true);
+  assert.ok(store.data.ratedTerminal[MATCH_ID]);
+  assert.ok(store.data.ratedEvents[MATCH_ID].events["000003"]);
+});
+
+// ---------- Z4: RACE -- обычный terminal выиграл тот же next seq ----------
+test("Z4: обычный terminal durable-записан в тот же next seq между чтением и PATCH -> technical PATCH отклонён, на retry исход match_already_terminal, лог остаётся корректным", async () => {
+  const now = 1_700_000_100_000;
+  const { env, deps, store } = makeEnvDeps(now);
+  store.data = raceStore(now);
+  const body = { requestId: "r-tech-race", reason: "disconnect" };
+
+  // Первый вызов: лог прочитан пустым, но ПЕРЕД самим technical PATCH другой
+  // writer durable-записывает обычный terminal в ТОТ ЖЕ seq 000000, и PATCH
+  // отклоняется.
+  let injected = false;
+  const racingDeps = Object.assign({}, deps, {
+    fetch: async (url, options) => {
+      if (options && options.method === "PATCH" && !injected) {
+        injected = true;
+        store.data.ratedEvents = { [MATCH_ID]: { events: { "000000": persistedResignEvent() } } };
+        return { ok: false, status: 412, headers: { get: () => null }, json: async () => ({}) };
+      }
+      return deps.fetch(url, options);
+    }
+  });
+
+  let firstError = null;
+  try {
+    await claimTechnicalOutcome(env, racingDeps, "fake-token", MATCH_ID, cardWithParticipants(), "tg_111", body);
+  } catch (e) { firstError = e; }
+  assert.ok(firstError, "первый вызов обязан завершиться ошибкой (неоднозначный write)");
+  assert.equal(store.data.ratedTerminal, undefined, "ratedTerminal после неудачного PATCH отсутствует");
+
+  // Retry: fetchAllEvents теперь ВИДИТ обычный terminal.
+  let retryError = null;
+  try {
+    await claimTechnicalOutcome(env, deps, "fake-token", MATCH_ID, cardWithParticipants(), "tg_111", body);
+  } catch (e) { retryError = e; }
+
+  assert.ok(retryError, "retry обязан завершиться definitive-отказом");
+  assert.equal(retryError.message, "match_already_terminal");
+
+  const events = eventsOf(store);
+  assert.deepEqual(Object.keys(events), ["000000"], "technical_result НЕ append'нут -- в логе ровно один terminal");
+  assert.equal(events["000000"].type, "resign");
+  assert.equal(store.data.ratedTerminal, undefined, "ratedTerminal так и не создан");
+
+  const room = store.data.rooms.ABC123;
+  assert.equal(room.status, "finished", "syncProjection отремонтировала комнату");
+  assert.equal(room.winner, "light");
+  assert.equal(room.winReason, "resign");
+
+  // Финальный лог обязан корректно replay'иться НАСТОЯЩИМ settlement-путём:
+  // verifiedReplayOutcome() внутри делает fetchAllEvents + replayEvents, то
+  // есть бросил бы event_after_terminal, если бы второй terminal попал в лог.
+  const finalWinner = await verifiedReplayOutcome(env, deps, "fake-token", MATCH_ID, cardWithParticipants());
+  assert.equal(finalWinner, "light", "финальный лог replay'ится в единственный terminal, без event_after_terminal");
+});

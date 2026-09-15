@@ -961,7 +961,7 @@ const CLAIM_TECHNICAL_KNOWN_REASONS = new Set([
   "db_read_failed", "db_write_failed", "event_log_corrupt",
   "server_identity_failed", "server_signer_missing",
   "match_not_registered", "match_id_invalid", "room_code_invalid",
-  "match_not_rated", "app_check_unavailable"
+  "match_not_rated", "app_check_unavailable", "match_already_terminal"
 ]);
 // Безопасное чтение .message/.status: произвольный/враждебный error может
 // иметь throwing getter или быть Proxy -- каждое свойство читается РОВНО
@@ -1019,6 +1019,17 @@ async function withPhase(ctx, phase, promise) {
 export async function commitTerminalOutcome(env, deps, token, matchId, candidate, ctx = null) {
   const existing = await withPhase(ctx, "read_terminal", dbGet(env, deps, token, "ratedTerminal/" + matchId)); // TEMP DIAGNOSTIC
   if (existing) return classifyExistingTerminalClaim(env, deps, token, matchId, existing, candidate, ctx);
+
+  // ПОРЯДОК КРИТИЧЕН: этот guard стоит СТРОГО ПОСЛЕ проверки existing
+  // ratedTerminal. Идемпотентный retry уже успешно записанного
+  // technical_result сам даёт replay.terminal === true; если проверить флаг
+  // раньше, такой retry вернул бы match_already_terminal вместо success,
+  // хотя ratedTerminal существует и соответствует именно этой попытке.
+  // Сюда мы попадаем только когда ratedTerminal отсутствует, то есть
+  // terminal в логе принадлежит ЧУЖОМУ (обычному) событию.
+  if (candidate.protectedLogAlreadyTerminal === true) {
+    return { ok: false, reason: "match_already_terminal" };
+  }
 
   const patch = Object.assign(
     { ["ratedTerminal/" + matchId]: candidate.claim,
@@ -1114,6 +1125,14 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
   }
 
   const list = await withPhase(ctx, "read_events", fetchAllEvents(env, deps, token, matchId)); // TEMP DIAGNOSTIC
+  // Настоящий replay уже персистентного protected-лога. Без него technical_result
+  // мог быть добавлен ПОСЛЕ уже durable terminal-события (resign/draw_accept/
+  // финальный turn), чей syncProjection ещё не успел или упал: комната тогда
+  // выглядит active/без winner, evidence-проверки выше проходят, и в лог
+  // попадал второй terminal -- после чего replayEvents() на settlement бросал
+  // event_after_terminal и Elo не начислялся. commitRatedEvent уже делает
+  // ровно такую проверку; технический путь обязан вести себя так же.
+  const protectedReplay = replayEvents(list, card);
   const nextSeqStr = formatSeq(list.length);
 
   const winnerId = by[callerColor];
@@ -1127,6 +1146,12 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
     claim: { matchId, roomCode: card.roomCode, source: "technical", kind: reason, requestId, winnerId, loserId, seq: nextSeqStr, createdAt: serverTimestamp() },
     nextSeqStr,
     eventPayload,
+    // ВНУТРЕННЯЯ метаинформация для commitTerminalOutcome. НЕ персистится:
+    // в Firebase уходят только claim, eventPayload и projectionUpdates,
+    // каждый из которых собирается явным списком полей, поэтому этот флаг
+    // физически не может попасть ни в ratedTerminal, ни в ratedEvents, ни в
+    // PATCH.
+    protectedLogAlreadyTerminal: protectedReplay.terminal,
     // Та же форма, что уже пишет syncProjection для protected-исходов
     // (winner/winReason/status) -- никакого отдельного result-объекта для
     // rated-технического пути, чтобы клиентский рендер не нуждался в
@@ -1140,6 +1165,19 @@ export async function claimTechnicalOutcome(env, deps, token, matchId, card, cal
 
   const result = await commitTerminalOutcome(env, deps, token, matchId, candidate, ctx);
   if (!result.ok) {
+    if (result.reason === "match_already_terminal") {
+      // Та же repair-семантика, что уже есть в commitRatedEvent: обычное
+      // terminal-событие durable, но его syncProjection мог не успеть/упасть,
+      // и комната осталась active/stale. Сначала чиним projection из
+      // authoritative protected log, и только ПОСЛЕ успешного repair отдаём
+      // definitive match_already_terminal.
+      //
+      // КРИТИЧНО: syncProjection здесь НЕ swallow'ится. Если она сама упала,
+      // наружу уходит её реальная ошибка -- клиент обязан счесть исход
+      // неоднозначным и повторить, а не принять match_already_terminal за
+      // доказанный финал при всё ещё несинхронизированной комнате.
+      await syncProjection(env, deps, token, matchId, card);
+    }
     const err = new Error(result.reason || "terminal_conflict"); // TEMP DIAGNOSTIC
     logClaimTechnicalDiagnostic(ctx, "commit_terminal", err);
     throw err;
