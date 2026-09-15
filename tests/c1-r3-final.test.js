@@ -128,7 +128,11 @@ console.log('\n=== REMOVED ECONOMY / PRESERVED SAFETY ===');
   check('C2 no eloMatches direct client path', !/eloMatches\//.test(runtime));
   check('C3 getOnlineSessionMs remains', /function getOnlineSessionMs/.test(SRC) && /getOnlineSessionMs\(presence\[winnerColor\]\)/.test(SRC));
   check('C4 coin DOM is gone', !/coin-balance|coin-popup/.test(HTML));
-  check('C5 cache bust v205/v20', /script\.js\?v=205/.test(HTML) && /style\.css\?v=20/.test(HTML));
+  check('C5 cache bust (script.js >= 205 и style.css >= 20; исторические границы, а не точные числа)', (function () {
+    const s = /script\.js\?v=(\d+)/.exec(HTML);
+    const c = /style\.css\?v=(\d+)/.exec(HTML);
+    return !!s && !!c && parseInt(s[1], 10) >= 205 && parseInt(c[1], 10) >= 20;
+  })());
   check('C6 no COIN_REWARDS executable residue', !/COIN_REWARDS/.test(SRC));
 }
 

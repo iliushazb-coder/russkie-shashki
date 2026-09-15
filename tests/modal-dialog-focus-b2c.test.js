@@ -1,5 +1,5 @@
 // №42-B2c: role=dialog/aria-modal + focus management для info-modal.
-// Ключевая находка перед реализацией: все 45 реальных production call
+// Ключевая находка перед реализацией: все 44 реальных production call
 // sites showInfoModal() передают ровно (text, false) -- двухкнопочный
 // режим (offerNewGame=true) и non-navigating режим (navigateToMenu=false)
 // СЕГОДНЯ нигде не используются, но код обязан корректно работать, если
@@ -102,11 +102,13 @@ console.log('=== 5. все реальные call sites сегодня перед
 {
   const calls = SRC.match(/showInfoModal\([^;]*\)/g) || [];
   const realCalls = calls.filter(c => !c.startsWith('showInfoModal(text, offerNewGame, navigateToMenu)'));
-  // №23 добавил два вызова в rematch-guard'ах (btnNewGame, btnRematchAccept),
-  // оба в той же форме (text, false) — существенный инвариант ниже не изменился.
-  check('ровно 47 реальных call sites', realCalls.length === 47, 'найдено: ' + realCalls.length);
+  // История: исходно 45; e4273ec добавил 2 rematch-guard call site (btnNewGame,
+  // btnRematchAccept) -> 47; rollback e597658 удалил эти 2 -> 45; последующий
+  // finished-online close fix удалил ещё 1 старый error-modal call -> 44.
+  // Существенный инвариант ниже не менялся ни на одном из этих шагов.
+  check('ровно 44 реальных call sites', realCalls.length === 44, 'найдено: ' + realCalls.length);
   const nonConforming = realCalls.filter(c => !/,\s*false\)$/.test(c));
-  check('ВСЕ 47 передают ровно ", false)" вторым/последним аргументом (двухкнопочный режим сегодня нигде не включён)',
+  check('ВСЕ 44 передают ровно ", false)" вторым/последним аргументом (двухкнопочный режим сегодня нигде не включён)',
     nonConforming.length === 0, JSON.stringify(nonConforming));
 }
 

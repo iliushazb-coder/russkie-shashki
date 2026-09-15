@@ -127,8 +127,11 @@ CLUSTER_FUNCS.forEach(function (fn) {
 console.log('');
 console.log('=== G. Cache-bust ===');
 check('G.1 HTML содержит shared/startup-cover-utils.js?v=1', /shared\/startup-cover-utils\.js\?v=1/.test(HTML));
-check('G.2 HTML содержит script.js?v=205 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersStartupCoverUtils)',
-    /script\.js\?v=205/.test(HTML));
+check('G.2 HTML содержит script.js с версией >= 205 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersStartupCoverUtils; конкретное число не фиксируем -- оно продолжит расти с будущими bump)',
+    (function () {
+        const m = /script\.js\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) >= 205;
+    })());
 check('G.3 HTML НЕ содержит старую script.js?v=204', !/script\.js\?v=204/.test(HTML));
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

@@ -118,7 +118,11 @@ console.log('=== F. Нет второй production-копии тел этих 17
 console.log('');
 console.log('=== G. Cache-bust ===');
 {
-  check('G.1 HTML содержит script.js?v=205', /script\.js\?v=205/.test(HTML));
+  check('G.1 HTML содержит script.js с версией >= 205 (историческая граница, точное число не фиксируем)',
+    (function () {
+        const m = /script\.js\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) >= 205;
+    })());
   check('G.2 HTML НЕ содержит старую script.js?v=199', !/script\.js\?v=199/.test(HTML));
   check('G.3 HTML содержит shared/game-engine.js?v=1', /shared\/game-engine\.js\?v=1/.test(HTML));
 }
