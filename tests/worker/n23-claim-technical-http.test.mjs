@@ -140,3 +140,47 @@ test("HTTP: POST /rated/claim-technical -- unauthenticated caller (invalid beare
     restore();
   }
 });
+
+// Перенесено из удалённого tests/worker/n23-claim-technical-diagnostic.test.mjs
+// как ЧИСТЫЙ HTTP-контракт (без какой-либо проверки diagnostic logging):
+// это единственное место, где покрыт early-return match_not_registered.
+test("HTTP: POST /rated/claim-technical -- match card missing/foreign for this room -> exactly HTTP 409 { ok:false, error:\"match_not_registered\" }", async () => {
+  const rtdb = createFakeRtdb(FIREBASE_DB_URL, () => 1_700_000_100_000);
+  rtdb.store.data = {
+    rooms: { ABC123: { ratedMatchId: MATCH_ID, status: "active" } },
+    // card существует, но принадлежит ДРУГОЙ комнате -> card.roomCode !== roomCode
+    matches: { [MATCH_ID]: Object.assign(cardWithParticipants(), { roomCode: "SOME_OTHER_ROOM" }) }
+  };
+  const restore = setupFakeGlobalFetch(rtdb, "tg_111");
+  try {
+    const request = makeRequest(
+      { roomCode: "ABC123", matchId: MATCH_ID, requestId: "http-mnr-1", reason: "disconnect" },
+      "fake-caller-token-long-enough-1234567890"
+    );
+    const response = await worker.default.fetch(request, env);
+    const data = await response.json();
+    assert.equal(response.status, 409);
+    assert.deepEqual(data, { ok: false, error: "match_not_registered" });
+    assert.equal(rtdb.store.data.ratedTerminal, undefined, "ничего не записано");
+  } finally {
+    restore();
+  }
+});
+
+test("HTTP: POST /rated/claim-technical -- no match card at all for this matchId -> the same 409 match_not_registered contract", async () => {
+  const rtdb = createFakeRtdb(FIREBASE_DB_URL, () => 1_700_000_100_000);
+  rtdb.store.data = { rooms: { ABC123: { ratedMatchId: MATCH_ID, status: "active" } } }; // matches отсутствует вовсе
+  const restore = setupFakeGlobalFetch(rtdb, "tg_111");
+  try {
+    const request = makeRequest(
+      { roomCode: "ABC123", matchId: MATCH_ID, requestId: "http-mnr-2", reason: "timeout" },
+      "fake-caller-token-long-enough-1234567890"
+    );
+    const response = await worker.default.fetch(request, env);
+    const data = await response.json();
+    assert.equal(response.status, 409);
+    assert.deepEqual(data, { ok: false, error: "match_not_registered" });
+  } finally {
+    restore();
+  }
+});
