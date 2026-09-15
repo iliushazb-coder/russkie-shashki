@@ -361,7 +361,7 @@
         "events": {
           "$seq": {
             ".write": "auth != null && auth.uid === 'srv_settlement' && !data.exists() && newData.exists() && (newData.child('type').val() === 'technical_result' || !root.child('ratedTerminal').child($matchId).exists())",
-            ".validate": "$seq.matches(/^[0-9]{6}$/) && !data.exists() && newData.exists() && newData.hasChildren(['requestId', 'type', 'actorUid', 'color', 'matchId', 'roomCode', 'createdAt', 'matchNumber', 'ts']) && newData.child('matchId').val() === $matchId && root.child('rooms').child(newData.child('roomCode').val()).child('ratedMatchId').val() === $matchId && !root.child('rooms').child(newData.child('roomCode').val()).hasChild('result')",
+            ".validate": "$seq.matches(/^[0-9]{6}$/) && !data.exists() && newData.exists() && newData.hasChildren(['requestId', 'type', 'actorUid', 'color', 'matchId', 'roomCode', 'createdAt', 'matchNumber', 'ts']) && newData.child('matchId').val() === $matchId && root.child('rooms').child(newData.child('roomCode').val()).child('ratedMatchId').val() === $matchId && !root.child('rooms').child(newData.child('roomCode').val()).hasChild('result') && ((newData.child('type').val() === 'technical_result' && newData.hasChildren(['winner','winReason']) && newData.child('actorUid').val() === 'srv_settlement') || (newData.child('type').val() !== 'technical_result' && !newData.hasChild('winner') && !newData.hasChild('winReason')))",
             "requestId": {
               ".validate": "newData.isString() && newData.val().matches(/^[a-zA-Z0-9_-]{1,64}$/)"
             },
@@ -398,6 +398,12 @@
             "offerSeq": {
               ".validate": "!newData.exists() || (newData.isString() && newData.val().matches(/^[0-9]{6}$/))"
             },
+            "winner": {
+              ".validate": "newData.parent().child('type').val() === 'technical_result' && newData.isString() && (newData.val() === 'light' || newData.val() === 'dark') && newData.val() === newData.parent().child('color').val()"
+            },
+            "winReason": {
+              ".validate": "newData.parent().child('type').val() === 'technical_result' && newData.isString() && (newData.val() === 'disconnect' || newData.val() === 'timeout')"
+            },
             "$other": {
               ".validate": false
             }
@@ -411,6 +417,7 @@
     },
     "ratedTerminal": {
       "$matchId": {
+        ".read": "auth != null && auth.uid === 'srv_settlement'",
         ".write": "auth != null && auth.uid === 'srv_settlement' && !data.exists() && newData.exists()",
         ".validate": "newData.hasChildren(['matchId','roomCode','source','kind','requestId','winnerId','loserId','seq','createdAt']) && newData.child('matchId').isString() && newData.child('roomCode').isString() && newData.child('source').isString() && newData.child('kind').isString() && newData.child('requestId').isString() && newData.child('winnerId').isString() && newData.child('loserId').isString() && newData.child('seq').val().matches(/^[0-9]{6}$/) && newData.child('createdAt').isNumber()"
       }

@@ -131,5 +131,193 @@ function timeoutContext(overrides) {
     ok(!ctx._events.some((e) => e[0] === "submitRatedTechnicalClaim"), "13. true unrated: НЕ вызывает Worker-путь");
 }
 
-console.log("\nИТОГ: " + passed + "/" + (passed + failed) + ", провалено: " + failed);
-process.exitCode = failed ? 1 : 0;
+
+// ============================================================
+// U-Y (№23 disconnect latch). checkOpponentAbsence() взводит
+// opponentAbsenceHandled сразу, как только rated claim ОТПРАВЛЕН (иначе
+// запрос уходил бы каждую секунду). Но при НЕ-окончательной ошибке
+// (db_read_failed/db_write_failed/сеть) исход попытки неизвестен, а latch
+// уже взведён -- и disconnect не пере-проверялся бы НИКОГДА до смены
+// комнаты. Legacy unrated-путь такой сброс уже имел: это была асимметрия.
+// ============================================================
+
+const asyncChecks = [];
+
+const srtcText = extractByLineAnchors("function submitRatedTechnicalClaim(", "function getOpponentAbsenceMs(");
+ok(!!srtcText, "U0. найден submitRatedTechnicalClaim целиком");
+
+const coaText = extractByLineAnchors("function checkOpponentAbsence(", "function getAuthoritativeAbsenceMs(");
+ok(!!coaText, "U1. найден checkOpponentAbsence целиком");
+
+// Durable pending-store с теми же семантиками, что в проде даёт связка
+// generateNonTurnRequestId + clearPendingRatedActionId: повторный вызов
+// ПЕРЕИСПОЛЬЗУЕТ сохранённый id, пока его явно не очистили.
+function claimContext(errorCode, resolveInstead) {
+    const events = [];
+    const pending = {};
+    const DEFINITIVE = ["stale_generation", "match_not_registered", "not_a_participant", "invalid_request_id"];
+    const ctx = {
+        opponentAbsenceHandled: true, // ровно как его уже взвёл checkOpponentAbsence()
+        myColor: "light",
+        roomCode: "ABC123",
+        currentState: { moveCount: 7 },
+        console: { log: function () {} },
+        generateNonTurnRequestId: function (color, type, moveCount, matchId) {
+            const key = matchId + "|" + type;
+            if (pending[key]) return pending[key];
+            pending[key] = color + "_" + type + "_" + moveCount + "_r" + (Object.keys(pending).length + 1);
+            return pending[key];
+        },
+        clearPendingRatedActionId: function (matchId, type) {
+            events.push(["clearPending", matchId, type]);
+            delete pending[matchId + "|" + type];
+        },
+        isDefinitiveRatedActionOutcome: function (error) {
+            return DEFINITIVE.indexOf(error && error.message) !== -1;
+        },
+        workerErrorCode: function (error) { return error && error.message; },
+        _events: events,
+        _pending: pending
+    };
+    ctx.callWorker = function (path, body) {
+        events.push(["callWorker", path, body.requestId, body.reason]);
+        return resolveInstead ? Promise.resolve({ ok: true }) : Promise.reject(new Error(errorCode));
+    };
+    return ctx;
+}
+
+function runClaim(ctx, reason, matchId) {
+    const fn = vm.runInNewContext("(function(){ " + srtcText + "\nreturn submitRatedTechnicalClaim; })()", ctx);
+    return fn(matchId, "dark", reason);
+}
+
+// checkOpponentAbsence() с уже пройденными absence/trust-условиями:
+// единственное, что решает исход -- состояние latch.
+function absenceTickContext(latch) {
+    const ctx = {
+        opponentAbsenceHandled: latch,
+        isSpectator: false,
+        isOnlineGame: true,
+        currentState: { presence: {} },
+        myColor: "light",
+        _wtr: 0,
+        getOpponentAbsenceMs: function () { return 999999; },
+        canTrustAbsenceForCleanup: function () { return true; },
+        RECONNECT_GRACE_MS: 60000,
+        console: { log: function () {} }
+    };
+    ctx.writeTechnicalResult = function () { ctx._wtr++; return true; };
+    return ctx;
+}
+
+function runAbsenceTick(ctx) {
+    const fn = vm.runInNewContext("(function(){ " + coaText + "\nreturn checkOpponentAbsence; })()", ctx);
+    fn();
+    return ctx._wtr;
+}
+
+// ---------- U: rated disconnect, НЕ-окончательная ошибка ----------
+{
+    const ctx = claimContext("db_read_failed");
+    asyncChecks.push(runClaim(ctx, "disconnect", "M1").then(function () {
+        ok(ctx.opponentAbsenceHandled === false,
+            "U2. rated disconnect + non-definitive error: opponentAbsenceHandled сброшен в false",
+            "получено: " + ctx.opponentAbsenceHandled);
+        ok(!ctx._events.some((e) => e[0] === "clearPending"),
+            "U3. rated disconnect + non-definitive error: pending requestId НЕ очищен");
+        ok(runAbsenceTick(absenceTickContext(ctx.opponentAbsenceHandled)) === 1,
+            "U4. со снятым latch следующий absence tick снова доходит до technical claim");
+
+        return runClaim(ctx, "disconnect", "M1").then(function () {
+            const calls = ctx._events.filter((e) => e[0] === "callWorker");
+            ok(calls.length === 2,
+                "U5. повторный claim действительно ушёл на /rated/claim-technical", "вызовов: " + calls.length);
+            ok(calls[0][2] === calls[1][2],
+                "U6. retry переиспользует ТОТ ЖЕ durable requestId, а не новый",
+                calls[0][2] + " vs " + calls[1][2]);
+        });
+    }).catch(function (e) {
+        ok(false, "U2-U6. непойманная ошибка в сценарии", e && e.message);
+    }));
+}
+
+// ---------- V: rated disconnect SUCCESS ----------
+{
+    const ctx = claimContext(null, true);
+    asyncChecks.push(runClaim(ctx, "disconnect", "M2").then(function () {
+        ok(ctx.opponentAbsenceHandled === true,
+            "V1. rated disconnect SUCCESS: opponentAbsenceHandled остаётся true (latch не снимается)",
+            "получено: " + ctx.opponentAbsenceHandled);
+        ok(ctx._events.some((e) => e[0] === "clearPending" && e[2] === "technical_disconnect"),
+            "V2. rated disconnect SUCCESS: pending requestId очищен");
+        ok(runAbsenceTick(absenceTickContext(ctx.opponentAbsenceHandled)) === 0,
+            "V3. при взведённом latch лишний disconnect claim до нового room-state не запускается");
+    }).catch(function (e) {
+        ok(false, "V1-V3. непойманная ошибка в сценарии", e && e.message);
+    }));
+}
+
+// ---------- W: rated disconnect, ОКОНЧАТЕЛЬНАЯ ошибка ----------
+{
+    const ctx = claimContext("stale_generation");
+    asyncChecks.push(runClaim(ctx, "disconnect", "M3").then(function () {
+        ok(ctx._events.some((e) => e[0] === "clearPending" && e[2] === "technical_disconnect"),
+            "W1. rated disconnect + definitive error: pending requestId очищен");
+        ok(ctx.opponentAbsenceHandled === true,
+            "W2. rated disconnect + definitive error: latch НЕ снимается",
+            "получено: " + ctx.opponentAbsenceHandled);
+        ok(runAbsenceTick(absenceTickContext(ctx.opponentAbsenceHandled)) === 0,
+            "W3. следующий секундный тик НЕ начинает request loop по терминальной ошибке");
+    }).catch(function (e) {
+        ok(false, "W1-W3. непойманная ошибка в сценарии", e && e.message);
+    }));
+}
+
+// ---------- X: TIMEOUT regression (правка обязана быть disconnect-specific) ----------
+{
+    const ctx = claimContext("db_read_failed");
+    asyncChecks.push(runClaim(ctx, "timeout", "M4").then(function () {
+        ok(ctx.opponentAbsenceHandled === true,
+            "X1. TIMEOUT + non-definitive error: opponentAbsenceHandled НЕ трогается",
+            "получено: " + ctx.opponentAbsenceHandled);
+        ok(!ctx._events.some((e) => e[0] === "clearPending"),
+            "X2. TIMEOUT + non-definitive error: pending requestId не очищен (как было)");
+        const calls = ctx._events.filter((e) => e[0] === "callWorker");
+        ok(calls.length === 1 && calls[0][1] === "/rated/claim-technical" && calls[0][3] === "timeout",
+            "X3. TIMEOUT по-прежнему уходит своим существующим путём");
+    }).catch(function (e) {
+        ok(false, "X1-X3. непойманная ошибка в сценарии", e && e.message);
+    }));
+}
+
+{
+    const ctx = claimContext("stale_generation");
+    asyncChecks.push(runClaim(ctx, "timeout", "M5").then(function () {
+        ok(ctx._events.some((e) => e[0] === "clearPending" && e[2] === "technical_timeout"),
+            "X4. TIMEOUT + definitive error: pending очищается ровно как прежде");
+        ok(ctx.opponentAbsenceHandled === true,
+            "X5. TIMEOUT + definitive error: disconnect latch не вмешивается");
+    }).catch(function (e) {
+        ok(false, "X4-X5. непойманная ошибка в сценарии", e && e.message);
+    }));
+}
+
+// ---------- Y: legacy / unrated disconnect regression ----------
+{
+    const ctx = baseContext({ currentState: baseContext().currentState }); // без ratedMatchId
+    const fn = vm.runInNewContext("(function(){ " + wtrText + "\nreturn writeTechnicalResult; })()", ctx);
+    const res = fn("dark");
+    ok(res === true, "Y1. legacy unrated disconnect: writeTechnicalResult по-прежнему возвращает true");
+    ok(ctx._events.some((e) => e[0] === "directWrite"),
+        "Y2. legacy unrated disconnect: прямая запись в комнату сохранена (regression)");
+    ok(!ctx._events.some((e) => e[0] === "submitRatedTechnicalClaim"),
+        "Y3. legacy unrated disconnect: Worker-путь НЕ используется");
+}
+
+ok(/opponentAbsenceHandled = false;/.test(wtrText),
+    "Y4. legacy unrated catch по-прежнему сам сбрасывает latch (ветка не тронута, симметрия сохранена)");
+
+Promise.all(asyncChecks).then(function () {
+    console.log("\nИТОГ: " + passed + "/" + (passed + failed) + ", провалено: " + failed);
+    process.exitCode = failed ? 1 : 0;
+});

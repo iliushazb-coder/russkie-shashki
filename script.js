@@ -1866,11 +1866,30 @@ function submitRatedTechnicalClaim(matchId, loserColorHint, reason) {
     }).then(function () {
         clearPendingRatedActionId(matchId, "technical_" + reason);
     }).catch(function (error) {
-        // technical_evidence_insufficient/stale_generation -- штатные отказы
-        // (соперник успел вернуться, генерация сменилась); не считаем их
-        // окончательными для requestId, естественный повторный вызов при
-        // следующем срабатывании локальных условий переиспользует тот же id.
-        if (isDefinitiveRatedActionOutcome(error)) clearPendingRatedActionId(matchId, "technical_" + reason);
+        // Definitive-ошибка очищает durable requestId. При любой другой
+        // ошибке requestId сохраняется; для disconnect также снимаем локальный
+        // latch, чтобы следующий обычный absence tick мог повторить тот же id.
+        const definitive = isDefinitiveRatedActionOutcome(error);
+
+        if (definitive) {
+            clearPendingRatedActionId(matchId, "technical_" + reason);
+        } else if (reason === "disconnect") {
+            // checkOpponentAbsence() взводит opponentAbsenceHandled сразу, как
+            // только claim ОТПРАВЛЕН -- иначе одна и та же партия слала бы
+            // запрос каждую секунду. Но при НЕ-окончательной ошибке
+            // (db_read_failed/db_write_failed/сеть/неизвестный код) исход
+            // попытки неизвестен, а latch уже взведён -- и disconnect больше
+            // не пере-проверялся бы НИКОГДА до смены комнаты. Снимаем latch:
+            // следующий обычный тик checkOpponentAbsence() заново пройдёт ВСЕ
+            // существующие safety/evidence проверки, а pending requestId
+            // намеренно НЕ очищается, поэтому это идемпотентный retry той же
+            // попытки, а не новая. Для definitive-ошибок latch НЕ снимаем --
+            // терминальная семантическая ошибка не должна превращаться в
+            // бесконечный посекундный запрос. Legacy unrated-путь имеет
+            // собственный симметричный сброс в writeTechnicalResult().
+            opponentAbsenceHandled = false;
+        }
+
         console.log("Rated technical claim failed:", workerErrorCode(error));
     });
 }
