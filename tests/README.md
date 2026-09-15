@@ -134,11 +134,18 @@ runner тоже не входят и запускаются своими ком�
 npm run test:rules
 ```
 
-Правила лежат в репозитории: `firebase/database.rules.json`. Наборы
-`tests/firebase-rules/database.rules.test.mjs` и
-`rated-events.rules.test.mjs` прогоняются против **настоящего**
-Database Emulator через `@firebase/rules-unit-testing`, а не против
-мока.
+Правила лежат в репозитории: `firebase/database.rules.json`. Команда
+запускает все `tests/firebase-rules/*.rules.test.mjs` против
+**настоящего** Database Emulator через `@firebase/rules-unit-testing`,
+а не против мока. Сейчас под этот glob попадают четыре набора:
+
+- `database.rules.test.mjs`
+- `rated-events.rules.test.mjs`
+- `rated-draw-pin.rules.test.mjs`
+- `rated-registration.rules.test.mjs`
+
+(`n23-terminal-design.rules.test.js` в этот glob не входит — это `.js`,
+а не `.mjs`.)
 
 Важно различать два уровня:
 
@@ -160,11 +167,8 @@ node --test tests/worker/*.test.mjs
 Покрывают rated-replay, приём событий, обновление имени в таблице
 лидеров, fail-closed и backoff App Check, лимит размера тела запроса.
 
-> **CI coverage note.** `backend.yml` сейчас вызывает Worker-наборы
-> явным списком — только `worker-unit.test.mjs` и
-> `rated-replay-unit.test.mjs`. Остальные файлы в `tests/worker/`
-> в этот workflow пока не подключены, и до отдельной правки workflow
-> их нужно прогонять локально командой выше.
+Backend CI запускает весь этот набор: `node --test tests/worker/*.test.mjs`
+(см. раздел «CI»).
 
 ## CI
 
@@ -180,16 +184,15 @@ node --test tests/worker/*.test.mjs
 
 ```bash
 node --check worker/index.mjs
-node --test tests/worker/worker-unit.test.mjs tests/worker/rated-replay-unit.test.mjs
+node --test tests/worker/*.test.mjs
 node tests/settlement-behavior.test.js
 npm run test:rules
 ```
 
-Обратите внимание на вторую строку: это **не** тот же набор, что
-локальная команда `node --test tests/worker/*.test.mjs` — CI перечисляет
-два файла поимённо (см. заметку в разделе «Worker»). Третья строка
-дублирует settlement, который уже входит в `npm test` через
-`tests/run.js`.
+Вторая строка — тот же набор, что и локальная команда
+`node --test tests/worker/*.test.mjs` из раздела «Worker», без
+расхождений. Третья строка дублирует settlement, который уже входит
+в `npm test` через `tests/run.js`.
 
 ## Проверка, что тест не «пустой»
 
