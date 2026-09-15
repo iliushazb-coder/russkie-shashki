@@ -5,9 +5,9 @@
 # в Cloudflare Secrets и в репозиторий не попадают никогда.
 # Локально они задаются через .dev.vars; этот файл покрыт .gitignore.
 #
-# Актуальное production-состояние после deploy 2026-09-11 зафиксировано в
+# Актуальное production-состояние после deploy 2026-09-15 зафиксировано в
 # worker/PRODUCTION.md. Активная production Version ID:
-# db07d6a5-4067-4ac2-a2e7-d4b827e93218.
+# 455b5258-dc40-4ac3-8023-da6c62a5e353.
 # Фактический production compatibility_date подтверждён как 2026-08-30.
 #
 # compatibility_date НАМЕРЕННО НЕ добавлен в этот файл в рамках документационной
