@@ -172,8 +172,16 @@ console.log('\n=== 9. ПЕРЕВОДЫ И CACHE-BUST ===');
         check('9.x ' + k + ' есть в трёх языках',
             (SRC.match(new RegExp(k + ':', 'g')) || []).length === 3);
     });
-check('9.y cache-bust поднят', /script\.js\?v=205/.test(HTML));
-check('9.z стили тоже', /style\.css\?v=20/.test(HTML));
+check('9.y cache-bust поднят (script.js версия >= 205; конкретное число не фиксируем -- оно растёт с будущими bump)',
+    (function () {
+        const m = /script\.js\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) >= 205;
+    })());
+check('9.z стили тоже (style.css версия >= 20)',
+    (function () {
+        const m = /style\.css\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) >= 20;
+    })());
 check('9.w элемент изменения рейтинга есть', /id="end-game-rating"/.test(HTML));
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

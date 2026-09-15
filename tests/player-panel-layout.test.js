@@ -286,8 +286,16 @@ console.log('\n=== 8. МЕСТО В РЕЙТИНГЕ И CACHE-BUST ===');
 check('8.1 места в панели нет', !/id="player-(top|bottom)-rank"/.test(HTML));
 check('8.2 место только в статистике',
     (SRC.match(/t\("stats_your_rank"\)/g) || []).length === 1);
-check('8.3 скрипт поднят', /script\.js\?v=205/.test(HTML));
-check('8.4 стили подняты', /style\.css\?v=20/.test(HTML));
+check('8.3 скрипт поднят (script.js версия >= 205)',
+    (function () {
+        const m = /script\.js\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) >= 205;
+    })());
+check('8.4 стили подняты (style.css версия >= 20)',
+    (function () {
+        const m = /style\.css\?v=(\d+)/.exec(HTML);
+        return !!m && parseInt(m[1], 10) >= 20;
+    })());
 check('8.5 старых ссылок нет',
     !/script\.js\?v=195/.test(HTML) && !/style\.css\?v=16/.test(HTML));
 
