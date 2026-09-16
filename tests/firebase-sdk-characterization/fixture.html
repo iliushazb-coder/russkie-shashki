@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>firebase-sdk-characterization fixture</title>
+</head>
+<body>
+<!--
+  This fixture loads nothing but the four Firebase compat bundles, in the
+  exact same order and via the exact same CDN path production's index.html
+  uses (app -> database -> auth -> app-check), for whichever version is
+  given as ?sdkVersion=X.Y.Z. It carries no application logic of its own:
+  all Auth/RTDB/App Check checks live in characterization.test.js and are
+  injected via Playwright's page.evaluate() against the real `firebase`
+  global this fixture produces.
+
+  Scripts are requested strictly sequentially (each waits for the previous
+  one's onload) rather than in parallel, because later compat bundles
+  extend the global `firebase` object the first bundle creates -- loading
+  out of order or in parallel is exactly the failure mode this suite exists
+  to catch (see README.md, "10.13 global-scope check").
+-->
+<script>
+  (function () {
+    var params = new URLSearchParams(location.search);
+    var version = params.get('sdkVersion');
+    if (!version) {
+      window.__fixtureLoadError = 'missing required ?sdkVersion= query parameter';
+      return;
+    }
+
+    // Exact production load order from index.html.
+    var bundles = [
+      'firebase-app-compat.js',
+      'firebase-database-compat.js',
+      'firebase-auth-compat.js',
+      'firebase-app-check-compat.js'
+    ];
+
+    function loadNext(i) {
+      if (i >= bundles.length) {
+        window.__fixtureReady = true;
+        return;
+      }
+      var s = document.createElement('script');
+      s.src = 'https://www.gstatic.com/firebasejs/' + version + '/' + bundles[i];
+      s.onload = function () {
+        loadNext(i + 1);
+      };
+      s.onerror = function () {
+        window.__fixtureLoadError = 'failed to load ' + bundles[i] + ' at version ' + version;
+      };
+      document.head.appendChild(s);
+    }
+
+    loadNext(0);
+  })();
+</script>
+</body>
+</html>
