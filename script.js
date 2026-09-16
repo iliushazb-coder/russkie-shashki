@@ -954,11 +954,42 @@ let isSpectator = false;
 // Используем chat_instance для определения группы при открытии по прямой ссылке
 const GROUP_ID = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.chat_instance != null) ? Telegram.WebApp.initDataUnsafe.chat_instance.toString() : "private_chat";
 
+// КОД КОМНАТЫ — ЭТО СЕКРЕТ ПРИГЛАШЕНИЯ, А НЕ ПРОСТО ИДЕНТИФИКАТОР.
+//
+// После закрытия публичного перечисления /rooms (Rules: чтение ветки
+// только lobby-запросом по active) приватность комнаты «Играть с другом»
+// держится ровно на одном: угадать её код практически невозможно. То есть
+// код стал capability, и генерировать его прежним способом нельзя было.
+//
+// Было: 6 символов из 36-символьного алфавита через Math.random() —
+// 36^6 ≈ 2.18e9, около 31 бита, и источник не криптографический.
+// Стало: 12 байт из crypto.getRandomValues → 24 символа uppercase HEX,
+// ровно 96 бит случайности из CSPRNG.
+//
+// FAIL CLOSED: никакого отката на Math.random(). Если secure RNG
+// недоступен, функция бросает, и комната просто не создаётся — это
+// заметный отказ вместо тихо предсказуемого кода. Практически
+// недостижимо: getRandomValues есть во всех браузерах с Telegram WebApp,
+// а страница отдаётся только по https (secure context).
+//
+// СТАРЫЕ КОДЫ НЕ ЛОМАЮТСЯ: длина/формат кода нигде не валидируются —
+// checkForInviteLink() присваивает start_param как есть, — поэтому
+// существующие 6-символьные комнаты и ссылки на них продолжают работать,
+// пока такие комнаты живы.
 function generateRoomCode() {
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const rng = (typeof globalThis !== "undefined" && globalThis.crypto)
+        || (typeof window !== "undefined" && window.crypto)
+        || null;
+    if (!rng || typeof rng.getRandomValues !== "function") {
+        throw new Error("secure_rng_unavailable");
+    }
+    const bytes = new Uint8Array(12);
+    rng.getRandomValues(bytes);
     let code = "";
-    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
-    return code;
+    for (let i = 0; i < bytes.length; i++) {
+        code += bytes[i].toString(16).padStart(2, "0");
+    }
+    return code.toUpperCase();
 }
 
 // №42-B1: общий helper для локально-управляемых confirm-диалогов (никакой
@@ -9149,7 +9180,18 @@ function showGroupLobby() {
     // child_added/child_changed/child_removed вместо единого value —
     // каждое событие несёт снимок ТОЛЬКО одной изменившейся комнаты, а не
     // всей коллекции rooms целиком (подтверждено документацией Firebase).
-    groupLobbyListener = database.ref("rooms");
+    // ACTIVE-ONLY ПО ПРАВИЛАМ, НЕ ПО ВКУСУ. Ветка /rooms читается только
+    // запросом orderByChild('status').equalTo('active') -- нефильтрованное
+    // чтение Rules отклоняют. Причина в security, а не в трафике: раньше
+    // /rooms читался публично целиком, поэтому код приватной waiting-комнаты
+    // «Играть с другом» мог прочитать кто угодно прямо из RTDB, в обход
+    // интерфейса, и занять место приглашённого друга легитимным join'ом.
+    // Скрытие waiting-комнаты в рендере (v183 №1) закрывало только показ,
+    // но не сам доступ к коду.
+    //
+    // На видимый состав лобби это не влияет: список и раньше показывал
+    // только active-комнаты -- см. tests/invite-privacy.test.js.
+    groupLobbyListener = database.ref("rooms").orderByChild("status").equalTo("active");
 
     groupLobbyListener.on("child_added", function (snapshot) {
         const code = snapshot.key;
