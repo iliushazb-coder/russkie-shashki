@@ -3,7 +3,7 @@
     ".read": false,
     ".write": false,
     "stats": {
-      ".read": true,
+      ".read": "auth != null",
       ".indexOn": [
         "rating"
       ],
@@ -67,7 +67,7 @@
       }
     },
     "statsBot": {
-      ".read": true,
+      ".read": "auth != null",
       "$uid": {
         ".write": "auth != null && auth.uid === $uid && newData.exists() && newData.hasChildren(['wins', 'losses', 'name'])",
         "wins": {

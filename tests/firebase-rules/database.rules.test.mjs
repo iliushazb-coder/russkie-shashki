@@ -164,8 +164,20 @@ test("root: unauthenticated read stays denied", async () => {
   await assertFails(get(ref(databaseFor(), "/")));
 });
 
-test("stats: public leaderboard read is allowed", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "stats")));
+// SECURITY FIX (finding A). Раньше тест назывался "public leaderboard read
+// is allowed" и утверждал, что таблицу лидеров может прочитать кто угодно
+// без аутентификации. Ветка /stats ключуется как tg_<telegram_id>, поэтому
+// анонимное чтение выдавало всем желающим связку Telegram ID + имя +
+// рейтинг по ВСЕМ игрокам. Теперь чтение требует Firebase-аутентификации,
+// и тест закрепляет новое поведение вместо старого.
+test("stats: bulk read by an unauthenticated caller is denied", async () => {
+  await assertFails(get(ref(databaseFor(), "stats")));
+});
+
+test("stats: bulk read by an authenticated caller is allowed", async () => {
+  // Таблица лидеров обязана остаться рабочей внутри Telegram: клиент к
+  // моменту открытия статистики всегда аутентифицирован.
+  await assertSucceeds(get(ref(databaseFor("alice"), "stats")));
 });
 
 test("stats: settlement identity can create a full node", async () => {
@@ -186,8 +198,8 @@ test("stats: settlement identity can apply atomic root increments", async () => 
     "stats/tg_1002/losses": increment(1)
   }));
 
-  const light = await get(ref(databaseFor(), "stats/tg_1001"));
-  const dark = await get(ref(databaseFor(), "stats/tg_1002"));
+  const light = await get(ref(databaseFor("alice"), "stats/tg_1001"));
+  const dark = await get(ref(databaseFor("alice"), "stats/tg_1002"));
   assert.equal(light.child("rating").val(), 1216);
   assert.equal(light.child("wins").val(), 3);
   assert.equal(dark.child("rating").val(), 1184);
@@ -220,7 +232,7 @@ test("stats: srv_settlement can apply a TARGETED name-only update on already-exi
   await assertSucceeds(update(ref(databaseFor("srv_settlement"), "/"), {
     "stats/tg_1001/name": "NewName"
   }));
-  const after = await get(ref(databaseFor(), "stats/tg_1001"));
+  const after = await get(ref(databaseFor("alice"), "stats/tg_1001"));
   const val = after.val();
   assert.equal(val.name, "NewName");
   assert.equal(val.rating, 1216, "rating не должен измениться от targeted name-only записи");
@@ -272,9 +284,17 @@ test("stats: deletion is denied for settlement identity", async () => {
   await assertFails(remove(ref(databaseFor("srv_settlement"), "stats/tg_1001")));
 });
 
-test("statsBot: public leaderboard read is allowed", async () => {
+// SECURITY FIX (finding A) — та же правка, что для /stats выше. Ветка
+// /statsBot ключуется тем же tg_<telegram_id>, поэтому анонимное чтение
+// выдавало ту же связку Telegram ID + имя по всем игрокам против бота.
+test("statsBot: bulk read by an unauthenticated caller is denied", async () => {
   await seed("statsBot/alice", statsBot());
-  await assertSucceeds(get(ref(databaseFor(), "statsBot")));
+  await assertFails(get(ref(databaseFor(), "statsBot")));
+});
+
+test("statsBot: bulk read by an authenticated caller is allowed", async () => {
+  await seed("statsBot/alice", statsBot());
+  await assertSucceeds(get(ref(databaseFor("bob"), "statsBot")));
 });
 
 test("statsBot: owner can create own node", async () => {
@@ -388,8 +408,8 @@ test("eloMatches: atomic root PATCH creates the receipt and updates both stats n
     "stats/bob/losses": increment(1)
   }));
 
-  const light = await get(ref(databaseFor(), "stats/alice"));
-  const dark = await get(ref(databaseFor(), "stats/bob"));
+  const light = await get(ref(databaseFor("alice"), "stats/alice"));
+  const dark = await get(ref(databaseFor("alice"), "stats/bob"));
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const raw = await get(ref(context.database(), "eloMatches/match-1"));
     assert.equal(raw.exists(), true);
