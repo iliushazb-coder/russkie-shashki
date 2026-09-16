@@ -8,6 +8,7 @@ import {
   initializeTestEnvironment
 } from "@firebase/rules-unit-testing";
 import {
+  equalTo,
   get,
   increment,
   limitToLast,
@@ -437,8 +438,137 @@ test("matchIndex: only settlement identity can read", async () => {
   await assertSucceeds(get(ref(databaseFor("srv_settlement"), "matchIndex/ROOM1")));
 });
 
-test("rooms: public read is allowed", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "rooms")));
+// SECURITY FIX (см. группу "rooms: lobby read policy" ниже). Раньше этот
+// тест назывался "public read is allowed" и утверждал, что неаутентифи-
+// цированный клиент может прочитать всю ветку /rooms. Именно это и было
+// дырой: код приватной waiting-комнаты «Играть с другом» вычитывался
+// напрямую из RTDB в обход интерфейса, после чего посторонний занимал
+// место приглашённого друга обычным легитимным join'ом. Теперь /rooms
+// читается ТОЛЬКО lobby-запросом по active, и тест закрепляет новое
+// поведение вместо старого.
+test("rooms: unfiltered read by an unauthenticated caller is denied", async () => {
+  await assertFails(get(ref(databaseFor(), "rooms")));
+});
+
+// ---------- rooms: lobby read policy ----------
+//
+// Дыра, которую закрывает эта группа: /rooms читался публично целиком
+// (".read": true). Приватность комнаты «Играть с другом» держалась только
+// на том, что её код не показывают в лобби -- но код вычитывался напрямую
+// из RTDB, и посторонний занимал место приглашённого друга ЛЕГИТИМНЫМ
+// join'ом, который Rules обязаны разрешать (код комнаты и есть capability).
+// Поэтому чинится не join, а утечка кода: перечисление ветки запрещено,
+// остаётся lobby-запрос по active и прямое чтение по известному коду.
+
+test("rooms: unfiltered enumeration by an authenticated caller is denied too", async () => {
+  // Аутентификация сама по себе НЕ даёт права перечислить ветку: иначе
+  // любой игрок по-прежнему собирал бы коды всех приватных комнат.
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(get(ref(databaseFor("mallory"), "rooms")));
+});
+
+test("rooms: the authenticated active-only lobby query is allowed", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(get(query(
+    ref(databaseFor("alice"), "rooms"),
+    orderByChild("status"),
+    equalTo("active")
+  )));
+});
+
+test("rooms: the active-only lobby query is denied without authentication", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertFails(get(query(
+    ref(databaseFor(), "rooms"),
+    orderByChild("status"),
+    equalTo("active")
+  )));
+});
+
+test("rooms: a waiting room does not appear in the active-only lobby query", async () => {
+  // Суть фикса: код приватной комнаты не доходит до постороннего вообще.
+  await seed("rooms/WAITING1", room({ status: "waiting", dark: false }));
+  await seed("rooms/ACTIVE1", room());
+  const snap = await get(query(
+    ref(databaseFor("mallory"), "rooms"),
+    orderByChild("status"),
+    equalTo("active")
+  ));
+  assert.equal(snap.child("ACTIVE1").exists(), true);
+  assert.equal(snap.child("WAITING1").exists(), false);
+});
+
+test("rooms: a waiting room becomes visible to the lobby query once it turns active", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await seed("rooms/ROOM1/players/dark", { id: "bob", name: "Bob" });
+  await seed("rooms/ROOM1/status", "active");
+  const snap = await get(query(
+    ref(databaseFor("carol"), "rooms"),
+    orderByChild("status"),
+    equalTo("active")
+  ));
+  assert.equal(snap.child("ROOM1").exists(), true);
+});
+
+test("rooms: a finished room drops out of the lobby query", async () => {
+  await seed("rooms/ROOM1", room());
+  await seed("rooms/ROOM1/status", "finished");
+  const snap = await get(query(
+    ref(databaseFor("carol"), "rooms"),
+    orderByChild("status"),
+    equalTo("active")
+  ));
+  assert.equal(snap.child("ROOM1").exists(), false);
+});
+
+test("rooms: an authenticated caller can still read a single room by its known code", async () => {
+  // Deep-link по invite-ссылке обязан работать: получатель ссылки знает код.
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertSucceeds(get(ref(databaseFor("bob"), "rooms/ROOM1")));
+});
+
+test("rooms: an unauthenticated caller cannot read a single room even knowing the code", async () => {
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(get(ref(databaseFor(), "rooms/ROOM1")));
+});
+
+test("rooms: a spectator can still read the active room they picked", async () => {
+  await seed("rooms/ROOM1", room());
+  await assertSucceeds(get(ref(databaseFor("carol"), "rooms/ROOM1")));
+});
+
+test("rooms: the production-shaped invite join by known code still works after the read-policy change", async () => {
+  // Регресс-страховка: фикс меняет ТОЛЬКО чтение. Право join'а по
+  // известному коду -- это и есть задуманная механика приглашения, и она
+  // обязана остаться рабочей.
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertSucceeds(update(ref(databaseFor("bob"), "rooms/ROOM1"), {
+    "players/dark": { id: "bob", name: "Bob" },
+    status: "active",
+    turnStartedAt: Date.now()
+  }));
+});
+
+test("rooms: BASELINE — an outsider cannot delete a waiting room (lobby stale-sweep has never been able to)", async () => {
+  // Зафиксированный baseline, а не новое поведение. runLobbyStaleSweep()
+  // на клиенте пытается удалять протухшие waiting-комнаты, но ветка
+  // удаления в $room/.write требует auth.uid === players/light|dark/id,
+  // поэтому у ПОСТОРОННЕГО этот путь и сегодня отклоняется. Значит
+  // active-only query ничего рабочего не отнимает: она убирает из кеша
+  // лобби комнаты, удалить которые посторонний всё равно не мог.
+  await seed("rooms/ROOM1", room({ status: "waiting", dark: false }));
+  await assertFails(remove(ref(databaseFor("mallory"), "rooms/ROOM1")));
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const stillThere = await get(ref(context.database(), "rooms/ROOM1"));
+    assert.equal(stillThere.exists(), true);
+  });
+});
+
+test("rooms: BASELINE — an outsider cannot delete another user's rooms index entry either", async () => {
+  // Вторая запись того же sweep-пути: users/<lightId>/rooms/<code>.
+  // Удаление требует auth.uid === $uid, то есть посторонний не может и её.
+  await seed("users/alice/rooms/ROOM1", true);
+  await assertFails(remove(ref(databaseFor("mallory"), "users/alice/rooms/ROOM1")));
 });
 
 test("rooms: a valid waiting room can be created", async () => {

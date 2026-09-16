@@ -35,6 +35,7 @@ const FILES = [
   ['P. LOBBY RENDER / ЭКРАНИРОВАНИЕ КЛЮЧА (S-1)', 'lobby-render.test.js'],
   ['Q. ENGINE GUARDS: ход назад + турецкий удар (T-1)', 'engine-guards.test.js'],
   ['R. ПРИВАТНОСТЬ ПРИГЛАШЕНИЯ (BUG №1)', 'invite-privacy.test.js'],
+  ['R2. КОД КОМНАТЫ КАК СЕКРЕТ ПРИГЛАШЕНИЯ', 'room-code-entropy.test.js'],
   ['S. BOTH-OFFLINE 60s + ЗАКРЫТИЕ ПУТЕЙ ВОСКРЕШЕНИЯ (v184)', 'both-offline-abandoned.test.js'],
   ['T. CLOCK SAFETY — серверное время вместо часов телефона', 'clock-safety.test.js'],
   ['U. ТАБЛИЦА СТАТИСТИКИ — ВСЕ ИГРОКИ В ОБЕИХ ВКЛАДКАХ', 'leaderboard-all-players.test.js'],
