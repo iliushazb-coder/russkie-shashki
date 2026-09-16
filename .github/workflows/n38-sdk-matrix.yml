@@ -1,0 +1,95 @@
+# ВРЕМЕННЫЙ workflow для frozen MASTER PLAN #38.
+#
+# Существующие workflow новую сюиту не запускают: она не зарегистрирована
+# в tests/run.js, browser.yml гоняет только npm run test:browser, а
+# backend.yml -- только tests/worker/*.test.mjs. Этот workflow нужен, чтобы
+# получить настоящий PASS/FAIL матрицы 10.7.1/10.14.1 x chromium/webkit до
+# принятия решения по index.html.
+#
+# УДАЛИТЬ после того, как матрица отработает и решение принято.
+#
+# Java нужна Firebase Emulator'у (Auth + Database) -- он запускается из JAR.
+# Версия и action взяты те же, что в backend.yml (temurin 21, setup-java@v5),
+# чтобы среда эмулятора совпадала с уже работающим прогоном Rules.
+name: n38-sdk-matrix
+
+on:
+  push:
+    branches: ['test/n38-firebase-sdk-characterization-20260916']
+  workflow_dispatch:
+
+# Диагностический workflow ничего не пишет в репозиторий: только читает
+# код и выкладывает артефакт. Read-only токен -- минимум, которого ему
+# достаточно.
+permissions:
+  contents: read
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+        with:
+          # Не оставлять git-credentials в .git/config для последующих
+          # шагов: этому workflow push не нужен вообще.
+          persist-credentials: false
+
+      - name: Поставить Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Поставить Java для Firebase Emulator
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Зависимости
+        run: npm ci
+
+      - name: Поставить браузерные движки
+        run: npx playwright install --with-deps chromium webkit
+
+      # Матрица намеренно НЕ валит шаг сразу: итоговый JSON нужен как
+      # артефакт и при FAIL тоже, иначе диагностировать будет нечем.
+      # Настоящий exit code проверяется отдельным шагом ниже.
+      - name: Прогнать матрицу 10.7.1 / 10.14.1 x chromium / webkit
+        id: run_matrix
+        run: |
+          set +e
+          node tests/firebase-sdk-characterization/run-matrix.mjs \
+            --baseline 10.7.1 --candidate 10.14.1 \
+            > matrix-result.json 2> matrix-progress.log
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "=== exit code: $code ==="
+          echo "=== progress ==="
+          cat matrix-progress.log || true
+          echo "=== matrix-result.json ==="
+          cat matrix-result.json || true
+          exit 0
+
+      - name: Сохранить результат матрицы
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: n38-sdk-matrix-result
+          path: |
+            matrix-result.json
+            matrix-progress.log
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Итог матрицы
+        if: always()
+        run: |
+          if [ "${{ steps.run_matrix.outputs.exit_code }}" != "0" ]; then
+            echo "Матрица завершилась с кодом ${{ steps.run_matrix.outputs.exit_code }}"
+            exit 1
+          fi
+          echo "Матрица прошла: все 4 комбинации PASS"
