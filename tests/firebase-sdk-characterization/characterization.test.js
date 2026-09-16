@@ -60,6 +60,57 @@ const SDK_BUNDLES = [
   'firebase-app-check-compat.js',
 ];
 
+// ---------------------------------------------------------------------
+// Known-blocked, not a violation
+//
+// On WebKit, firebase-auth-compat's popup/redirect resolver eagerly
+// bootstraps the GAPI iframe loader during sign-in, even though this
+// suite only ever calls signInWithCustomToken and never opens a popup.
+// That fires exactly one request to the GAPI loader. The request is
+// still physically blocked -- nothing reaches Google -- but treating it
+// as an unexpected violation produced a FAIL that said nothing about the
+// SDK.
+//
+// The exception is scoped as narrowly as the observation that justifies
+// it, on three axes:
+//
+//   engine -- only webkit. The behaviour was observed on WebKit only;
+//             Chromium made no such request in either version, so the
+//             same URL on Chromium stays a violation. A new resolver
+//             behaviour appearing on Chromium is a finding, not a
+//             footnote.
+//   count  -- only the first match per run. Exactly one such request was
+//             observed per WebKit run; a second would be new behaviour,
+//             so it falls through to networkViolations.
+//   shape  -- exact, as a raw string. The full request URL must equal
+//             https://apis.google.com/js/api.js?onload=__iframefcb<n>
+//             character for character, where <n> is 0 or a 1-6 digit
+//             number with no leading zero -- exactly what
+//             String(Math.floor(Math.random() * 1000000)) can produce in
+//             both versions.
+//
+//             Deliberately NOT parsed with new URL(): parsing normalises
+//             away differences that were never observed. ":443",
+//             "/js/../js/api.js", "/./js/api.js" and an upper-case host
+//             all collapse into the canonical form, so a parsed matcher
+//             would accept request shapes this suite has no evidence
+//             for. Comparing the raw string accepts the one observed
+//             form and nothing else; percent-encoding, credentials,
+//             extra or re-ordered parameters, a fragment, and leading
+//             zeros are all excluded by construction rather than by
+//             separate checks.
+//
+// A host-level allowlist would wave through any apis.google.com URL --
+// an OAuth token endpoint, a userinfo call -- which is precisely what
+// this suite exists to prove does not happen.
+// ---------------------------------------------------------------------
+const GAPI_IFRAME_LOADER_URL =
+  /^https:\/\/apis\.google\.com\/js\/api\.js\?onload=__iframefcb(?:0|[1-9]\d{0,5})$/;
+
+function matchesGapiIframeLoader(rawUrl, method) {
+  return method === 'GET' && GAPI_IFRAME_LOADER_URL.test(rawUrl);
+}
+
 if (!SDK_VERSION) {
   console.error('SDK_VERSION env var is required, e.g. SDK_VERSION=10.7.1');
   process.exit(2);
@@ -328,6 +379,7 @@ function emitReport(report) {
 async function main() {
   const startedAt = new Date().toISOString();
   const networkViolations = [];
+  const expectedBlocked = [];
   const pageErrors = [];
   let fixtureServer;
   let browser;
@@ -345,6 +397,7 @@ async function main() {
         finishedAt: new Date().toISOString(),
         fatalError: 'suite timed out after ' + SUITE_TIMEOUT_MS + 'ms',
         networkViolations: networkViolations,
+        expectedBlocked: expectedBlocked,
         pageErrors: pageErrors,
         passed: false,
       });
@@ -371,23 +424,38 @@ async function main() {
     browser = await launcher.launch();
     const context = await browser.newContext();
 
-    // Network guard: allow exactly the four pinned SDK bundle URLs for
-    // the version under test, plus local emulator/fixture traffic.
-    // Anything else -- including any other path or version on gstatic --
-    // is recorded as a violation and aborted, and any violation fails the
-    // suite.
+    // Network guard. Three outcomes, never two:
+    //
+    //   continue  -- the four pinned SDK bundle URLs for the version under
+    //                test, plus local emulator/fixture traffic.
+    //   block+expected -- the FIRST matching GAPI iframe-loader request,
+    //                on webkit only (see matchesGapiIframeLoader above).
+    //                Still physically blocked; recorded separately; does
+    //                not fail the suite.
+    //   block+violation -- everything else, including any other path or
+    //                version on gstatic and any other Google URL. Fails
+    //                the suite.
     const allowedSdkUrls = new Set(
       SDK_BUNDLES.map((b) => 'https://www.gstatic.com/firebasejs/' + SDK_VERSION + '/' + b)
     );
     const localPattern = /^(https?|wss?):\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/;
     await context.route('**/*', function (route) {
-      const url = route.request().url();
+      const request = route.request();
+      const url = request.url();
       if (allowedSdkUrls.has(url) || localPattern.test(url)) {
         route.continue();
-      } else {
-        networkViolations.push({ url: url, method: route.request().method() });
-        route.abort('blockedbyclient');
+        return;
       }
+      if (
+        BROWSER_ENGINE === 'webkit' &&
+        expectedBlocked.length === 0 &&
+        matchesGapiIframeLoader(url, request.method())
+      ) {
+        expectedBlocked.push({ url: url, method: request.method() });
+      } else {
+        networkViolations.push({ url: url, method: request.method() });
+      }
+      route.abort('blockedbyclient');
     });
 
     const page = await context.newPage();
@@ -465,6 +533,7 @@ async function main() {
       checks: checks,
       gatingFailures: gatingFailures,
       networkViolations: networkViolations,
+      expectedBlocked: expectedBlocked,
       pageErrors: gatingPageErrors,
       advisory: { reconnect: reconnect, probePageErrors: probePageErrors },
       passed:
@@ -483,6 +552,7 @@ async function main() {
       finishedAt: new Date().toISOString(),
       fatalError: String((err && err.stack) || err),
       networkViolations: networkViolations,
+      expectedBlocked: expectedBlocked,
       pageErrors: pageErrors,
       passed: false,
     });

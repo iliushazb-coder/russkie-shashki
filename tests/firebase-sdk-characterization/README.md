@@ -136,6 +136,35 @@ comparison (capped by `SDK_RAW_OUTPUT_LIMIT`, default 20000 chars) --
 otherwise that output would be discarded when the child exits, which
 would defeat capturing it.
 
+## First real matrix run
+
+Run on GitHub Actions via a temporary workflow (existing workflows do not
+execute this suite). All 22 gating checks were `true` in all four
+combinations. (`checkByCheckDiff` lists 23 fields: the 22 boolean gating
+checks plus `sdk.reportedVersion`, which is a reported value rather than
+a gating check.) `sdk.reportedVersion` is the only field that differs
+anywhere in the comparison, and it is the version under test, so it is
+supposed to differ:
+
+| combination | gating failures | result |
+|---|---|---|
+| 10.7.1 / chromium | none | PASS |
+| 10.7.1 / webkit | none | blocked GAPI request only |
+| 10.14.1 / chromium | none | PASS |
+| 10.14.1 / webkit | none | blocked GAPI request only |
+
+Both WebKit runs were originally reported as FAIL purely because of the
+`apis.google.com/js/api.js` request described under "Network guard";
+no Auth, RTDB, or App Check check failed anywhere. That is what motivated
+the `expectedBlocked` bucket.
+
+What this does and does not establish: on Chromium and WebKit, against
+local emulators, `10.14.1` behaves identically to `10.7.1` across the
+compat surface this project calls. It does not establish anything about
+the production reCAPTCHA App Check path or about real Telegram WebViews
+(see "What this suite does NOT cover"), and it is not by itself a
+decision to change `index.html`.
+
 ## What gates the result
 
 A run passes only if all three hold: every check in `GATING_PATHS` is
@@ -175,10 +204,60 @@ attached to the same `firebase`).
 
 Exactly four absolute URLs are allowed -- the pinned bundles for the
 version under test -- plus `127.0.0.1`/`localhost` for the fixture server
-and the emulators. Any other request, including a different path or a
-different version on `gstatic.com`, is recorded and aborted, and any
-recorded violation fails the suite. `SDK_VERSION` must be an exact
-`x.y.z` string, checked before the browser starts.
+and the emulators. Everything else is aborted; nothing reaches the
+network. `SDK_VERSION` must be an exact `x.y.z` string, checked before
+the browser starts.
+
+Blocked requests are split into two buckets, because "blocked" and
+"unexpected" are different things:
+
+- `networkViolations` -- anything not anticipated. Any entry fails the run.
+- `expectedBlocked` -- the first matching GAPI iframe-loader request on
+  WebKit (below). Still blocked, reported in full, does not fail the run.
+
+**The WebKit GAPI request.** On WebKit, `firebase-auth-compat`'s
+popup/redirect resolver eagerly bootstraps the GAPI iframe loader during
+sign-in, even though this suite only calls `signInWithCustomToken` and
+never opens a popup. The first real matrix run -- all 22 gating checks
+`true` on both engines and both versions, with `sdk.reportedVersion` a
+reported value rather than a gating check -- failed both WebKit
+combinations solely on this one request, a FAIL that said nothing about
+the SDK.
+
+The exception is scoped as narrowly as the observation that justifies
+it, on three axes:
+
+- **Engine** -- WebKit only. Chromium made no such request in either
+  version, so the identical URL on Chromium is still a violation: a new
+  resolver behaviour appearing on Chromium is a finding, not a footnote.
+- **Count** -- the first match per run only. Exactly one such request was
+  observed per WebKit run; a second would be new behaviour and falls
+  through to `networkViolations`.
+- **Shape** -- exact, as a raw string, not a host or prefix rule. The
+  method must be `GET` and the full request URL must equal
+  `https://apis.google.com/js/api.js?onload=__iframefcb<n>` character for
+  character, where `<n>` is `0` or a 1-6 digit number with no leading
+  zero -- exactly what `String(Math.floor(Math.random() * 1000000))` can
+  produce in both versions.
+
+  The URL is deliberately **not** parsed with `new URL()`. Parsing
+  normalises away differences that were never observed: `:443`,
+  `/js/../js/api.js`, `/./js/api.js` and an upper-case host all collapse
+  into the canonical form, so a parsed matcher would accept request
+  shapes there is no evidence for. Matching the raw string accepts the
+  one observed form and nothing else -- percent-encoding, credentials,
+  extra or re-ordered parameters, a fragment, a trailing slash, and
+  leading zeros are excluded by construction rather than by a list of
+  separate checks. If the upstream generator ever widens, the effect is
+  a loud violation on an already-blocked request, never a silently
+  accepted one.
+
+A host-level allowlist would wave through any `apis.google.com` URL -- an
+OAuth token endpoint, a userinfo call -- which is exactly what this suite
+exists to prove does not happen. Every other Google host
+(`identitytoolkit.googleapis.com`,
+`content-firebaseappcheck.googleapis.com`) remains a violation, as does
+any other path or version on `gstatic.com`.
 
 ## Custom token: no production credentials
 

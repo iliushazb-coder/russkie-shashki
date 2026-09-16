@@ -251,6 +251,7 @@ async function main() {
       passed: combinationPassed(r),
       gatingFailures: r.parsed ? r.parsed.gatingFailures : null,
       networkViolations: r.parsed ? r.parsed.networkViolations : null,
+      expectedBlocked: r.parsed ? r.parsed.expectedBlocked : null,
       pageErrors: r.parsed ? r.parsed.pageErrors : null,
       fatalError: r.parsed ? r.parsed.fatalError : undefined,
       // Raw output is captured for exactly the cases that need
