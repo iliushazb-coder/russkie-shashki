@@ -3,7 +3,7 @@
     ".read": false,
     ".write": false,
     "stats": {
-      ".read": true,
+      ".read": "auth != null && auth.token.firebase.sign_in_provider === 'custom' && (auth.uid.matches(/^tg_[0-9]+$/) || auth.uid === 'srv_settlement')",
       ".indexOn": [
         "rating"
       ],
@@ -67,7 +67,7 @@
       }
     },
     "statsBot": {
-      ".read": true,
+      ".read": "auth != null && auth.token.firebase.sign_in_provider === 'custom' && auth.uid.matches(/^tg_[0-9]+$/)",
       "$uid": {
         ".write": "auth != null && auth.uid === $uid && newData.exists() && newData.hasChildren(['wins', 'losses', 'name'])",
         "wins": {

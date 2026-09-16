@@ -51,6 +51,18 @@ function databaseFor(uid = null) {
     : testEnv.authenticatedContext(uid).database();
 }
 
+// Контекст с ЯВНО не-custom провайдером. По умолчанию мок-токен
+// rules-unit-testing подставляет firebase.sign_in_provider = 'custom'
+// (см. createMockUserToken в @firebase/util), поэтому обычный
+// databaseFor() всегда выглядит как вход по custom token. Чтобы проверить
+// правило, отсекающее чужие sign-in provider'ы, значение нужно задать
+// руками -- иначе такой тест ничего не проверяет.
+function databaseForProvider(uid, signInProvider) {
+  return testEnv
+    .authenticatedContext(uid, { firebase: { sign_in_provider: signInProvider, identities: {} } })
+    .database();
+}
+
 async function seed(path, value) {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     await set(ref(context.database(), path), value);
@@ -164,8 +176,50 @@ test("root: unauthenticated read stays denied", async () => {
   await assertFails(get(ref(databaseFor(), "/")));
 });
 
-test("stats: public leaderboard read is allowed", async () => {
-  await assertSucceeds(get(ref(databaseFor(), "stats")));
+// SECURITY FIX (finding A). Раньше тест назывался "public leaderboard read
+// is allowed" и утверждал, что таблицу лидеров может прочитать кто угодно
+// без аутентификации. Ветка /stats ключуется как tg_<telegram_id>, поэтому
+// анонимное чтение выдавало всем желающим связку Telegram ID + имя +
+// рейтинг по ВСЕМ игрокам.
+//
+// Правило намеренно строже, чем "auth != null". Конфигурация sign-in
+// провайдеров production-проекта из репозитория НЕ проверяема, поэтому
+// "любой аутентифицированный" опирался бы на неизвестное: будь включён
+// anonymous или email/password, посторонний получил бы identity в обход
+// нашего Telegram Worker и вместе с ней bulk-read. Инвариант вместо этого
+// описывает ровно те личности, которые у нас есть на самом деле:
+//   - игрок     -- custom token от Worker, uid tg_<digits>;
+//   - сервер    -- тот же путь signInWithCustomToken, uid srv_settlement.
+// Проверка uid ловит чужой провайдер даже без sign_in_provider, но опирается
+// на НЕ гарантированный Firebase формат автогенерируемых uid; проверка
+// sign_in_provider закрывает именно это допущение. Нужны обе.
+test("stats: bulk read by an unauthenticated caller is denied", async () => {
+  await assertFails(get(ref(databaseFor(), "stats")));
+});
+
+test("stats: bulk read by an authenticated non-Telegram uid is denied", async () => {
+  // "alice" -- не tg_<digits>. Так выглядел бы посторонний, вошедший через
+  // любой другой включённый провайдер.
+  await assertFails(get(ref(databaseFor("alice"), "stats")));
+});
+
+test("stats: bulk read by a tg_ uid from a non-custom provider is denied", async () => {
+  // Страховка на случай, если чужой провайдер сумеет выдать uid нужного
+  // вида: одного совпадения формата uid недостаточно.
+  await assertFails(get(ref(databaseForProvider("tg_1001", "anonymous"), "stats")));
+});
+
+test("stats: bulk read by a custom-token tg_ uid is allowed", async () => {
+  // Обычный игрок: таблица лидеров внутри Telegram обязана работать.
+  await assertSucceeds(get(ref(databaseFor("tg_1001"), "stats")));
+});
+
+test("stats: srv_settlement can read stats (Worker settlement path depends on it)", async () => {
+  // НЕ косметика: worker/index.mjs ensureStatsInitialized() читает
+  // stats/<uid> перед записью, а getServerIdToken() меняет custom token на
+  // ОБЫЧНЫЙ Firebase ID token -- Worker не admin, Rules к нему применяются.
+  // Без этого исключения ломается settlement рейтинговых партий целиком.
+  await assertSucceeds(get(ref(databaseFor("srv_settlement"), "stats")));
 });
 
 test("stats: settlement identity can create a full node", async () => {
@@ -186,8 +240,8 @@ test("stats: settlement identity can apply atomic root increments", async () => 
     "stats/tg_1002/losses": increment(1)
   }));
 
-  const light = await get(ref(databaseFor(), "stats/tg_1001"));
-  const dark = await get(ref(databaseFor(), "stats/tg_1002"));
+  const light = await get(ref(databaseFor("tg_1001"), "stats/tg_1001"));
+  const dark = await get(ref(databaseFor("tg_1001"), "stats/tg_1002"));
   assert.equal(light.child("rating").val(), 1216);
   assert.equal(light.child("wins").val(), 3);
   assert.equal(dark.child("rating").val(), 1184);
@@ -220,7 +274,7 @@ test("stats: srv_settlement can apply a TARGETED name-only update on already-exi
   await assertSucceeds(update(ref(databaseFor("srv_settlement"), "/"), {
     "stats/tg_1001/name": "NewName"
   }));
-  const after = await get(ref(databaseFor(), "stats/tg_1001"));
+  const after = await get(ref(databaseFor("tg_1001"), "stats/tg_1001"));
   const val = after.val();
   assert.equal(val.name, "NewName");
   assert.equal(val.rating, 1216, "rating не должен измениться от targeted name-only записи");
@@ -272,9 +326,33 @@ test("stats: deletion is denied for settlement identity", async () => {
   await assertFails(remove(ref(databaseFor("srv_settlement"), "stats/tg_1001")));
 });
 
-test("statsBot: public leaderboard read is allowed", async () => {
-  await seed("statsBot/alice", statsBot());
-  await assertSucceeds(get(ref(databaseFor(), "statsBot")));
+// SECURITY FIX (finding A) — тот же инвариант, что для /stats выше, но БЕЗ
+// исключения для srv_settlement: Worker к этой ветке не обращается вовсе
+// (grep statsBot по worker/index.mjs -- 0 вхождений), поэтому давать ему
+// доступ не за что.
+test("statsBot: bulk read by an unauthenticated caller is denied", async () => {
+  await seed("statsBot/tg_1001", statsBot());
+  await assertFails(get(ref(databaseFor(), "statsBot")));
+});
+
+test("statsBot: bulk read by an authenticated non-Telegram uid is denied", async () => {
+  await seed("statsBot/tg_1001", statsBot());
+  await assertFails(get(ref(databaseFor("alice"), "statsBot")));
+});
+
+test("statsBot: bulk read by a tg_ uid from a non-custom provider is denied", async () => {
+  await seed("statsBot/tg_1001", statsBot());
+  await assertFails(get(ref(databaseForProvider("tg_1002", "anonymous"), "statsBot")));
+});
+
+test("statsBot: bulk read by a custom-token tg_ uid is allowed", async () => {
+  await seed("statsBot/tg_1001", statsBot());
+  await assertSucceeds(get(ref(databaseFor("tg_1002"), "statsBot")));
+});
+
+test("statsBot: srv_settlement is denied — the Worker never touches this branch", async () => {
+  await seed("statsBot/tg_1001", statsBot());
+  await assertFails(get(ref(databaseFor("srv_settlement"), "statsBot")));
 });
 
 test("statsBot: owner can create own node", async () => {
@@ -388,8 +466,8 @@ test("eloMatches: atomic root PATCH creates the receipt and updates both stats n
     "stats/bob/losses": increment(1)
   }));
 
-  const light = await get(ref(databaseFor(), "stats/alice"));
-  const dark = await get(ref(databaseFor(), "stats/bob"));
+  const light = await get(ref(databaseFor("tg_1001"), "stats/alice"));
+  const dark = await get(ref(databaseFor("tg_1001"), "stats/bob"));
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const raw = await get(ref(context.database(), "eloMatches/match-1"));
     assert.equal(raw.exists(), true);
