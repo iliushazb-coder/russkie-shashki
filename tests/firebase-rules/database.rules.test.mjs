@@ -355,37 +355,68 @@ test("statsBot: srv_settlement is denied — the Worker never touches this branc
   await assertFails(get(ref(databaseFor("srv_settlement"), "statsBot")));
 });
 
+// SECURITY FIX (statsBot write identity). Запись приведена к тому же
+// инварианту, что уже действует на чтение: custom token + uid вида
+// tg_<digits> + владение узлом. Раньше хватало "auth != null &&
+// auth.uid === $uid", то есть при включённом стороннем провайдере чужая
+// identity могла завести себе строку в таблице лидеров по боту с
+// произвольным именем, видимым всем игрокам.
+//
+// Единственный production-путь записи -- recordBotGameResultIdempotent()
+// в script.js, и он гейтится canUseFirebase(), которая и так требует
+// tg_-формата и живого custom-token входа. Worker к ветке не обращается
+// вовсе, поэтому исключения для srv_settlement здесь нет.
+//
+// Фикстуры переведены с alice/bob на tg_1001/tg_1002: прежние имена не
+// проходят ^tg_[0-9]+$, и тесты проверяли бы отказ по формату uid вместо
+// того, что заявлено в их названиях.
 test("statsBot: owner can create own node", async () => {
-  await assertSucceeds(set(ref(databaseFor("alice"), "statsBot/alice"), statsBot()));
+  await assertSucceeds(set(ref(databaseFor("tg_1001"), "statsBot/tg_1001"), statsBot()));
 });
 
 test("statsBot: owner can update own node", async () => {
-  await seed("statsBot/alice", statsBot());
-  await assertSucceeds(update(ref(databaseFor("alice"), "statsBot/alice"), { wins: 3 }));
+  await seed("statsBot/tg_1001", statsBot());
+  await assertSucceeds(update(ref(databaseFor("tg_1001"), "statsBot/tg_1001"), { wins: 3 }));
 });
 
 test("statsBot: authenticated cross-user write is denied", async () => {
-  await assertFails(set(ref(databaseFor("alice"), "statsBot/bob"), statsBot()));
+  await assertFails(set(ref(databaseFor("tg_1001"), "statsBot/tg_1002"), statsBot()));
 });
 
 test("statsBot: unauthenticated write is denied", async () => {
-  await assertFails(set(ref(databaseFor(), "statsBot/alice"), statsBot()));
+  await assertFails(set(ref(databaseFor(), "statsBot/tg_1001"), statsBot()));
+});
+
+test("statsBot: a non-Telegram uid cannot write even its own node", async () => {
+  // Ровно та дыра, которую закрывает правка: посторонняя identity
+  // (если в проекте включён какой-либо иной sign-in provider) больше не
+  // может завести себе строку в бот-таблице.
+  await assertFails(set(ref(databaseFor("alice"), "statsBot/alice"), statsBot()));
+});
+
+test("statsBot: a tg_ uid from a non-custom provider cannot write its own node", async () => {
+  // Формат uid сам по себе не пропуск: identity обязана быть получена
+  // через signInWithCustomToken, как это делает наш Telegram Worker.
+  await assertFails(set(
+    ref(databaseForProvider("tg_1001", "anonymous"), "statsBot/tg_1001"),
+    statsBot()
+  ));
 });
 
 test("statsBot: invalid counters are denied for owner", async () => {
-  await assertFails(set(ref(databaseFor("alice"), "statsBot/alice"), statsBot({ wins: -1 })));
+  await assertFails(set(ref(databaseFor("tg_1001"), "statsBot/tg_1001"), statsBot({ wins: -1 })));
 });
 
 test("statsBot: malformed recent match ids are denied for owner", async () => {
   await assertFails(set(
-    ref(databaseFor("alice"), "statsBot/alice"),
+    ref(databaseFor("tg_1001"), "statsBot/tg_1001"),
     statsBot({ recentMatchIds: { 10: "outside-allowed-index" } })
   ));
 });
 
 test("statsBot: owner deletion is denied", async () => {
-  await seed("statsBot/alice", statsBot());
-  await assertFails(remove(ref(databaseFor("alice"), "statsBot/alice")));
+  await seed("statsBot/tg_1001", statsBot());
+  await assertFails(remove(ref(databaseFor("tg_1001"), "statsBot/tg_1001")));
 });
 
 test("eloMatches: public read is denied", async () => {
