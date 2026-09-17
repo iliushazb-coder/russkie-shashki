@@ -98,5 +98,34 @@ console.log('\n=== 5. САМИ ВОРОТА ===');
     check('5.5 флаг готовности обязателен', /firebaseAuthReady === true/.test(g));
 })();
 
+console.log('\n=== 6. КНОПКИ МЕНЮ, ОТКРЫВАЮЩИЕ FIREBASE-РАЗДЕЛЫ ===');
+(function () {
+    // Cold-start регрессия: «Статистика» была подключена напрямую
+    // (btnShowStats.addEventListener("click", openStatsModal)), без ворот.
+    // Пока /stats и /statsBot читались анонимно, ранний тап до завершения
+    // входа всё равно отдавал данные. После закрытия анонимного чтения тот
+    // же тап стал упираться в отказ прав и показывать stats_load_error.
+    //
+    // Проверяем не формулировку, а поведение: обработчик обязан быть
+    // асинхронным и пропускать дальше только после requireFirebaseAuthAsync().
+    const src = noComments(SRC);
+    const handler = src.slice(src.indexOf('btnShowStats.addEventListener'));
+    const body = handler.slice(0, handler.indexOf('\n}'));
+
+    check('6.1 обработчик «Статистики» асинхронный',
+        /btnShowStats\.addEventListener\(\s*"click"\s*,\s*async\s+function/.test(body), body.slice(0, 90));
+    check('6.2 перед открытием ждём requireFirebaseAuthAsync',
+        /await\s+requireFirebaseAuthAsync\(\)/.test(body));
+    check('6.3 при отказе модалка НЕ открывается',
+        /if\s*\(!\(await requireFirebaseAuthAsync\(\)\)\)\s*return;/.test(body));
+    check('6.4 openStatsModal вызывается ПОСЛЕ ворот', (function () {
+        const gate = body.indexOf('requireFirebaseAuthAsync');
+        const open = body.indexOf('openStatsModal');
+        return gate !== -1 && open !== -1 && gate < open;
+    })());
+    check('6.5 «Статистика» закрыта тем же способом, что и другие онлайн-кнопки',
+        (src.match(/if \(!\(await requireFirebaseAuthAsync\(\)\)\) return;/g) || []).length >= 3);
+})();
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed > 0 ? 1 : 0);

@@ -7720,7 +7720,21 @@ function openStatsModal() {
 }
 
 if (btnShowStats) {
-    btnShowStats.addEventListener("click", openStatsModal);
+    // Те же асинхронные ворота, что у btnPlayOnline и btnPlayFriend.
+    //
+    // openStatsModal() читает /stats и /statsBot. Пока эти ветки читались
+    // публично, ранний тап по «Статистике» -- до того, как завершился вход
+    // -- всё равно отдавал данные, и отсутствие ворот было незаметно.
+    // После закрытия анонимного чтения тот же тап на холодном старте стал
+    // упираться в отказ прав и показывать stats_load_error.
+    //
+    // requireFirebaseAuthAsync() дожидается authPromise, если вход ещё
+    // идёт, и только потом пропускает дальше; при неуспехе сам объясняет
+    // причину. Сам openStatsModal() не трогаем.
+    btnShowStats.addEventListener("click", async function () {
+        if (!(await requireFirebaseAuthAsync())) return;
+        openStatsModal();
+    });
 }
 
 
