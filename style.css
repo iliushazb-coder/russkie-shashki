@@ -1585,16 +1585,26 @@ h1 {
    Текстура меняется «в середине» без единой строчки JS: под наложением
    уже лежит готовая дамка, а наложение показывает обычную шашку и к
    середине эффекта растворяется, открывая её. */
-/* ДВЕ СТОРОНЫ ОДНОЙ ФИГУРЫ, как у монеты.
-   Оба элемента лежат в одной клетке и крутятся синхронно, но их углы
-   разнесены на 180 градусов. Вместе с backface-visibility: hidden это
-   даёт ровно одну видимую сторону в каждый момент: пока обычная шашка
-   уходит ребром, дамка уже подходит лицом. Одним наложением поворот на
-   540 градусов дал бы ДВА провала в невидимость (90-270 и 450-540) --
-   фигура моргала бы.
+/* ТРИ НАЛОЖЕНИЯ, ОДНА ФИГУРА.
+   Две ОБЫЧНЫЕ стороны разнесены на 180 градусов: вместе с
+   backface-visibility: hidden они покрывают весь оборот непрерывно, и
+   обычная шашка видна всё время вращения без провалов в невидимость.
+   Одним элементом так не выйдет: при 540 градусах он пропадал бы дважды
+   (90-270 и 450-540).
+
+   Третье наложение -- дамка. Оно включается РОВНО ОДИН РАЗ, на последней
+   четверти оборота, и обратно уже не выключается. Переключение
+   происходит на 450 градусах, когда обе стороны стоят ребром к зрителю,
+   поэтому самой подмены не видно.
+
+   Раньше сторон было две (обычная и дамка, сдвиг 180), и это давало
+   чередование обычная -> дамка -> обычная -> дамка: дамка появлялась уже
+   на 90 градусах и потом пропадала. Семантика превращения требует
+   обратного -- дамка возникает один раз и остаётся.
    perspective задаётся прямо в keyframes, а не на клетке: так объёмность
    остаётся локальной для эффекта и не влияет на раскладку доски. */
 .king-promotion-flip,
+.king-promotion-flip-back,
 .king-promotion-flip-king {
     position: absolute;
     inset: 0;
@@ -1625,7 +1635,13 @@ h1 {
     animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
 }
 
-/* Сторона дамки: тот же тайминг, угол смещён на 180 градусов. */
+/* Вторая ОБЫЧНАЯ сторона: тот же тайминг, угол смещён на 180. */
+.king-promotion-flip-back {
+    animation: kingPromotionFlipBack var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Сторона дамки: та же позиция, что у второй обычной, но появляется
+   только на финальной четверти. */
 .king-promotion-flip-king {
     animation: kingPromotionFlipKing var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
 }
@@ -1669,36 +1685,53 @@ h1 {
     animation: kingPromotionGlow var(--king-promotion-duration) ease-out var(--king-promotion-delay, 0ms) forwards;
 }
 
-/* Полтора оборота за один проход. Обе стороны идут по ОДНОЙ траектории
-   подъёма и масштаба -- различаются только углом, поэтому зритель видит
-   одну объёмную фигуру, а не два элемента.
-   Финальный scale(1.1) не случаен: он совпадает с размером настоящей
-   дамки (.king имеет scale(1.1)), поэтому в момент снятия наложения
-   подмены не видно. */
+/* Полтора оборота за один проход. Ключ на 72% ставит фигуру ровно на
+   450 градусов -- это ребро, и именно там обычная сторона уступает место
+   дамке. Все три наложения идут по ОДНОЙ траектории подъёма и масштаба,
+   различаются только углом и моментом включения.
+   Финальный scale(1.1) совпадает с размером настоящей дамки (.king имеет
+   scale(1.1)), поэтому снятия наложений не видно. */
 @keyframes kingPromotionFlip {
-    0%   { transform: perspective(620px) translateY(0)     rotateX(0deg)   scale(1);    }
-    12%  { transform: perspective(620px) translateY(-11%)  rotateX(52deg)  scale(1.06); }
-    38%  { transform: perspective(620px) translateY(-28%)  rotateX(258deg) scale(1.17); }
-    70%  { transform: perspective(620px) translateY(-19%)  rotateX(432deg) scale(1.13); }
-    88%  { transform: perspective(620px) translateY(-2%)   rotateX(528deg) scale(1.16); }
-    100% { transform: perspective(620px) translateY(0)     rotateX(540deg) scale(1.1);  }
+    0%   { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    }
+    12%  { transform: perspective(620px) translateY(-11%) rotateX(52deg)  scale(1.06); }
+    38%  { transform: perspective(620px) translateY(-28%) rotateX(258deg) scale(1.17); }
+    72%  { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); }
+    88%  { transform: perspective(620px) translateY(-2%)  rotateX(522deg) scale(1.16); }
+    100% { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  }
 }
 
-/* Та же траектория, угол +180: пока одна сторона спиной, вторая лицом. */
+/* Вторая ОБЫЧНАЯ сторона: угол +180, гаснет на 450 градусах (72%), когда
+   стоит ребром -- потому подмена невидима. После этого обычная текстура
+   не возвращается. */
+@keyframes kingPromotionFlipBack {
+    0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 1; }
+    12%   { transform: perspective(620px) translateY(-11%) rotateX(232deg) scale(1.06); opacity: 1; }
+    38%   { transform: perspective(620px) translateY(-28%) rotateX(438deg) scale(1.17); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(630deg) scale(1.13); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(632deg) scale(1.13); opacity: 0; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(702deg) scale(1.16); opacity: 0; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(720deg) scale(1.1);  opacity: 0; }
+}
+
+/* Дамка: та же позиция, что у второй обычной стороны, но зажигается
+   ровно там, где та гаснет -- на ребре. Один раз и навсегда. */
 @keyframes kingPromotionFlipKing {
-    0%   { transform: perspective(620px) translateY(0)     rotateX(180deg) scale(1);    }
-    12%  { transform: perspective(620px) translateY(-11%)  rotateX(232deg) scale(1.06); }
-    38%  { transform: perspective(620px) translateY(-28%)  rotateX(438deg) scale(1.17); }
-    70%  { transform: perspective(620px) translateY(-19%)  rotateX(612deg) scale(1.13); }
-    88%  { transform: perspective(620px) translateY(-2%)   rotateX(708deg) scale(1.16); }
-    100% { transform: perspective(620px) translateY(0)     rotateX(720deg) scale(1.1);  }
+    0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 0; }
+    12%   { transform: perspective(620px) translateY(-11%) rotateX(232deg) scale(1.06); opacity: 0; }
+    38%   { transform: perspective(620px) translateY(-28%) rotateX(438deg) scale(1.17); opacity: 0; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(630deg) scale(1.13); opacity: 0; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(632deg) scale(1.13); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(702deg) scale(1.16); opacity: 1; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(720deg) scale(1.1);  opacity: 1; }
 }
 
 @keyframes kingPromotionGlow {
-    /* Пик приходится на смену стороны (~38%), дальше спокойный уход --
-       короткий и мягкий, без вспышки. */
-    0%   { opacity: 0;    transform: scale(0.78); }
-    38%  { opacity: 0.85; transform: scale(1.14); }
+    /* Пик сразу после появления дамки (72%), дальше спокойный уход --
+       короткий и мягкий, без вспышки. До этого свечение почти незаметно:
+       оно подчёркивает момент превращения, а не весь спин. */
+    0%   { opacity: 0;    transform: scale(0.80); }
+    55%  { opacity: 0.30; transform: scale(1.02); }
+    76%  { opacity: 0.88; transform: scale(1.18); }
     100% { opacity: 0;    transform: scale(1.34); }
 }
 
@@ -1711,6 +1744,7 @@ h1 {
        появляется мгновенно. Звук при этом остаётся -- он не является
        движением. */
     .king-promotion-flip,
+    .king-promotion-flip-back,
     .king-promotion-flip-king {
         animation: none !important;
         opacity: 0 !important;

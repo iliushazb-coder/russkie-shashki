@@ -42,6 +42,17 @@ function funcBody(src, name) {
 
 const CLEAN = noComments(SRC);
 
+// Общий блок трёх наложений. Ищем по тексту, а не регуляркой: селектор
+// многострочный, и экранирование в шаблоне легко испортить незаметно.
+function baseOverlayRule() {
+    const head = '.king-promotion-flip,\n.king-promotion-flip-back,\n.king-promotion-flip-king {';
+    const i = CSS.indexOf(head);
+    if (i === -1) return null;
+    const end = CSS.indexOf('\n}', i);
+    return end === -1 ? null : [CSS.slice(i, end + 2)];
+}
+
+
 console.log('=== 1. ТРИГГЕР ТОЛЬКО ПО СОБЫТИЮ ===');
 
 const effect = funcBody(CLEAN, 'playKingPromotionEffect');
@@ -164,8 +175,8 @@ check('5.5 смена стороны происходит в первой пол
 })());
 check('5.6 свечение отдельным слоем, не через filter настоящей фигуры',
     /\.king-promotion-glow\s*\{[\s\S]*?radial-gradient/.test(CSS));
-check('5.7 ни одна сторона не перехватывает клики', (function () {
-    const base = /\.king-promotion-flip,\s*\n\.king-promotion-flip-king \{[\s\S]*?\n\}/.exec(CSS);
+check('5.7 ни одно наложение не перехватывает клики', (function () {
+    const base = baseOverlayRule();
     return !!base && /pointer-events: none/.test(base[0]);
 })());
 
@@ -285,10 +296,10 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     check('10.3 ход уже готовой дамки НЕ запускает (moveType всё равно "move")',
         run({ moveType: "move", lastMove: at, pieces: pieces }) === 0);
     check('10.4 превращение (moveType "king") запускает ровно один раз',
-        run({ moveType: "king", lastMove: at, pieces: pieces }) === 3,
-        'создано элементов: glow + две стороны переворота');
+        run({ moveType: "king", lastMove: at, pieces: pieces }) === 4,
+        'создано элементов: glow + две обычные стороны + дамка');
     check('10.5 превращение ЧЕРЕЗ ВЗЯТИЕ тоже даёт "king" и запускает один раз',
-        run({ moveType: "king", lastMove: { to: { row: 7, col: 2 } }, pieces: { "7_2": { color: "dark", king: true } } }) === 3);
+        run({ moveType: "king", lastMove: { to: { row: 7, col: 2 } }, pieces: { "7_2": { color: "dark", king: true } } }) === 4);
     check('10.6 нет lastMove -> тишина',
         run({ moveType: "king", lastMove: null, pieces: pieces }) === 0);
     check('10.7 клетки нет в DOM -> защитный выход без исключения',
@@ -360,8 +371,8 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
     const eff = funcBody(CLEAN, 'playKingPromotionEffect');
     check('13.1 функция найдена', !!eff);
 
-    check('13.2 базовый opacity обеих сторон = 0 (до старта невидимо)', (function () {
-        const base = /\.king-promotion-flip,\s*\n\.king-promotion-flip-king \{[\s\S]*?\n\}/.exec(CSS);
+    check('13.2 базовый opacity всех наложений = 0 (до старта невидимо)', (function () {
+        const base = baseOverlayRule();
         return !!base && /opacity: 0;/.test(base[0]);
     })());
 
@@ -391,9 +402,9 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
         return !!m && parseInt(m[1], 10) === 150;
     })());
-    check('13.4f длительность передаётся переменной всем трём элементам', (function () {
+    check('13.4f длительность передаётся переменной всем четырём элементам', (function () {
         const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
-        return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 3;
+        return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 4;
     })());
     check('13.5 в CSS нет захардкоженной длительности полёта',
         !/150ms/.test(CSS));
@@ -401,8 +412,8 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
     if (eff) {
         check('13.6 задержка связана с MOVE_GHOST_DURATION_MS, а не с magic number',
             /const startDelayMs = MOVE_GHOST_DURATION_MS;/.test(eff));
-        check('13.7 переменная задержки выставляется всем трём элементам',
-            (eff.match(/setProperty\("--king-promotion-delay"/g) || []).length === 3);
+        check('13.7 переменная задержки выставляется всем четырём элементам',
+            (eff.match(/setProperty\("--king-promotion-delay"/g) || []).length === 4);
         check('13.8 fallback timeout учитывает И задержку, И длительность эффекта',
             /setTimeout\(cleanup, startDelayMs \+ KING_PROMOTION_DURATION_MS \+ \d+\)/.test(eff));
         check('13.9 cleanup удаляет себя из activeGhostCancelFns (симметрично соседям)',
@@ -464,6 +475,7 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
     }
     const man = kfAngles('kingPromotionFlip');
     const king = kfAngles('kingPromotionFlipKing');
+    const back = kfAngles('kingPromotionFlipBack');
 
     check('14.1 keyframes обеих сторон существуют', !!man && !!king);
     check('14.2 обычная сторона проходит ровно 540 градусов',
@@ -472,9 +484,22 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
         !!king && (king[king.length - 1][1] - king[0][1]) === 540);
     // Сдвиг ровно 180 на КАЖДОМ ключе -- иначе стороны разъедутся и
     // появится момент, когда видны обе или ни одной.
-    check('14.4 стороны разнесены ровно на 180 градусов во всех ключах',
-        !!man && !!king && man.length === king.length &&
-        man.every(function (m, i) { return king[i][0] === m[0] && king[i][1] - m[1] === 180; }));
+    // Вторая обычная сторона обязана быть ровно на 180 от первой -- иначе
+    // между ними появится щель, в которой не видно ничего.
+    check('14.4 вторая обычная сторона разнесена ровно на 180 градусов', (function () {
+        if (!man || !back) return false;
+        const byPct = {};
+        man.forEach(function (m) { byPct[m[0]] = m[1]; });
+        return back.every(function (b) {
+            return byPct[b[0]] === undefined || b[1] - byPct[b[0]] === 180;
+        });
+    })());
+    check('14.4b дамка занимает ту же позицию, что вторая обычная', (function () {
+        if (!back || !king) return false;
+        const byPct = {};
+        back.forEach(function (b) { byPct[b[0]] = b[1]; });
+        return king.every(function (k) { return byPct[k[0]] === undefined || byPct[k[0]] === k[1]; });
+    })());
     // Монотонность: вращение не должно «отыгрывать назад».
     check('14.5 вращение монотонно, без отката', (function () {
         if (!man) return false;
@@ -489,13 +514,15 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
         return [...b[0].matchAll(re)].map(function (m) { return m[2]; }).join(',');
     }
     // Одна фигура, а не два элемента: подъём и масштаб должны совпадать.
-    check('14.6 подъём одинаков у обеих сторон',
-        kfTrack('kingPromotionFlip', 'translateY') === kfTrack('kingPromotionFlipKing', 'translateY'));
-    check('14.7 масштаб одинаков у обеих сторон',
-        kfTrack('kingPromotionFlip', 'scale') === kfTrack('kingPromotionFlipKing', 'scale'));
+    // Одна фигура, а не три элемента: у второй обычной и у дамки
+    // траектории должны совпадать между собой.
+    check('14.6 подъём одинаков у второй обычной и дамки',
+        kfTrack('kingPromotionFlipBack', 'translateY') === kfTrack('kingPromotionFlipKing', 'translateY'));
+    check('14.7 масштаб одинаков у второй обычной и дамки',
+        kfTrack('kingPromotionFlipBack', 'scale') === kfTrack('kingPromotionFlipKing', 'scale'));
 
-    check('14.8 backface скрыт у обеих сторон -- иначе видны обе сразу', (function () {
-        const base = /\.king-promotion-flip,\s*\n\.king-promotion-flip-king \{[\s\S]*?\n\}/.exec(CSS);
+    check('14.8 backface скрыт у всех наложений -- иначе видны сразу несколько', (function () {
+        const base = baseOverlayRule();
         return !!base && /backface-visibility: hidden/.test(base[0]);
     })());
     check('14.9 perspective задан локально в keyframes, а не на клетке',
@@ -528,6 +555,138 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
         return blocks.some(function (b) {
             return /\.king-promotion-flip,/.test(b) && /\.king-promotion-flip-king/.test(b) &&
                    /animation: none/.test(b) && /opacity: 0/.test(b);
+        });
+    })());
+}
+
+console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РАЗ ===');
+{
+    // Главная проверка этого раздела -- СИМУЛЯЦИЯ: по ключевым кадрам
+    // восстанавливаем, что именно видит зритель на каждом проценте
+    // анимации. Регулярка тут бессильна: прежняя схема из двух сторон
+    // формально была корректной, но давала чередование
+    // обычная -> дамка -> обычная -> дамка, потому что дамка становилась
+    // лицевой уже на 90 градусах.
+    function parseKf(name) {
+        const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
+        if (!b) return null;
+        const out = [];
+        const re = /([\d.]+)%\s*\{([^}]*)\}/g;
+        let m;
+        while ((m = re.exec(b[0])) !== null) {
+            const pct = parseFloat(m[1]);
+            const rot = /rotateX\(([-\d.]+)deg\)/.exec(m[2]);
+            const op = /opacity:\s*([\d.]+)/.exec(m[2]);
+            out.push({ pct: pct, rot: rot ? parseFloat(rot[1]) : null, op: op ? parseFloat(op[1]) : 1 });
+        }
+        return out.sort(function (a, b2) { return a.pct - b2.pct; });
+    }
+    function at(kf, pct, field) {
+        for (let i = 1; i < kf.length; i++) {
+            if (pct <= kf[i].pct) {
+                const a = kf[i - 1], b2 = kf[i];
+                if (field === 'op') return pct < b2.pct ? a.op : b2.op;
+                const x = (pct - a.pct) / (b2.pct - a.pct || 1);
+                return a.rot + (b2.rot - a.rot) * x;
+            }
+        }
+        return field === 'op' ? kf[kf.length - 1].op : kf[kf.length - 1].rot;
+    }
+    function facing(angle) {
+        const m = ((angle % 360) + 360) % 360;
+        return m < 90 || m > 270;
+    }
+
+    const man = parseKf('kingPromotionFlip');
+    const back = parseKf('kingPromotionFlipBack');
+    const king = parseKf('kingPromotionFlipKing');
+    check('15.1 все три набора keyframes найдены', !!man && !!back && !!king);
+
+    if (man && back && king) {
+        // Что видно на каждом проценте: backface скрывает обратную
+        // сторону, opacity гасит элемент целиком.
+        const timeline = [];
+        for (let p = 0; p <= 100; p += 0.5) {
+            const manOn = facing(at(man, p, 'rot')) && at(man, p, 'op') > 0;
+            const backOn = facing(at(back, p, 'rot')) && at(back, p, 'op') > 0;
+            const kingOn = facing(at(king, p, 'rot')) && at(king, p, 'op') > 0;
+            timeline.push({ p: p, ordinary: manOn || backOn, king: kingOn });
+        }
+
+        // Дамка включается один раз и не выключается.
+        let kingSwitches = 0;
+        for (let i = 1; i < timeline.length; i++) {
+            if (timeline[i].king !== timeline[i - 1].king) kingSwitches++;
+        }
+        check('15.2 дамка становится видимой РОВНО ОДИН РАЗ', kingSwitches === 1,
+            'переключений: ' + kingSwitches);
+
+        const firstKing = timeline.findIndex(function (f) { return f.king; });
+        check('15.3 дамка появляется, а не отсутствует вовсе', firstKing !== -1);
+        check('15.4 после появления дамка больше не пропадает',
+            firstKing !== -1 && timeline.slice(firstKing).every(function (f) { return f.king; }));
+
+        // Обычная текстура не возвращается после превращения.
+        check('15.5 после появления дамки обычная сторона НЕ возвращается',
+            firstKing !== -1 && timeline.slice(firstKing).every(function (f) { return !f.ordinary; }));
+
+        // До превращения обычная видна непрерывно -- вращение читается.
+        // Допускаются только мгновения, когда обе стороны стоят ровно
+        // ребром -- они физически невидимы и в кадре не читаются.
+        check('15.6 до превращения обычная сторона видна практически непрерывно', (function () {
+            if (firstKing === -1) return false;
+            const gaps = timeline.slice(0, firstKing).filter(function (f) { return !f.ordinary; });
+            return gaps.length <= 3;
+        })(), firstKing !== -1 ? 'пропусков: ' + timeline.slice(0, firstKing).filter(function (f) { return !f.ordinary; }).length : '?');
+
+        // Ни одного кадра, где видно и то и другое.
+        check('15.7 обычная и дамка никогда не видны одновременно',
+            timeline.every(function (f) { return !(f.ordinary && f.king); }));
+
+        // Ни одного кадра пустоты (кроме рёберных моментов подмены).
+        const blanks = timeline.filter(function (f) { return !f.ordinary && !f.king; });
+        check('15.8 провалов в пустоту практически нет (только ребро)',
+            blanks.length <= 3, 'пустых кадров: ' + blanks.length);
+
+        // Превращение происходит в финальной части, а не в начале.
+        check('15.9 дамка появляется в финальной части эффекта',
+            firstKing !== -1 && timeline[firstKing].p >= 60,
+            'на ' + (firstKing !== -1 ? timeline[firstKing].p : '?') + '%');
+
+        // Итоговая текстура -- дамка.
+        check('15.10 в конце видна именно дамка',
+            timeline[timeline.length - 1].king && !timeline[timeline.length - 1].ordinary);
+
+        // Вращение до превращения должно быть заметным.
+        check('15.11 до превращения фигура успевает повернуться больше чем на оборот',
+            at(man, timeline[firstKing].p, 'rot') >= 360);
+    }
+
+    // Подмена обязана происходить на ребре, иначе она заметна.
+    check('15.12 обычная гаснет и дамка зажигается в один и тот же момент', (function () {
+        if (!back || !king) return false;
+        const off = back.find(function (k) { return k.op === 0; });
+        const on = king.find(function (k) { return k.op === 1; });
+        return !!off && !!on && off.pct === on.pct;
+    })());
+    check('15.13 подмена происходит, когда сторона стоит ребром', (function () {
+        if (!back) return false;
+        const off = back.find(function (k) { return k.op === 0; });
+        if (!off) return false;
+        const m = ((off.rot % 360) + 360) % 360;
+        return Math.abs(m - 90) < 12 || Math.abs(m - 270) < 12;
+    })());
+
+    check('15.14 третье наложение создаётся и убирается', (function () {
+        const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
+        return !!eff2 && /king-promotion-flip-back/.test(eff2) &&
+               /removeChild\(flipBack\)/.test(eff2);
+    })());
+    check('15.15 reduced-motion гасит все три наложения', (function () {
+        const blocks = CSS.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
+        return blocks.some(function (b) {
+            return /\.king-promotion-flip,/.test(b) && /\.king-promotion-flip-back,/.test(b) &&
+                   /\.king-promotion-flip-king/.test(b) && /animation: none/.test(b);
         });
     })());
 }

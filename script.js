@@ -2641,14 +2641,18 @@ function playKingPromotionEffect() {
 
     const colorClass = pieceData.color === "light" ? "piece-light" : "piece-dark";
 
-    // ДВЕ СТОРОНЫ ОДНОЙ ФИГУРЫ. Обе переиспользуют существующие классы
-    // .piece/.piece-light/.piece-dark, своей графики не заводим: лицевая
-    // сторона показывает обычную шашку, обратная -- дамку.
+    // ТРИ НАЛОЖЕНИЯ, ОДНА ФИГУРА. Все переиспользуют существующие классы
+    // .piece/.piece-light/.piece-dark, своей графики не заводим.
     //
-    // Почему две, а не одна: поворот на 540 градусов с
-    // backface-visibility: hidden у ОДНОГО элемента дал бы два провала в
-    // невидимость (90-270 и 450-540), фигура моргала бы. Разнесённые на
-    // 180 градусов стороны сменяют друг друга непрерывно.
+    // Две ОБЫЧНЫЕ стороны разнесены на 180 градусов и вместе покрывают
+    // весь оборот: с backface-visibility: hidden одна всегда обращена к
+    // зрителю, поэтому обычная шашка видна непрерывно. Одним элементом
+    // так не выйдет -- при 540 градусах он пропадал бы дважды.
+    //
+    // Третье наложение -- дамка. Она включается РОВНО ОДИН РАЗ, на
+    // последней четверти, и обратно не выключается. Прежняя схема из двух
+    // сторон (обычная + дамка) давала чередование обычная -> дамка ->
+    // обычная -> дамка, то есть дамка мелькала уже на 90 градусах.
     //
     // Ни одна из сторон НЕ получает класс .king: там стоит
     // transform: scale(1.1) !important, который по каскаду подавил бы
@@ -2656,6 +2660,9 @@ function playKingPromotionEffect() {
     // дамки задаётся отдельным классом без transform.
     const flip = document.createElement("div");
     flip.className = "piece " + colorClass + " king-promotion-flip";
+
+    const flipBack = document.createElement("div");
+    flipBack.className = "piece " + colorClass + " king-promotion-flip-back";
 
     const flipKing = document.createElement("div");
     flipKing.className = "piece " + colorClass + " king-promotion-flip-king";
@@ -2679,17 +2686,20 @@ function playKingPromotionEffect() {
     // источник истины один -- MOVE_GHOST_DURATION_MS.
     const startDelayMs = MOVE_GHOST_DURATION_MS;
     flip.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
+    flipBack.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
     flipKing.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
     glow.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
     // Длительность тоже переменной, иначе число пришлось бы держать и в
     // style.css -- и оно неизбежно разъехалось бы с константой, а от неё
     // считается fallback timeout.
     flip.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
+    flipBack.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
     flipKing.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
     glow.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
 
     squareEl.appendChild(glow);
     squareEl.appendChild(flip);
+    squareEl.appendChild(flipBack);
     squareEl.appendChild(flipKing);
 
     let done = false;
@@ -2697,6 +2707,7 @@ function playKingPromotionEffect() {
         if (done) return;
         done = true;
         if (flip.parentNode) flip.parentNode.removeChild(flip);
+        if (flipBack.parentNode) flipBack.parentNode.removeChild(flipBack);
         if (flipKing.parentNode) flipKing.parentNode.removeChild(flipKing);
         if (glow.parentNode) glow.parentNode.removeChild(glow);
         // Симметрично cleanupMoveGhost и cleanupCapturedGhost: функция
