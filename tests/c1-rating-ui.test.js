@@ -149,8 +149,14 @@ console.log('\n=== 7. ratingConfirmed ===');
     check('7.1 стрелка только при подтверждении',
         /data\.ratingConfirmed !== true/.test(a));
     check('7.2 иначе честная строка', /confirmed: false/.test(a));
+    // Инвариант: применение квитанции НЕ формирует текст про
+    // неподтверждённый рейтинг. applySettlementResult() только выставляет
+    // lastSettlementDisplay = { confirmed: false }, а показывает это
+    // renderEndGameModal() (см. 7.4). Раньше условие заканчивалось на
+    // "|| true" и потому не могло провалиться никогда -- проверка была
+    // зелёной независимо от кода. На текущем коде она проходит честно.
     check('7.3 число не выдумывается',
-        a.indexOf('rating_change_unconfirmed') === -1 || true);
+        a.indexOf('rating_change_unconfirmed') === -1);
     check('7.4 окно итога различает случаи',
         /rating_change_unconfirmed/.test(SRC) && /rating_check_in_stats/.test(SRC));
 }
