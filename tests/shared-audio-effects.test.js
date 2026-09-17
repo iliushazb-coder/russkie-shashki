@@ -222,9 +222,27 @@ console.log('=== H. Behavioral: реальный fake AudioContext, без npm-�
 
         timeoutCalls.length = 0; fakeCtx._calls.length = 0;
         audio.playSoundForMoveType('king', false);
-        check('H.4 routing "king" -> playKingSound: первая нота через oscillator (createOscillator, не createBufferSource)',
-            fakeCtx._calls.indexOf('createOscillator') !== -1 && fakeCtx._calls.indexOf('createBufferSource') === -1);
-        check('H.5 routing "king" -> запланировано ровно 2 отложенные ноты (setTimeout)', timeoutCalls.length === 2);
+        // Звук превращения переработан: вместо трёх одинаковых синусов
+        // теперь три РАЗНЫХ слоя -- мягкий низкий impact (шумовой burst),
+        // затем колокол с обертоном, затем тихий высокий shimmer. Поэтому
+        // первым идёт createBufferSource, а не осциллятор: прежняя
+        // формулировка H.4 описывала старый дизайн.
+        check('H.4 routing "king" -> playKingSound: начинается с мягкого impact (createBufferSource)',
+            fakeCtx._calls.indexOf('createBufferSource') !== -1);
+        check('H.4b routing "king" -> impact идёт СРАЗУ, тональных слоёв в этот момент ещё нет',
+            fakeCtx._calls.indexOf('createOscillator') === -1);
+        check('H.5 routing "king" -> запланировано ровно 2 отложенные группы (setTimeout)', timeoutCalls.length === 2);
+        // Исполняем отложенные слои вручную: фейковый таймер их только
+        // собирает. Без этого колокол и shimmer остались бы непроверенными.
+        (function () {
+            const delays = timeoutCalls.map(function (c) { return c.delay; });
+            timeoutCalls.slice().forEach(function (c) { c.fn(); });
+            check('H.4c после отложенных слоёв появляются тональные (createOscillator)',
+                fakeCtx._calls.indexOf('createOscillator') !== -1);
+            check('H.4d колокол = тон + обертон, shimmer = один тон: всего 3 осциллятора',
+                fakeCtx._calls.filter(function (c) { return c === 'createOscillator'; }).length === 3);
+            check('H.4e shimmer звучит позже колокола', delays.length === 2 && delays[0] < delays[1]);
+        })();
 
         timeoutCalls.length = 0; fakeCtx._calls.length = 0;
         audio.playSoundForMoveType('capture', false);

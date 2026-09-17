@@ -2505,6 +2505,14 @@ function playMoveGhostAnimation(capturedSnapshots) {
     lastAnimatedMoveCount = currentState.moveCount;
     if (!isGenuinelyNewMove) return;
 
+    // Превращение в дамку -- здесь же, потому что этот guard уже отсеял
+    // ровно то, что нам нужно отсеять: первый рендер после подключения
+    // (reconnect, reload, вход зрителя к готовой дамке) и повторные
+    // рендеры того же хода. moveCount инкрементируется на КАЖДОМ прыжке,
+    // поэтому в цепочке взятий эффект сработает ровно один раз -- на том
+    // прыжке, где движок выставил moveType "king".
+    playKingPromotionEffect();
+
     const move = currentState.lastMove;
     const fromKey = move.from.row + "_" + move.from.col;
     const toKey = move.to.row + "_" + move.to.col;
@@ -2587,6 +2595,66 @@ function playMoveGhostAnimation(capturedSnapshots) {
             setTimeout(cleanupCapturedGhost, CAPTURE_FADE_DURATION_MS + 60);
         });
     }
+}
+
+// ===== ЭФФЕКТ ПРЕВРАЩЕНИЯ В ДАМКУ -- чисто визуальный слой =====
+//
+// Запускается ТОЛЬКО от реального события: moveType === "king" на новом
+// moveCount. От наличия класса .king не зависит вообще, поэтому reconnect,
+// reload, перерисовка доски и вход зрителя к уже готовой дамке эффект не
+// повторяют. Вызывается из playMoveGhostAnimation(), которая уже отсеяла
+// повторы через lastAnimatedMoveCount.
+//
+// Почему наложение, а не анимация самой шашки: в style.css есть
+// .king { transform: scale(1.1) !important; }, а по каскаду CSS
+// !important-объявление приоритетнее анимации, и !important внутри
+// @keyframes спецификацией игнорируется. Любая анимация transform на
+// элементе с .king была бы молча подавлена. Наложение класса .king не
+// несёт, поэтому конфликта нет вовсе -- и заодно ничего не ломается, если
+// во время эффекта придёт новый рендер: настоящая шашка не трогается, а
+// лишний элемент просто удаляется.
+//
+// Смена текстуры «в середине» получается сама собой: под наложением уже
+// лежит настоящая дамка, наложение показывает ОБЫЧНУЮ текстуру и к
+// середине эффекта исчезает, открывая её.
+const KING_PROMOTION_DURATION_MS = 340;
+
+function playKingPromotionEffect() {
+    if (!currentState || currentState.moveType !== "king" || !currentState.lastMove) return;
+
+    const toKey = currentState.lastMove.to.row + "_" + currentState.lastMove.to.col;
+    const squareEl = squareElements[toKey];
+    const pieceData = currentState.pieces[toKey];
+    if (!squareEl || !pieceData) return; // доска уже корректна и без эффекта
+
+    const colorClass = pieceData.color === "light" ? "piece-light" : "piece-dark";
+
+    // Наложение с ОБЫЧНОЙ текстурой -- переиспользуем существующие классы
+    // .piece/.piece-light/.piece-dark, своей графики не заводим.
+    const flip = document.createElement("div");
+    flip.className = "piece " + colorClass + " king-promotion-flip";
+
+    // Свечение -- отдельным элементом, чтобы не трогать filter настоящей
+    // шашки и не конфликтовать с её собственными тенями.
+    const glow = document.createElement("div");
+    glow.className = "king-promotion-glow";
+
+    squareEl.appendChild(glow);
+    squareEl.appendChild(flip);
+
+    let done = false;
+    function cleanup() {
+        if (done) return;
+        done = true;
+        if (flip.parentNode) flip.parentNode.removeChild(flip);
+        if (glow.parentNode) glow.parentNode.removeChild(glow);
+    }
+
+    // Та же страховка, что у ghost-анимаций: если animationend не придёт
+    // (вкладка ушла в фон, анимация отключена), элементы всё равно уедут.
+    flip.addEventListener("animationend", cleanup);
+    setTimeout(cleanup, KING_PROMOTION_DURATION_MS + 120);
+    activeGhostCancelFns.push(cleanup);
 }
 
 window.addEventListener("resize", cancelActiveGhostAnimations);
