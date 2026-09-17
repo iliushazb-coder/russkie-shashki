@@ -1597,7 +1597,14 @@ h1 {
     will-change: transform, opacity;
     transform-style: preserve-3d;
     backface-visibility: hidden;
-    animation: kingPromotionFlip 340ms cubic-bezier(.34,1.12,.52,1) forwards !important;
+    /* До старта анимации наложение полностью невидимо: в это время шашка
+       ещё летит move-ghost'ом к этой же клетке, и показывать здесь вторую
+       обычную шашку нельзя. Задержка приходит из JS переменной
+       --king-promotion-delay, равной MOVE_GHOST_DURATION_MS, чтобы число
+       не дублировалось в двух местах. Фолбэк 0ms -- на случай, если
+       переменная почему-то не выставлена. */
+    opacity: 0;
+    animation: kingPromotionFlip 340ms cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
 }
 
 /* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
@@ -1616,7 +1623,8 @@ h1 {
         rgba(255, 228, 150, 0.85) 0%,
         rgba(255, 205, 90, 0.35) 45%,
         rgba(255, 190, 60, 0) 72%);
-    animation: kingPromotionGlow 340ms ease-out forwards;
+    /* Та же задержка, что у наложения: свечение не должно опережать полёт. */
+    animation: kingPromotionGlow 340ms ease-out var(--king-promotion-delay, 0ms) forwards;
 }
 
 @keyframes kingPromotionFlip {

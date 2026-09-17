@@ -2505,14 +2505,6 @@ function playMoveGhostAnimation(capturedSnapshots) {
     lastAnimatedMoveCount = currentState.moveCount;
     if (!isGenuinelyNewMove) return;
 
-    // Превращение в дамку -- здесь же, потому что этот guard уже отсеял
-    // ровно то, что нам нужно отсеять: первый рендер после подключения
-    // (reconnect, reload, вход зрителя к готовой дамке) и повторные
-    // рендеры того же хода. moveCount инкрементируется на КАЖДОМ прыжке,
-    // поэтому в цепочке взятий эффект сработает ровно один раз -- на том
-    // прыжке, где движок выставил moveType "king".
-    playKingPromotionEffect();
-
     const move = currentState.lastMove;
     const fromKey = move.from.row + "_" + move.from.col;
     const toKey = move.to.row + "_" + move.to.col;
@@ -2524,6 +2516,19 @@ function playMoveGhostAnimation(capturedSnapshots) {
 
     const pieceData = currentState.pieces[toKey];
     if (!pieceData) return;
+
+    // Превращение в дамку -- ПОСЛЕ проверок клеток и реальной фигуры.
+    // Раньше вызов стоял сразу за guard'ом isGenuinelyNewMove, и эффект
+    // мог запуститься там, где полёт невозможен (клетки нет в DOM), --
+    // получалось превращение без предшествующего хода.
+    //
+    // Сам guard isGenuinelyNewMove по-прежнему выше и делает главное:
+    // отсеивает первый рендер после подключения (reconnect, reload, вход
+    // зрителя к готовой дамке) и повторные рендеры того же хода.
+    // moveCount инкрементируется на КАЖДОМ прыжке, а moveType становится
+    // "king" только на превращающем, поэтому в цепочке взятий эффект
+    // срабатывает ровно один раз.
+    playKingPromotionEffect();
 
     const wasKingBeforeThisHop = (currentState.moveType === "king") ? false : !!pieceData.king;
     const colorClass = pieceData.color === "light" ? "piece-light" : "piece-dark";
@@ -2639,6 +2644,22 @@ function playKingPromotionEffect() {
     const glow = document.createElement("div");
     glow.className = "king-promotion-glow";
 
+    // ЗАДЕРЖКА РАВНА ПОЛЁТУ ШАШКИ, и это не косметика.
+    //
+    // Move-ghost вешается на ТУ ЖЕ конечную клетку и летит к ней от
+    // исходной, а настоящая дамка на это время скрыта
+    // piece-hidden-for-ghost. Если наложение показать сразу, первые
+    // MOVE_GHOST_DURATION_MS на доске будут видны ДВЕ обычные шашки:
+    // одна ещё летит, вторая уже крутится на месте. Поэтому наложение
+    // невидимо (базовый opacity: 0 в CSS) и стартует ровно тогда, когда
+    // полёт закончился.
+    //
+    // Значение передаётся из JS переменной, а не пишется числом в CSS:
+    // источник истины один -- MOVE_GHOST_DURATION_MS.
+    const startDelayMs = MOVE_GHOST_DURATION_MS;
+    flip.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
+    glow.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
+
     squareEl.appendChild(glow);
     squareEl.appendChild(flip);
 
@@ -2648,12 +2669,19 @@ function playKingPromotionEffect() {
         done = true;
         if (flip.parentNode) flip.parentNode.removeChild(flip);
         if (glow.parentNode) glow.parentNode.removeChild(glow);
+        // Симметрично cleanupMoveGhost и cleanupCapturedGhost: функция
+        // снимает саму себя, чтобы не остаться в списке до следующей
+        // общей отмены и не быть вызванной вхолостую.
+        activeGhostCancelFns = activeGhostCancelFns.filter(function (fn) { return fn !== cleanup; });
     }
 
-    // Та же страховка, что у ghost-анимаций: если animationend не придёт
-    // (вкладка ушла в фон, анимация отключена), элементы всё равно уедут.
+    // Страховка на случай, если animationend не придёт (вкладка ушла в
+    // фон, движение отключено настройкой). Считаем ВЕСЬ срок жизни
+    // наложения: задержка до старта плюс сама анимация плюс запас.
+    // Без слагаемого задержки таймаут срабатывал бы раньше конца эффекта
+    // и обрезал его.
     flip.addEventListener("animationend", cleanup);
-    setTimeout(cleanup, KING_PROMOTION_DURATION_MS + 120);
+    setTimeout(cleanup, startDelayMs + KING_PROMOTION_DURATION_MS + 120);
     activeGhostCancelFns.push(cleanup);
 }
 
