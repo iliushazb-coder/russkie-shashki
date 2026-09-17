@@ -1585,7 +1585,17 @@ h1 {
    Текстура меняется «в середине» без единой строчки JS: под наложением
    уже лежит готовая дамка, а наложение показывает обычную шашку и к
    середине эффекта растворяется, открывая её. */
-.king-promotion-flip {
+/* ДВЕ СТОРОНЫ ОДНОЙ ФИГУРЫ, как у монеты.
+   Оба элемента лежат в одной клетке и крутятся синхронно, но их углы
+   разнесены на 180 градусов. Вместе с backface-visibility: hidden это
+   даёт ровно одну видимую сторону в каждый момент: пока обычная шашка
+   уходит ребром, дамка уже подходит лицом. Одним наложением поворот на
+   540 градусов дал бы ДВА провала в невидимость (90-270 и 450-540) --
+   фигура моргала бы.
+   perspective задаётся прямо в keyframes, а не на клетке: так объёмность
+   остаётся локальной для эффекта и не влияет на раскладку доски. */
+.king-promotion-flip,
+.king-promotion-flip-king {
     position: absolute;
     inset: 0;
     margin: auto;
@@ -1612,7 +1622,31 @@ h1 {
        проиграется -- а наложение останется невидимым из-за opacity: 0 выше
        и будет снято обычной уборкой. То есть деградация тихая и
        безопасная, без рассинхронизованной анимации. */
-    animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
+    animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Сторона дамки: тот же тайминг, угол смещён на 180 градусов. */
+.king-promotion-flip-king {
+    animation: kingPromotionFlipKing var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Текстура дамки БЕЗ класса .king -- он несёт transform: scale(1.1)
+   !important, который подавил бы анимацию. Специфичность (0,2,0) выше,
+   чем у .piece-dark / .piece-light, поэтому !important не нужен. */
+.king-promotion-flip-king.piece-dark {
+    background-image: url('assets/king_dark.png?v=2');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-color: transparent;
+}
+
+.king-promotion-flip-king.piece-light {
+    background-image: url('assets/king_light.png?v=2');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-color: transparent;
 }
 
 /* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
@@ -1635,20 +1669,37 @@ h1 {
     animation: kingPromotionGlow var(--king-promotion-duration) ease-out var(--king-promotion-delay, 0ms) forwards;
 }
 
+/* Полтора оборота за один проход. Обе стороны идут по ОДНОЙ траектории
+   подъёма и масштаба -- различаются только углом, поэтому зритель видит
+   одну объёмную фигуру, а не два элемента.
+   Финальный scale(1.1) не случаен: он совпадает с размером настоящей
+   дамки (.king имеет scale(1.1)), поэтому в момент снятия наложения
+   подмены не видно. */
 @keyframes kingPromotionFlip {
-    /* Подъём и разгон поворота -- ещё обычная шашка */
-    0%   { transform: translateY(0) rotateX(0deg) scale(1);      opacity: 1; }
-    30%  { transform: translateY(-18%) rotateX(70deg) scale(1.1); opacity: 1; }
-    /* Середина: ребро повёрнуто к зрителю, наложение исчезает и открывает
-       уже отрисованную дамку -- это и есть «смена текстуры» */
-    52%  { transform: translateY(-20%) rotateX(90deg) scale(1.12); opacity: 0; }
-    100% { transform: translateY(0) rotateX(180deg) scale(1);     opacity: 0; }
+    0%   { transform: perspective(620px) translateY(0)     rotateX(0deg)   scale(1);    }
+    12%  { transform: perspective(620px) translateY(-11%)  rotateX(52deg)  scale(1.06); }
+    38%  { transform: perspective(620px) translateY(-28%)  rotateX(258deg) scale(1.17); }
+    70%  { transform: perspective(620px) translateY(-19%)  rotateX(432deg) scale(1.13); }
+    88%  { transform: perspective(620px) translateY(-2%)   rotateX(528deg) scale(1.16); }
+    100% { transform: perspective(620px) translateY(0)     rotateX(540deg) scale(1.1);  }
+}
+
+/* Та же траектория, угол +180: пока одна сторона спиной, вторая лицом. */
+@keyframes kingPromotionFlipKing {
+    0%   { transform: perspective(620px) translateY(0)     rotateX(180deg) scale(1);    }
+    12%  { transform: perspective(620px) translateY(-11%)  rotateX(232deg) scale(1.06); }
+    38%  { transform: perspective(620px) translateY(-28%)  rotateX(438deg) scale(1.17); }
+    70%  { transform: perspective(620px) translateY(-19%)  rotateX(612deg) scale(1.13); }
+    88%  { transform: perspective(620px) translateY(-2%)   rotateX(708deg) scale(1.16); }
+    100% { transform: perspective(620px) translateY(0)     rotateX(720deg) scale(1.1);  }
 }
 
 @keyframes kingPromotionGlow {
-    0%   { opacity: 0;    transform: scale(0.75); }
-    35%  { opacity: 0.95; transform: scale(1.12); }
-    100% { opacity: 0;    transform: scale(1.35); }
+    /* Пик приходится на смену стороны (~38%), дальше спокойный уход --
+       короткий и мягкий, без вспышки. */
+    0%   { opacity: 0;    transform: scale(0.78); }
+    38%  { opacity: 0.85; transform: scale(1.14); }
+    100% { opacity: 0;    transform: scale(1.34); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1659,7 +1710,8 @@ h1 {
     /* Ни подъёма, ни поворота: наложение просто не показывается, и дамка
        появляется мгновенно. Звук при этом остаётся -- он не является
        движением. */
-    .king-promotion-flip {
+    .king-promotion-flip,
+    .king-promotion-flip-king {
         animation: none !important;
         opacity: 0 !important;
     }

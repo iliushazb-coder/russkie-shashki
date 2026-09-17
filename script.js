@@ -2641,10 +2641,24 @@ function playKingPromotionEffect() {
 
     const colorClass = pieceData.color === "light" ? "piece-light" : "piece-dark";
 
-    // Наложение с ОБЫЧНОЙ текстурой -- переиспользуем существующие классы
-    // .piece/.piece-light/.piece-dark, своей графики не заводим.
+    // ДВЕ СТОРОНЫ ОДНОЙ ФИГУРЫ. Обе переиспользуют существующие классы
+    // .piece/.piece-light/.piece-dark, своей графики не заводим: лицевая
+    // сторона показывает обычную шашку, обратная -- дамку.
+    //
+    // Почему две, а не одна: поворот на 540 градусов с
+    // backface-visibility: hidden у ОДНОГО элемента дал бы два провала в
+    // невидимость (90-270 и 450-540), фигура моргала бы. Разнесённые на
+    // 180 градусов стороны сменяют друг друга непрерывно.
+    //
+    // Ни одна из сторон НЕ получает класс .king: там стоит
+    // transform: scale(1.1) !important, который по каскаду подавил бы
+    // анимацию (а !important внутри @keyframes игнорируется). Текстура
+    // дамки задаётся отдельным классом без transform.
     const flip = document.createElement("div");
     flip.className = "piece " + colorClass + " king-promotion-flip";
+
+    const flipKing = document.createElement("div");
+    flipKing.className = "piece " + colorClass + " king-promotion-flip-king";
 
     // Свечение -- отдельным элементом, чтобы не трогать filter настоящей
     // шашки и не конфликтовать с её собственными тенями.
@@ -2665,21 +2679,25 @@ function playKingPromotionEffect() {
     // источник истины один -- MOVE_GHOST_DURATION_MS.
     const startDelayMs = MOVE_GHOST_DURATION_MS;
     flip.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
+    flipKing.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
     glow.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
     // Длительность тоже переменной, иначе число пришлось бы держать и в
     // style.css -- и оно неизбежно разъехалось бы с константой, а от неё
     // считается fallback timeout.
     flip.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
+    flipKing.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
     glow.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
 
     squareEl.appendChild(glow);
     squareEl.appendChild(flip);
+    squareEl.appendChild(flipKing);
 
     let done = false;
     function cleanup() {
         if (done) return;
         done = true;
         if (flip.parentNode) flip.parentNode.removeChild(flip);
+        if (flipKing.parentNode) flipKing.parentNode.removeChild(flipKing);
         if (glow.parentNode) glow.parentNode.removeChild(glow);
         // Симметрично cleanupMoveGhost и cleanupCapturedGhost: функция
         // снимает саму себя, чтобы не остаться в списке до следующей

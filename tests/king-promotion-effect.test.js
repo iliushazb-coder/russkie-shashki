@@ -143,19 +143,31 @@ check('5.3 длительность задана переменной, а не �
     /animation: kingPromotionFlip var\(--king-promotion-duration/.test(CSS));
 check('5.4 есть подъём (translateY) и поворот (rotateX)',
     /kingPromotionFlip[\s\S]*?translateY\(-\d+%\)/.test(CSS) &&
-    /kingPromotionFlip[\s\S]*?rotateX\(90deg\)/.test(CSS));
-check('5.5 текстура меняется В СЕРЕДИНЕ: наложение исчезает около 50%', (function () {
+    /kingPromotionFlip[\s\S]*?rotateX\(\d+deg\)/.test(CSS));
+// Смена текстуры больше не делается исчезновением наложения: это
+// двусторонний переворот, сторона меняется при проходе через ребро
+// (90 градусов). Проверяем, что момент реально наступает внутри
+// анимации, а не в самом её конце.
+check('5.5 смена стороны происходит в первой половине эффекта', (function () {
     const block = /@keyframes kingPromotionFlip \{[\s\S]*?\n\}/.exec(CSS);
     if (!block) return false;
-    const m = /(\d+)%\s*\{[^}]*opacity: 0;/.exec(block[0]);
-    if (!m) return false;
-    const pct = parseInt(m[1], 10);
-    return pct >= 45 && pct <= 60;
+    const kf = [...block[0].matchAll(/(\d+)%\s*\{[^}]*rotateX\((\d+)deg\)/g)]
+        .map(function (m) { return [parseInt(m[1], 10), parseInt(m[2], 10)]; });
+    for (let i = 1; i < kf.length; i++) {
+        if (kf[i - 1][1] < 90 && kf[i][1] >= 90) {
+            const x = (90 - kf[i - 1][1]) / (kf[i][1] - kf[i - 1][1]);
+            const pct = kf[i - 1][0] + (kf[i][0] - kf[i - 1][0]) * x;
+            return pct > 5 && pct < 50;
+        }
+    }
+    return false;
 })());
 check('5.6 свечение отдельным слоем, не через filter настоящей фигуры',
     /\.king-promotion-glow\s*\{[\s\S]*?radial-gradient/.test(CSS));
-check('5.7 наложение не перехватывает клики',
-    /\.king-promotion-flip\s*\{[\s\S]*?pointer-events: none/.test(CSS));
+check('5.7 ни одна сторона не перехватывает клики', (function () {
+    const base = /\.king-promotion-flip,\s*\n\.king-promotion-flip-king \{[\s\S]*?\n\}/.exec(CSS);
+    return !!base && /pointer-events: none/.test(base[0]);
+})());
 
 console.log('\n=== 6. PREFERS-REDUCED-MOTION ===');
 
@@ -273,10 +285,10 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     check('10.3 ход уже готовой дамки НЕ запускает (moveType всё равно "move")',
         run({ moveType: "move", lastMove: at, pieces: pieces }) === 0);
     check('10.4 превращение (moveType "king") запускает ровно один раз',
-        run({ moveType: "king", lastMove: at, pieces: pieces }) === 2,
-        'создано элементов: overlay + glow');
+        run({ moveType: "king", lastMove: at, pieces: pieces }) === 3,
+        'создано элементов: glow + две стороны переворота');
     check('10.5 превращение ЧЕРЕЗ ВЗЯТИЕ тоже даёт "king" и запускает один раз',
-        run({ moveType: "king", lastMove: { to: { row: 7, col: 2 } }, pieces: { "7_2": { color: "dark", king: true } } }) === 2);
+        run({ moveType: "king", lastMove: { to: { row: 7, col: 2 } }, pieces: { "7_2": { color: "dark", king: true } } }) === 3);
     check('10.6 нет lastMove -> тишина',
         run({ moveType: "king", lastMove: null, pieces: pieces }) === 0);
     check('10.7 клетки нет в DOM -> защитный выход без исключения',
@@ -348,8 +360,10 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
     const eff = funcBody(CLEAN, 'playKingPromotionEffect');
     check('13.1 функция найдена', !!eff);
 
-    check('13.2 базовый opacity наложения = 0 (до старта невидимо)',
-        /\.king-promotion-flip \{[\s\S]*?opacity: 0;[\s\S]*?animation: kingPromotionFlip/.test(CSS));
+    check('13.2 базовый opacity обеих сторон = 0 (до старта невидимо)', (function () {
+        const base = /\.king-promotion-flip,\s*\n\.king-promotion-flip-king \{[\s\S]*?\n\}/.exec(CSS);
+        return !!base && /opacity: 0;/.test(base[0]);
+    })());
 
     check('13.3 задержка берётся из CSS-переменной, а не числом',
         /animation: kingPromotionFlip [^;]*var\(--king-promotion-delay/.test(CSS));
@@ -377,9 +391,9 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
         return !!m && parseInt(m[1], 10) === 150;
     })());
-    check('13.4f длительность передаётся переменной обоим элементам', (function () {
+    check('13.4f длительность передаётся переменной всем трём элементам', (function () {
         const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
-        return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 2;
+        return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 3;
     })());
     check('13.5 в CSS нет захардкоженной длительности полёта',
         !/150ms/.test(CSS));
@@ -387,8 +401,8 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
     if (eff) {
         check('13.6 задержка связана с MOVE_GHOST_DURATION_MS, а не с magic number',
             /const startDelayMs = MOVE_GHOST_DURATION_MS;/.test(eff));
-        check('13.7 переменная выставляется и наложению, и свечению',
-            (eff.match(/setProperty\("--king-promotion-delay"/g) || []).length === 2);
+        check('13.7 переменная задержки выставляется всем трём элементам',
+            (eff.match(/setProperty\("--king-promotion-delay"/g) || []).length === 3);
         check('13.8 fallback timeout учитывает И задержку, И длительность эффекта',
             /setTimeout\(cleanup, startDelayMs \+ KING_PROMOTION_DURATION_MS \+ \d+\)/.test(eff));
         check('13.9 cleanup удаляет себя из activeGhostCancelFns (симметрично соседям)',
@@ -438,6 +452,84 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         global.squareElements = saved.sq; global.activeGhostCancelFns = saved.fns;
         global.currentState = saved.cs;
     })();
+}
+
+console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГРАДУСОВ ===');
+{
+    function kfAngles(name) {
+        const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
+        if (!b) return null;
+        return [...b[0].matchAll(/(\d+)%\s*\{[^}]*rotateX\((\d+)deg\)/g)]
+            .map(function (m) { return [parseInt(m[1], 10), parseInt(m[2], 10)]; });
+    }
+    const man = kfAngles('kingPromotionFlip');
+    const king = kfAngles('kingPromotionFlipKing');
+
+    check('14.1 keyframes обеих сторон существуют', !!man && !!king);
+    check('14.2 обычная сторона проходит ровно 540 градусов',
+        !!man && man[0][1] === 0 && man[man.length - 1][1] === 540);
+    check('14.3 сторона дамки проходит те же 540 (со сдвигом фазы)',
+        !!king && (king[king.length - 1][1] - king[0][1]) === 540);
+    // Сдвиг ровно 180 на КАЖДОМ ключе -- иначе стороны разъедутся и
+    // появится момент, когда видны обе или ни одной.
+    check('14.4 стороны разнесены ровно на 180 градусов во всех ключах',
+        !!man && !!king && man.length === king.length &&
+        man.every(function (m, i) { return king[i][0] === m[0] && king[i][1] - m[1] === 180; }));
+    // Монотонность: вращение не должно «отыгрывать назад».
+    check('14.5 вращение монотонно, без отката', (function () {
+        if (!man) return false;
+        for (let i = 1; i < man.length; i++) if (man[i][1] < man[i - 1][1]) return false;
+        return true;
+    })());
+
+    function kfTrack(name, prop) {
+        const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
+        if (!b) return null;
+        const re = new RegExp('(\\d+)%\\s*\\{[^}]*' + prop + '\\(([-\\d.]+)%?\\)', 'g');
+        return [...b[0].matchAll(re)].map(function (m) { return m[2]; }).join(',');
+    }
+    // Одна фигура, а не два элемента: подъём и масштаб должны совпадать.
+    check('14.6 подъём одинаков у обеих сторон',
+        kfTrack('kingPromotionFlip', 'translateY') === kfTrack('kingPromotionFlipKing', 'translateY'));
+    check('14.7 масштаб одинаков у обеих сторон',
+        kfTrack('kingPromotionFlip', 'scale') === kfTrack('kingPromotionFlipKing', 'scale'));
+
+    check('14.8 backface скрыт у обеих сторон -- иначе видны обе сразу', (function () {
+        const base = /\.king-promotion-flip,\s*\n\.king-promotion-flip-king \{[\s\S]*?\n\}/.exec(CSS);
+        return !!base && /backface-visibility: hidden/.test(base[0]);
+    })());
+    check('14.9 perspective задан локально в keyframes, а не на клетке',
+        /@keyframes kingPromotionFlip \{[\s\S]*?perspective\(\d+px\)/.test(CSS) &&
+        !/\.board-square[\s\S]{0,200}?perspective:/.test(CSS));
+
+    // Сторона дамки обязана нести текстуру дамки и НЕ нести класс .king.
+    check('14.10 у стороны дамки своя текстура', (function () {
+        return /\.king-promotion-flip-king\.piece-dark \{[\s\S]*?king_dark\.png/.test(CSS) &&
+               /\.king-promotion-flip-king\.piece-light \{[\s\S]*?king_light\.png/.test(CSS);
+    })());
+    check('14.11 ни одна сторона не получает класс .king (конфликт !important)', (function () {
+        const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
+        if (!eff2) return false;
+        return /" king-promotion-flip"/.test(eff2) &&
+               /" king-promotion-flip-king"/.test(eff2) &&
+               !/piece " \+ colorClass \+ " king "/.test(eff2);
+    })());
+    check('14.12 финальный масштаб совпадает с настоящей дамкой (scale 1.1)',
+        !!man && /100%\s*\{[^}]*scale\(1\.1\)/.test(
+            /@keyframes kingPromotionFlipKing \{[\s\S]*?\n\}/.exec(CSS)[0]));
+
+    // Обе стороны убираются вместе -- иначе одна останется на доске.
+    check('14.13 обе стороны удаляются при уборке', (function () {
+        const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
+        return !!eff2 && /removeChild\(flip\)/.test(eff2) && /removeChild\(flipKing\)/.test(eff2);
+    })());
+    check('14.14 reduced-motion гасит ОБЕ стороны', (function () {
+        const blocks = CSS.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
+        return blocks.some(function (b) {
+            return /\.king-promotion-flip,/.test(b) && /\.king-promotion-flip-king/.test(b) &&
+                   /animation: none/.test(b) && /opacity: 0/.test(b);
+        });
+    })());
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
