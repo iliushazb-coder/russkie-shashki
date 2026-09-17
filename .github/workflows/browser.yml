@@ -19,6 +19,12 @@ on:
     branches: ['**']
   pull_request:
 
+# Прогон только читает код и ничего не публикует, поэтому GITHUB_TOKEN
+# сужен до чтения -- как в backend.yml. Без явного блока применялись бы
+# права репозитория по умолчанию, а они шире необходимого.
+permissions:
+  contents: read
+
 jobs:
   browser:
     runs-on: ubuntu-latest
