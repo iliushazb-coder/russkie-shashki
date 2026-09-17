@@ -48,7 +48,7 @@ check('B.4 module.exports для Node tests',
 console.log('');
 console.log('=== C. index.html: порядок и способ загрузки script tags ===');
 {
-    const audioIdx = HTML.indexOf('shared/audio-effects.js?v=1');
+    const audioIdx = (function(){var m=/shared\/audio-effects\.js\?v=\d+/.exec(HTML);return m?m.index:-1;})();
     const formatIdx = HTML.indexOf('shared/format-utils.js?v=1');
     const scriptVerMatch = /script\.js\?v=(\d+)/.exec(HTML);
     const scriptIdx = scriptVerMatch ? scriptVerMatch.index : -1;

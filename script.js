@@ -1184,6 +1184,9 @@ const {
     playKingSound,
     playKingCaptureSound,
     playWinSound,
+    playVictorySound,
+    playDefeatSound,
+    playDrawSound,
     playSoundForMoveType
 } = window.RussianCheckersAudioEffects;
 // Современные браузеры блокируют звук, пока человек не коснётся экрана —
@@ -2878,6 +2881,64 @@ function buildDrawResultText(winReason) {
     };
 }
 
+
+// ===== ЗВУК ИСХОДА ПАРТИИ =====
+//
+// Классификация намеренно НЕ по одному признаку: у онлайн-комнат и у
+// партий с ботом разная форма currentState.players.
+//
+//   онлайн -- players[color] = { id, name }, поэтому сравниваем по UID.
+//     Это принципиально: при реванше цвета меняются местами, и сравнение
+//     по myColor дало бы неверный ответ. Тот же приём уже применён для
+//     подписи причины сдачи (см. ниже winnerUid/loserUid).
+//
+//   бот -- players[color] = { name } БЕЗ id (см. места создания бот-сессии).
+//     Там сравнивать по UID нечего, поэтому падаем на myColor, который для
+//     бот-партии выставляется при её старте и учитывает смену стороны в
+//     реванше с ботом.
+//
+// Зритель не участвует в партии, поэтому персонального исхода у него нет:
+// ни победы, ни поражения. Ничья -- исход самой партии, а не игрока,
+// поэтому её зритель слышит наравне со всеми.
+function playEndGameOutcomeSound() {
+    if (!currentState || !currentState.winner) return;
+
+    if (currentState.winner === "draw") {
+        playDrawSound();
+        return;
+    }
+
+    if (isSpectator) {
+        // Нейтрально: партия закончилась, но лично к зрителю исход не
+        // относится. Тот же звук, что у ничьей, -- «партия завершена».
+        playDrawSound();
+        return;
+    }
+
+    const winnerColor = currentState.winner;
+    const loserColor = winnerColor === "light" ? "dark" : "light";
+    const players = currentState.players || {};
+    const winnerUid = players[winnerColor] && players[winnerColor].id;
+    const loserUid = players[loserColor] && players[loserColor].id;
+
+    let iWon;
+    if (winnerUid || loserUid) {
+        // Онлайн: решает UID, устойчиво к смене цветов в реванше.
+        iWon = (myTelegramId === winnerUid);
+        if (!iWon && myTelegramId !== loserUid) {
+            // Ни победитель, ни проигравший -- личного исхода нет.
+            playDrawSound();
+            return;
+        }
+    } else {
+        // Бот-партия: id отсутствуют, решает сторона доски.
+        iWon = (myColor === winnerColor);
+    }
+
+    if (iWon) playVictorySound();
+    else playDefeatSound();
+}
+
 function renderEndGameModal() {
     if (currentState && currentState.winner) {
         if (currentState.winner === "draw") {
@@ -2988,7 +3049,9 @@ function renderEndGameModal() {
             ? (currentBotMatchId || "offline") + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "")
             : (roomCode || "offline") + "_" + onlineMatchNumber + "_" + currentState.moveCount + (currentState.winner === "draw" ? "_draw" : "");
         if (endGameShownForRoom !== marker) {
-            playWinSound();
+            // Тот же guard, что и раньше: звук ровно один раз на финал,
+            // повторные рендеры того же результата молчат.
+            playEndGameOutcomeSound();
             endGameShownForRoom = marker;
         }
         if (isBotGame && !localOnlyBotGame) {

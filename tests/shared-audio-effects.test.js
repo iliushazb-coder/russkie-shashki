@@ -131,17 +131,18 @@ console.log('');
 console.log('=== C. index.html: порядок и способ загрузки script tags ===');
 {
     const stringUtilsIdx = HTML.indexOf('shared/string-utils.js?v=1');
-    const audioIdx = HTML.indexOf('shared/audio-effects.js?v=1');
+    const audioVerMatch = /shared\/audio-effects\.js\?v=\d+/.exec(HTML);
+    const audioIdx = audioVerMatch ? audioVerMatch.index : -1;
     // Версия script.js неизбежно продолжит расти со следующими slice'ами
     // №43 -- ищем generic-регэкспом, не жёстко зашитым числом (тот же фикс,
     // что уже применялся к shared-string-utils.test.js).
     const scriptVerMatch = /script\.js\?v=(\d+)/.exec(HTML);
     const scriptIdx = scriptVerMatch ? scriptVerMatch.index : -1;
-    check('C.1 shared/audio-effects.js?v=1 присутствует', audioIdx !== -1);
+    check('C.1 shared/audio-effects.js подключён с числовой версией', audioIdx !== -1);
     check('C.2 порядок: string-utils.js < audio-effects.js < script.js',
         stringUtilsIdx !== -1 && stringUtilsIdx < audioIdx && audioIdx < scriptIdx,
         'stringUtils@' + stringUtilsIdx + ' audio@' + audioIdx + ' script@' + scriptIdx);
-    const tagMatch = /<script src="shared\/audio-effects\.js\?v=1"[^>]*><\/script>/.exec(HTML);
+    const tagMatch = /<script src="shared\/audio-effects\.js\?v=\d+"[^>]*><\/script>/.exec(HTML);
     check('C.3 тег без async/defer/type="module"', !!tagMatch, tagMatch ? tagMatch[0] : 'не найден');
 }
 
@@ -172,7 +173,12 @@ CLUSTER_FUNCS.forEach(function (fn) {
 
 console.log('');
 console.log('=== G. Cache-bust ===');
-check('G.1 HTML содержит shared/audio-effects.js?v=1', /shared\/audio-effects\.js\?v=1/.test(HTML));
+// Числовая граница вместо точного равенства: файл получил звуки исхода
+// партии, его cache-bust штатно поднят и будет расти дальше.
+check('G.1 HTML содержит shared/audio-effects.js с версией >= 2', (function () {
+    const m = /shared\/audio-effects\.js\?v=(\d+)/.exec(HTML);
+    return !!m && parseInt(m[1], 10) >= 2;
+})());
 check('G.2 HTML содержит script.js с версией СТРОГО ВЫШЕ v=201 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersAudioEffects; конкретное число не фиксируем -- продолжит расти со следующими slice\'ами №43)',
     (function () {
         const m = /script\.js\?v=(\d+)/.exec(HTML);
