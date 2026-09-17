@@ -137,12 +137,11 @@ console.log('\n=== 5. CSS: ДЛИТЕЛЬНОСТЬ, СМЕНА ТЕКСТУРЫ
 
 check('5.1 keyframes переворота существуют', /@keyframes kingPromotionFlip/.test(CSS));
 check('5.2 keyframes свечения существуют', /@keyframes kingPromotionGlow/.test(CSS));
-check('5.3 длительность в диапазоне 300-350 мс', (function () {
-    const m = /animation: kingPromotionFlip (\d+)ms/.exec(CSS);
-    if (!m) return false;
-    const ms = parseInt(m[1], 10);
-    return ms >= 300 && ms <= 350;
-})());
+// Длительность больше не пишется числом в CSS -- она приходит переменной,
+// а её значение живёт в KING_PROMOTION_DURATION_MS. Проверяем источник
+// истины, а не текст правила (диапазон закреплён в 13.5d).
+check('5.3 длительность задана переменной, а не числом',
+    /animation: kingPromotionFlip var\(--king-promotion-duration/.test(CSS));
 check('5.4 есть подъём (translateY) и поворот (rotateX)',
     /kingPromotionFlip[\s\S]*?translateY\(-\d+%\)/.test(CSS) &&
     /kingPromotionFlip[\s\S]*?rotateX\(90deg\)/.test(CSS));
@@ -333,17 +332,44 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         /\.king-promotion-flip \{[\s\S]*?opacity: 0;[\s\S]*?animation: kingPromotionFlip/.test(CSS));
 
     check('13.3 задержка берётся из CSS-переменной, а не числом',
-        /animation: kingPromotionFlip [\d]+ms [^;]*var\(--king-promotion-delay/.test(CSS));
+        /animation: kingPromotionFlip [^;]*var\(--king-promotion-delay/.test(CSS));
     check('13.4 свечение имеет ТУ ЖЕ задержку',
-        /animation: kingPromotionGlow [\d]+ms [^;]*var\(--king-promotion-delay/.test(CSS));
+        /animation: kingPromotionGlow [^;]*var\(--king-promotion-delay/.test(CSS));
     check('13.5 в CSS нет захардкоженной длительности полёта',
         !/150ms/.test(CSS));
+    check('13.5b длительность эффекта в CSS тоже переменная, а не число',
+        /animation: kingPromotionFlip var\(--king-promotion-duration/.test(CSS) &&
+        /animation: kingPromotionGlow var\(--king-promotion-duration/.test(CSS));
+    // Единственный источник истины: значение живёт в JS-константе.
+    check('13.5c значение длительности не дублируется числом в CSS', (function () {
+        const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
+        if (!m) return false;
+        const inKeyframeUse = new RegExp('kingPromotion\\w+ ' + m[1] + 'ms');
+        return !inKeyframeUse.test(CSS);
+    })());
+    check('13.5d длительность в согласованном диапазоне 500-650 мс', (function () {
+        const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
+        if (!m) return false;
+        const v = parseInt(m[1], 10);
+        return v >= 500 && v <= 650;
+    })());
+    check('13.5e MOVE_GHOST_DURATION_MS не менялся', (function () {
+        const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
+        return !!m && parseInt(m[1], 10) === 150;
+    })());
 
     if (eff) {
         check('13.6 задержка связана с MOVE_GHOST_DURATION_MS, а не с magic number',
             /const startDelayMs = MOVE_GHOST_DURATION_MS;/.test(eff));
-        check('13.7 переменная выставляется и наложению, и свечению',
+        check('13.7 переменная задержки выставляется и наложению, и свечению',
             (eff.match(/setProperty\("--king-promotion-delay"/g) || []).length === 2);
+        // Длительность тоже обязана быть переменной: иначе число разъедется
+        // между KING_PROMOTION_DURATION_MS и style.css, и fallback timeout
+        // начнёт считать не то.
+        check('13.7b длительность выставляется переменной обоим элементам',
+            (eff.match(/setProperty\("--king-promotion-duration"/g) || []).length === 2);
+        check('13.7c длительность берётся из KING_PROMOTION_DURATION_MS',
+            /setProperty\("--king-promotion-duration", KING_PROMOTION_DURATION_MS \+ "ms"\)/.test(eff));
         check('13.8 fallback timeout учитывает И задержку, И длительность эффекта',
             /setTimeout\(cleanup, startDelayMs \+ KING_PROMOTION_DURATION_MS \+ \d+\)/.test(eff));
         check('13.9 cleanup удаляет себя из activeGhostCancelFns (симметрично соседям)',
@@ -378,6 +404,9 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         check('13.10 переменная задержки равна длительности полёта',
             props['--king-promotion-delay'] === global.MOVE_GHOST_DURATION_MS + 'ms',
             String(props['--king-promotion-delay']));
+        check('13.10b переменная длительности равна константе',
+            props['--king-promotion-duration'] === global.KING_PROMOTION_DURATION_MS + 'ms',
+            String(props['--king-promotion-duration']));
         check('13.11 fallback timeout не короче задержки + анимации',
             timeouts.length > 0 && timeouts[0] >= global.MOVE_GHOST_DURATION_MS + global.KING_PROMOTION_DURATION_MS,
             'timeout=' + timeouts[0] + ' нужно >= ' + (global.MOVE_GHOST_DURATION_MS + global.KING_PROMOTION_DURATION_MS));

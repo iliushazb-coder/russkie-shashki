@@ -1604,7 +1604,7 @@ h1 {
        не дублировалось в двух местах. Фолбэк 0ms -- на случай, если
        переменная почему-то не выставлена. */
     opacity: 0;
-    animation: kingPromotionFlip 340ms cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
+    animation: kingPromotionFlip var(--king-promotion-duration, 560ms) cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
 }
 
 /* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
@@ -1613,34 +1613,43 @@ h1 {
     position: absolute;
     inset: 0;
     margin: auto;
-    width: 96%;
-    height: 96%;
+    /* Шире прежних 96%: свечение должно читаться как ореол вокруг фигуры,
+       а не как подсветка ровно под ней. Плотность поднята умеренно --
+       никаких вспышек, это мягкий тёплый ореол. */
+    width: 118%;
+    height: 118%;
     border-radius: 50%;
     pointer-events: none;
     z-index: 4;
     opacity: 0;
     background: radial-gradient(circle,
-        rgba(255, 228, 150, 0.85) 0%,
-        rgba(255, 205, 90, 0.35) 45%,
-        rgba(255, 190, 60, 0) 72%);
+        rgba(255, 232, 165, 0.92) 0%,
+        rgba(255, 208, 100, 0.42) 42%,
+        rgba(255, 190, 60, 0) 74%);
     /* Та же задержка, что у наложения: свечение не должно опережать полёт. */
-    animation: kingPromotionGlow 340ms ease-out var(--king-promotion-delay, 0ms) forwards;
+    animation: kingPromotionGlow var(--king-promotion-duration, 560ms) ease-out var(--king-promotion-delay, 0ms) forwards;
 }
 
 @keyframes kingPromotionFlip {
-    /* Подъём и разгон поворота -- ещё обычная шашка */
-    0%   { transform: translateY(0) rotateX(0deg) scale(1);      opacity: 1; }
-    30%  { transform: translateY(-18%) rotateX(70deg) scale(1.1); opacity: 1; }
+    /* Подъём и разгон поворота -- ещё обычная шашка.
+       Подъём и масштаб заметнее прежних (-18%/1.1): на 560 мс движение
+       успевает прочитаться, и мелкая амплитуда выглядела бы вялой. */
+    0%   { transform: translateY(0) rotateX(0deg) scale(1);        opacity: 1; }
+    22%  { transform: translateY(-16%) rotateX(38deg) scale(1.10); opacity: 1; }
+    38%  { transform: translateY(-26%) rotateX(72deg) scale(1.17); opacity: 1; }
     /* Середина: ребро повёрнуто к зрителю, наложение исчезает и открывает
        уже отрисованную дамку -- это и есть «смена текстуры» */
-    52%  { transform: translateY(-20%) rotateX(90deg) scale(1.12); opacity: 0; }
-    100% { transform: translateY(0) rotateX(180deg) scale(1);     opacity: 0; }
+    52%  { transform: translateY(-28%) rotateX(90deg) scale(1.20); opacity: 0; }
+    100% { transform: translateY(0) rotateX(180deg) scale(1);      opacity: 0; }
 }
 
 @keyframes kingPromotionGlow {
-    0%   { opacity: 0;    transform: scale(0.75); }
-    35%  { opacity: 0.95; transform: scale(1.12); }
-    100% { opacity: 0;    transform: scale(1.35); }
+    /* Нарастание чуть позже пика подъёма и более долгий уход -- ореол
+       должен «дышать», а не вспыхивать. */
+    0%   { opacity: 0;    transform: scale(0.72); }
+    30%  { opacity: 0.70; transform: scale(1.05); }
+    48%  { opacity: 1;    transform: scale(1.22); }
+    100% { opacity: 0;    transform: scale(1.52); }
 }
 
 @media (prefers-reduced-motion: reduce) {
