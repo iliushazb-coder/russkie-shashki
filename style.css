@@ -641,6 +641,16 @@ h1 {
     animation: none !important;
 }
 
+/* Настоящая дамка прячется на время превращения. Отдельный класс, а не
+   piece-hidden-for-ghost: тот снимается по окончании полёта (150 мс), а
+   эффект живёт дольше. Без этого в моменты, когда обе обычные стороны
+   стоят ребром (90 и 270 градусов), сквозь них проглядывала бы уже
+   готовая дамка -- то есть превращение было бы видно раньше времени. */
+.piece-hidden-for-promotion {
+    opacity: 0 !important;
+    animation: none !important;
+}
+
 @keyframes pieceAppear {
     0% { transform: scale(0.5); opacity: 0.3; }
     100% { transform: scale(1); opacity: 1; }
@@ -1692,12 +1702,17 @@ h1 {
    Финальный scale(1.1) совпадает с размером настоящей дамки (.king имеет
    scale(1.1)), поэтому снятия наложений не видно. */
 @keyframes kingPromotionFlip {
-    0%   { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    }
-    12%  { transform: perspective(620px) translateY(-11%) rotateX(52deg)  scale(1.06); }
-    38%  { transform: perspective(620px) translateY(-28%) rotateX(258deg) scale(1.17); }
-    72%  { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); }
-    88%  { transform: perspective(620px) translateY(-2%)  rotateX(522deg) scale(1.16); }
-    100% { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  }
+    /* opacity: 1 нужен ЯВНО на каждом кадре. В общем селекторе стоит
+       базовое opacity: 0 (чтобы до старта анимации ничего не мелькало
+       поверх летящей шашки), а свойство, не упомянутое в keyframes,
+       сохраняет базовое значение -- без этих строк первая обычная сторона
+       была бы невидимой всю анимацию. */
+    0%   { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 1; }
+    12%  { transform: perspective(620px) translateY(-11%) rotateX(52deg)  scale(1.06); opacity: 1; }
+    38%  { transform: perspective(620px) translateY(-28%) rotateX(258deg) scale(1.17); opacity: 1; }
+    72%  { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); opacity: 1; }
+    88%  { transform: perspective(620px) translateY(-2%)  rotateX(522deg) scale(1.16); opacity: 1; }
+    100% { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  opacity: 1; }
 }
 
 /* Вторая ОБЫЧНАЯ сторона: угол +180, гаснет на 450 градусах (72%), когда

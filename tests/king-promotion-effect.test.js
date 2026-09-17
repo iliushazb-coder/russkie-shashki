@@ -52,6 +52,15 @@ function baseOverlayRule() {
     return end === -1 ? null : [CSS.slice(i, end + 2)];
 }
 
+// Базовое opacity из общего селектора трёх наложений. Всё, что keyframes
+// не переопределяют, остаётся этим значением.
+function baseOpacity() {
+    const rule = baseOverlayRule();
+    if (!rule) return 1;
+    const m = /opacity:\s*([\d.]+)/.exec(rule[0]);
+    return m ? parseFloat(m[1]) : 1;
+}
+
 
 console.log('=== 1. ТРИГГЕР ТОЛЬКО ПО СОБЫТИЮ ===');
 
@@ -245,6 +254,12 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
         appendChild: function (el) { created.push(el.className); }
     };
     global.squareElements = { "0_1": fakeSquare, "7_2": fakeSquare };
+    // Настоящая фигура на клетке: эффект прячет её на время превращения.
+    const realClasses = new Set();
+    const fakeReal = { classList: { add: function (c) { realClasses.add(c); },
+                                    remove: function (c) { realClasses.delete(c); } } };
+    global.pieceElements = { "0_1": fakeReal, "7_2": fakeReal };
+    global._realClasses = realClasses;
     global.document = {
         createElement: function () {
             return {
@@ -304,6 +319,20 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
         run({ moveType: "king", lastMove: null, pieces: pieces }) === 0);
     check('10.7 клетки нет в DOM -> защитный выход без исключения',
         run({ moveType: "king", lastMove: { to: { row: 3, col: 3 } }, pieces: {} }) === 0);
+
+    // Настоящая дамка обязана быть скрыта на время эффекта, иначе в
+    // рёберных фазах она проглянет сквозь наложения раньше времени.
+    (function () {
+        global._realClasses.clear();
+        global.activeGhostCancelFns = [];
+        global.currentState = { moveType: "king", lastMove: at, pieces: pieces };
+        playKingPromotionEffect();
+        check('10.8 настоящая дамка скрыта на время превращения',
+            global._realClasses.has('piece-hidden-for-promotion'));
+        if (global.activeGhostCancelFns.length) global.activeGhostCancelFns[0]();
+        check('10.9 после уборки настоящая дамка снова видна',
+            !global._realClasses.has('piece-hidden-for-promotion'));
+    })();
 
     global.setTimeout = savedTimeout;
 }
@@ -577,7 +606,13 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
             const pct = parseFloat(m[1]);
             const rot = /rotateX\(([-\d.]+)deg\)/.exec(m[2]);
             const op = /opacity:\s*([\d.]+)/.exec(m[2]);
-            out.push({ pct: pct, rot: rot ? parseFloat(rot[1]) : null, op: op ? parseFloat(op[1]) : 1 });
+            // КЛЮЧЕВОЕ: если opacity в кадре НЕ указана, свойство сохраняет
+            // БАЗОВОЕ значение из общего селектора, а там стоит opacity: 0.
+            // Прежняя версия этого теста подставляла здесь единицу и
+            // поэтому не заметила, что первая обычная сторона невидима всю
+            // анимацию. Базовое значение читаем из самого CSS, а не
+            // предполагаем.
+            out.push({ pct: pct, rot: rot ? parseFloat(rot[1]) : null, op: op ? parseFloat(op[1]) : baseOpacity() });
         }
         return out.sort(function (a, b2) { return a.pct - b2.pct; });
     }
@@ -660,6 +695,29 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
         // Вращение до превращения должно быть заметным.
         check('15.11 до превращения фигура успевает повернуться больше чем на оборот',
             at(man, timeline[firstKing].p, 'rot') >= 360);
+
+        // Точная заказанная последовательность по УГЛУ поворота, а не по
+        // проценту: 0-90 A, 90-270 B, 270-450 A, после 450 только дамка.
+        function whoAt(angle) {
+            // находим процент, соответствующий этому углу
+            let p = null;
+            for (let q = 0; q <= 100; q += 0.25) {
+                if (at(man, q, 'rot') >= angle) { p = q; break; }
+            }
+            if (p === null) p = 100;
+            const manOn = facing(at(man, p, 'rot')) && at(man, p, 'op') > 0;
+            const backOn = facing(at(back, p, 'rot')) && at(back, p, 'op') > 0;
+            const kingOn = facing(at(king, p, 'rot')) && at(king, p, 'op') > 0;
+            if (kingOn) return 'king';
+            if (manOn) return 'A';
+            if (backOn) return 'B';
+            return 'none';
+        }
+        check('15.16 на 45 градусах видна первая обычная сторона', whoAt(45) === 'A', whoAt(45));
+        check('15.17 на 180 градусах видна вторая обычная сторона', whoAt(180) === 'B', whoAt(180));
+        check('15.18 на 360 градусах снова первая обычная', whoAt(360) === 'A', whoAt(360));
+        check('15.19 на 500 градусах видна ТОЛЬКО дамка', whoAt(500) === 'king', whoAt(500));
+        check('15.20 на 300 градусах обычная, а не дамка', whoAt(300) === 'A', whoAt(300));
     }
 
     // Подмена обязана происходить на ребре, иначе она заметна.

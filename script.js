@@ -2697,6 +2697,12 @@ function playKingPromotionEffect() {
     flipKing.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
     glow.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
 
+    // Прячем настоящую дамку на время эффекта: в рёберных фазах (90 и 270
+    // градусов) обе обычные стороны вырождаются в линию, и без этого
+    // сквозь них проглядывала бы уже готовая дамка.
+    const realPieceEl = pieceElements[toKey];
+    if (realPieceEl) realPieceEl.classList.add("piece-hidden-for-promotion");
+
     squareEl.appendChild(glow);
     squareEl.appendChild(flip);
     squareEl.appendChild(flipBack);
@@ -2706,6 +2712,7 @@ function playKingPromotionEffect() {
     function cleanup() {
         if (done) return;
         done = true;
+        if (realPieceEl) realPieceEl.classList.remove("piece-hidden-for-promotion");
         if (flip.parentNode) flip.parentNode.removeChild(flip);
         if (flipBack.parentNode) flipBack.parentNode.removeChild(flipBack);
         if (flipKing.parentNode) flipKing.parentNode.removeChild(flipKing);
