@@ -137,12 +137,10 @@ console.log('\n=== 5. CSS: ДЛИТЕЛЬНОСТЬ, СМЕНА ТЕКСТУРЫ
 
 check('5.1 keyframes переворота существуют', /@keyframes kingPromotionFlip/.test(CSS));
 check('5.2 keyframes свечения существуют', /@keyframes kingPromotionGlow/.test(CSS));
-check('5.3 длительность в диапазоне 300-350 мс', (function () {
-    const m = /animation: kingPromotionFlip (\d+)ms/.exec(CSS);
-    if (!m) return false;
-    const ms = parseInt(m[1], 10);
-    return ms >= 300 && ms <= 350;
-})());
+// Длительность больше не пишется числом в CSS -- она приходит переменной,
+// а значение живёт в KING_PROMOTION_DURATION_MS (диапазон см. 13.5d).
+check('5.3 длительность задана переменной, а не числом',
+    /animation: kingPromotionFlip var\(--king-promotion-duration/.test(CSS));
 check('5.4 есть подъём (translateY) и поворот (rotateX)',
     /kingPromotionFlip[\s\S]*?translateY\(-\d+%\)/.test(CSS) &&
     /kingPromotionFlip[\s\S]*?rotateX\(90deg\)/.test(CSS));
@@ -300,24 +298,45 @@ console.log('\n=== 11. ПУНКТ №1 НЕ ЗАДЕТ ===');
         /if \(endGameShownForRoom !== marker\) \{[\s\S]{0,300}?playEndGameOutcomeSound\(\);/.test(SRC));
 }
 
-console.log('\n=== 12. ЗВУК ПРЕВРАЩЕНИЯ ===');
+console.log('\n=== 12. ЗВУК ПРЕВРАЩЕНИЯ -- ЛОКАЛЬНЫЙ WAV ===');
 {
     const AUDIO3 = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
     const king = funcBody(AUDIO3, 'playKingSound');
     check('12.1 playKingSound найдена', !!king);
+
+    // Владельцу не подошёл ни один синтезированный вариант, поэтому звук
+    // теперь -- выбранный им файл. Проверяем, что играет именно он.
+    check('12.2 путь к ассету объявлен', /KING_SOUND_URL = "assets\/king-promotion\.wav/.test(AUDIO3));
+    check('12.3 файл существует в репозитории',
+        fs.existsSync(path.join(__dirname, '..', 'assets', 'king-promotion.wav')));
     if (king) {
-        check('12.2 начинается с мягкого impact', /playWoodKnock\(/.test(king));
-        check('12.3 есть колокол с обертоном (две ноты подряд)',
-            (king.match(/playTone\(/g) || []).length >= 3);
-        check('12.4 shimmer тихий (громкость < 0.1)',
-            /playTone\(\d+, [\d.]+, 0\.0\d+\)/.test(king));
-        check('12.5 укладывается в короткий акцент (задержки < 400 мс)',
-            (king.match(/\}, (\d+)\);/g) || []).every(function (m) {
-                return parseInt(m.replace(/\D/g, ''), 10) < 400;
-            }));
+        check('12.4 воспроизводится буфер, а не осцилляторы',
+            /createBufferSource\(\)/.test(king) && !/createOscillator\(/.test(king));
+        check('12.5 синтезированного мотива в playKingSound не осталось',
+            !/playTone\(/.test(king) && !/playWoodKnock\(/.test(king));
+        check('12.6 используется тот же audioContext (unlock работает как прежде)',
+            /audioContext\.createBufferSource/.test(king) && /audioContext\.destination/.test(king));
+        check('12.7 при недекодированном буфере молчит, а не падает',
+            /if \(!kingSoundBuffer\)/.test(king) && /return;/.test(king));
     }
-    check('12.6 новых аудио-ассетов не добавлено',
-        !/new Audio\(|\.mp3|\.wav|\.ogg/.test(AUDIO3));
+    // Предзагрузка нужна, чтобы первый звук не опоздал.
+    check('12.8 есть предзагрузка', /function preloadKingSound\(\)/.test(AUDIO3));
+    check('12.9 предзагрузка запускается при загрузке модуля',
+        /\n    preloadKingSound\(\);/.test(AUDIO3));
+    check('12.10 предзагрузка не выполняется вне браузера (Node-тесты)',
+        /typeof global\.document === "undefined"/.test(AUDIO3));
+    check('12.11 ассет локальный, без сторонних сервисов',
+        !/https?:\/\//.test(/KING_SOUND_URL = "[^"]*"/.exec(AUDIO3)[0]));
+
+    // Остальные звуки не задеты.
+    check('12.12 playKingCaptureSound не изменён',
+        /function playKingCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.18, 0\.6, 600\);/.test(AUDIO3));
+    check('12.13 звуки исхода партии не изменены',
+        /function playVictorySound\(\)/.test(AUDIO3) &&
+        /function playDefeatSound\(\)/.test(AUDIO3) &&
+        /function playDrawSound\(\)/.test(AUDIO3));
+    check('12.14 звуки хода и взятия не изменены',
+        /function playMoveSound\(\) \{ playWoodKnock\(0\.09, 0\.32, 1700\); \}/.test(AUDIO3));
 }
 
 console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШКИ ===');
@@ -333,9 +352,35 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         /\.king-promotion-flip \{[\s\S]*?opacity: 0;[\s\S]*?animation: kingPromotionFlip/.test(CSS));
 
     check('13.3 задержка берётся из CSS-переменной, а не числом',
-        /animation: kingPromotionFlip [\d]+ms [^;]*var\(--king-promotion-delay/.test(CSS));
+        /animation: kingPromotionFlip [^;]*var\(--king-promotion-delay/.test(CSS));
     check('13.4 свечение имеет ТУ ЖЕ задержку',
-        /animation: kingPromotionGlow [\d]+ms [^;]*var\(--king-promotion-delay/.test(CSS));
+        /animation: kingPromotionGlow [^;]*var\(--king-promotion-delay/.test(CSS));
+    check('13.4b длительность тоже переменной у обоих',
+        /animation: kingPromotionFlip var\(--king-promotion-duration\)/.test(CSS) &&
+        /animation: kingPromotionGlow var\(--king-promotion-duration\)/.test(CSS));
+    // Запрет строгий: числа длительности в CSS быть не должно ВООБЩЕ --
+    // ни в самой анимации, ни как запасное значение переменной. Иначе
+    // рядом с KING_PROMOTION_DURATION_MS появляется второй источник истины.
+    check('13.4c число длительности не дублируется в CSS нигде', (function () {
+        const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
+        if (!m) return false;
+        const promo = CSS.match(/animation: kingPromotion[\s\S]*?;/g) || [];
+        const inAnim = promo.some(function (b) { return b.indexOf(m[1] + 'ms') !== -1; });
+        const asFallback = CSS.indexOf('--king-promotion-duration,') !== -1;
+        return !inAnim && !asFallback;
+    })());
+    check('13.4d длительность ровно вдвое больше прежних 340 мс', (function () {
+        const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
+        return !!m && parseInt(m[1], 10) === 680;
+    })());
+    check('13.4e MOVE_GHOST_DURATION_MS не менялся', (function () {
+        const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
+        return !!m && parseInt(m[1], 10) === 150;
+    })());
+    check('13.4f длительность передаётся переменной обоим элементам', (function () {
+        const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
+        return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 2;
+    })());
     check('13.5 в CSS нет захардкоженной длительности полёта',
         !/150ms/.test(CSS));
 

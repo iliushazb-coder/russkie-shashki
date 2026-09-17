@@ -1604,7 +1604,15 @@ h1 {
        не дублировалось в двух местах. Фолбэк 0ms -- на случай, если
        переменная почему-то не выставлена. */
     opacity: 0;
-    animation: kingPromotionFlip 340ms cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
+    /* Длительность БЕЗ запасного значения и это намеренно: любое число
+       здесь было бы вторым источником истины рядом с
+       KING_PROMOTION_DURATION_MS и рано или поздно разошлось бы с ним.
+       Переменную всегда выставляет JS до вставки элемента в DOM. Если её
+       вдруг не окажется, вся animation станет невалидной, эффект просто не
+       проиграется -- а наложение останется невидимым из-за opacity: 0 выше
+       и будет снято обычной уборкой. То есть деградация тихая и
+       безопасная, без рассинхронизованной анимации. */
+    animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
 }
 
 /* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
@@ -1624,7 +1632,7 @@ h1 {
         rgba(255, 205, 90, 0.35) 45%,
         rgba(255, 190, 60, 0) 72%);
     /* Та же задержка, что у наложения: свечение не должно опережать полёт. */
-    animation: kingPromotionGlow 340ms ease-out var(--king-promotion-delay, 0ms) forwards;
+    animation: kingPromotionGlow var(--king-promotion-duration) ease-out var(--king-promotion-delay, 0ms) forwards;
 }
 
 @keyframes kingPromotionFlip {

@@ -2622,7 +2622,14 @@ function playMoveGhostAnimation(capturedSnapshots) {
 // Смена текстуры «в середине» получается сама собой: под наложением уже
 // лежит настоящая дамка, наложение показывает ОБЫЧНУЮ текстуру и к
 // середине эффекта исчезает, открывая её.
-const KING_PROMOTION_DURATION_MS = 340;
+// Ровно вдвое медленнее прежних 340 мс -- по прямому запросу владельца
+// после ручного теста. Форма flip, траектория, высота подъёма, момент
+// смены текстуры и glow НЕ менялись: эффект только растянут во времени.
+//
+// Это ЕДИНСТВЕННЫЙ источник истины: значение уезжает в CSS переменной
+// (см. ниже), поэтому flip и glow берут его отсюда, а fallback cleanup
+// считает от него же.
+const KING_PROMOTION_DURATION_MS = 680;
 
 function playKingPromotionEffect() {
     if (!currentState || currentState.moveType !== "king" || !currentState.lastMove) return;
@@ -2659,6 +2666,11 @@ function playKingPromotionEffect() {
     const startDelayMs = MOVE_GHOST_DURATION_MS;
     flip.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
     glow.style.setProperty("--king-promotion-delay", startDelayMs + "ms");
+    // Длительность тоже переменной, иначе число пришлось бы держать и в
+    // style.css -- и оно неизбежно разъехалось бы с константой, а от неё
+    // считается fallback timeout.
+    flip.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
+    glow.style.setProperty("--king-promotion-duration", KING_PROMOTION_DURATION_MS + "ms");
 
     squareEl.appendChild(glow);
     squareEl.appendChild(flip);
