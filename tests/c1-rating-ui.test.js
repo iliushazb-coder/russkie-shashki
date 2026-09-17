@@ -77,9 +77,37 @@ console.log('\n=== 4. ВХОД: НЕТ ЛОЖНОЙ ОШИБКИ ===');
     check('4.3 после ожидания проверка повторяется',
         (asy.match(/canUseFirebase\(\)/g) || []).length >= 2);
     check('4.4 таймеров-заглушек нет', !/setTimeout[\s\S]{0,60}authPhase = "ready"/.test(SRC));
-    check('4.5 кнопки меню ждут вход',
-        /btnPlayOnline\.addEventListener\("click", async function/.test(SRC) &&
-        /btnPlayFriend\.addEventListener\("click", async function/.test(SRC));
+    // Проверяем ИНВАРИАНТ (кнопка ждёт вход), а не форму обработчика.
+    // btnPlayOnline теперь делает это через runAfterAuthWithCover(), чтобы
+    // показать индикатор загрузки до ожидания; btnPlayFriend ждёт напрямую.
+    // Обе формы обязаны упираться в requireFirebaseAuthAsync().
+    check('4.5 кнопки меню ждут вход', (function () {
+        // Вырезаем ТЕЛО каждого обработчика по его собственным границам.
+        // Регуляркой с окном в N символов пользоваться нельзя: она
+        // перетекает в соседний обработчик и даёт ложный проход, если
+        // ворота убрали только у одной кнопки.
+        function handlerBody(btn) {
+            const re = new RegExp(btn + '\\.addEventListener\\("click"');
+            const m = re.exec(SRC);
+            if (!m) return null;
+            const from = SRC.indexOf('{', m.index);
+            if (from === -1) return null;
+            let depth = 0;
+            for (let i = from; i < SRC.length; i++) {
+                if (SRC[i] === '{') depth++;
+                else if (SRC[i] === '}') { depth--; if (depth === 0) return SRC.slice(from, i + 1); }
+            }
+            return null;
+        }
+        function waitsForAuth(body) {
+            return !!body && (
+                /runAfterAuthWithCover\(/.test(body) ||
+                /await requireFirebaseAuthAsync\(\)/.test(body)
+            );
+        }
+        return waitsForAuth(handlerBody('btnPlayOnline')) &&
+               waitsForAuth(handlerBody('btnPlayFriend'));
+    })());
     check('4.6 ворота не ослаблены', /currentUser\.uid === myTelegramId/.test(grab('canUseFirebase')));
     check('4.7 initDataUnsafe личности не даёт',
         !/myTelegramId\s*=\s*[^;]*initDataUnsafe/.test(SRC));

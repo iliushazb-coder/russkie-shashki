@@ -11,6 +11,30 @@
         if (cover) cover.classList.add("hidden");
     }
 
+    // Парная к hideStartupCover(). Нужна, чтобы кнопки меню, которые ждут
+    // завершения входа, давали мгновенную реакцию: снятие класса -- операция
+    // синхронная, она происходит в том же кадре, что и клик, ДО первого
+    // await, поэтому пользователь видит отклик сразу, а не через паузу.
+    //
+    // Второй оверлей намеренно НЕ заводится: #startup-cover уже даёт
+    // полупрозрачный слой, размытие фона (с -webkit- префиксом, то есть
+    // работает на iOS), центрированный спиннер, safe-area и обработку
+    // prefers-reduced-motion.
+    //
+    // Класс invite-launch-hint снимается здесь намеренно. Он живёт на
+    // <html> с момента запуска по invite-ссылке и переключает текст на
+    // «Подключение к столу…». Для кнопок меню это неуместно, нужен
+    // нейтральный «Загрузка…». На сам invite-flow это не влияет: к моменту,
+    // когда пользователь может нажать кнопку меню, стартовый cover уже
+    // скрыт и своё дело сделал.
+    function showStartupCover() {
+        const cover = document.getElementById("startup-cover");
+        if (!cover) return;
+        const root = global.document && global.document.documentElement;
+        if (root && root.classList) root.classList.remove("invite-launch-hint");
+        cover.classList.remove("hidden");
+    }
+
     // review fix: исходное тело script.js смешивало "window.Telegram" (первая
     // проверка) и голый "Telegram" (остальные три) -- в браузере это работает
     // одинаково (window === globalThis, bare-идентификатор резолвится через
@@ -47,6 +71,7 @@
 
     const api = {
         hideStartupCover,
+        showStartupCover,
         hasInviteIntent,
         markStartupCoverAsInvite,
     };

@@ -1209,7 +1209,38 @@ const { capturedDepthOpacity } = window.RussianCheckersCapturedStackUtils;
 if (!window.RussianCheckersStartupCoverUtils || typeof window.RussianCheckersStartupCoverUtils.hasInviteIntent !== "function") {
     throw new Error("RussianCheckersStartupCoverUtils failed to load");
 }
-const { hideStartupCover, hasInviteIntent, markStartupCoverAsInvite } = window.RussianCheckersStartupCoverUtils;
+const { hideStartupCover, showStartupCover, hasInviteIntent, markStartupCoverAsInvite } = window.RussianCheckersStartupCoverUtils;
+
+// Мгновенная реакция на кнопки, которые обязаны дождаться входа.
+//
+// requireFirebaseAuthAsync() на холодном старте ждёт authPromise секунду-две.
+// Без визуального отклика кнопка выглядит несработавшей, и пользователь жмёт
+// ещё раз. Показываем существующий #startup-cover ДО ожидания -- снятие
+// класса синхронно, поэтому отклик виден в том же кадре, что и тап.
+//
+// Ворота НЕ ослабляются и не обходятся: gate -- это тот же
+// requireFirebaseAuthAsync(), его результат решает всё, как и раньше.
+// Cover снимается в finally, поэтому экран не останется заблокированным ни
+// при отказе входа, ни при исключении внутри onReady.
+//
+// Повторный тап не создаёт второго запроса: cover -- position: fixed;
+// inset: 0 поверх всего интерфейса, он физически перекрывает кнопку, пока
+// ожидание не закончится.
+async function runAfterAuthWithCover(onReady) {
+    showStartupCover();
+    try {
+        if (!(await requireFirebaseAuthAsync())) return;
+        // await по результату onReady() намеренный: если функция вернула
+        // промис первичной загрузки, ждём и его -- иначе кружок исчезал бы
+        // раньше данных и пользователь на мгновение видел пустой экран.
+        // Если onReady() ничего не возвращает, await на undefined проходит
+        // мгновенно, и поведение остаётся прежним.
+        await onReady();
+    } finally {
+        hideStartupCover();
+    }
+}
+
 
 // ===== СОСТОЯНИЕ НА ЭКРАНЕ =====
 
@@ -5750,10 +5781,18 @@ function createOnlineRoom() {
     });
 }
 
-btnPlayOnline.addEventListener("click", async function () {
-    if (!(await requireFirebaseAuthAsync())) return;
-    isBotGame = false;
-    showGroupLobby();
+btnPlayOnline.addEventListener("click", function () {
+    // Здесь cover держится ТОЛЬКО до завершения входа, и это намеренно.
+    // showGroupLobby() подписывается на child_added/child_changed/
+    // child_removed, а у них, в отличие от value, нет события «первичная
+    // выборка завершена» -- ждать было бы нечего, не добавив лишнего
+    // once("value") на всю ветку. И не нужно: лобби ставит собственный
+    // индикатор t("loading") прямо в список и заменяет его комнатами по
+    // мере прихода. Поэтому showGroupLobby() ничего не возвращает.
+    return runAfterAuthWithCover(function () {
+        isBotGame = false;
+        showGroupLobby();
+    });
 });
 
 btnPlayFriend.addEventListener("click", async function () {
@@ -7628,7 +7667,7 @@ function openStatsModal() {
     // Promise.all с одним элементом сохранён намеренно: ниже идёт общий код
     // слияния snapshots, и переписывать его ради косметики значило бы менять
     // больше, чем требует задача.
-    Promise.all([
+    const onlineStatsLoaded = Promise.all([
         database.ref("stats").once("value")
     ]).then(function (snapshots) {
         const merged = {};
@@ -7681,6 +7720,7 @@ function openStatsModal() {
     });
 
     // --- РЕЙТИНГ ПРОТИВ БОТА ---
+    let botStatsLoaded = Promise.resolve();
     if (statsLeaderboardBot) {
         // --- ВКЛАДКА «С БОТОМ»: ВСЕ ИГРОКИ ---
         // Та же правка: читаем ветку целиком и не обрезаем результат.
@@ -7688,7 +7728,7 @@ function openStatsModal() {
         // чтение разрешено. Индекса по wins у statsBot нет вовсе, так что
         // orderByChild здесь и раньше исполнялся сортировкой на стороне
         // клиента Firebase — отказ от него ничего не замедляет.
-        database.ref("statsBot").once("value").then(function (snapshot) {
+        botStatsLoaded = database.ref("statsBot").once("value").then(function (snapshot) {
             const data = snapshot.val();
             statsLeaderboardBot.innerHTML = "";
             if (!data) {
@@ -7717,6 +7757,13 @@ function openStatsModal() {
             if (statsLeaderboardBot) statsLeaderboardBot.textContent = t("stats_load_error");
         });
     }
+
+    // Обе ветки уже гасят свои ошибки через .catch(), поэтому обещание
+    // никогда не отвергается: вызывающим нужен сигнал «первичная загрузка
+    // завершилась», а не «завершилась успешно» -- при ошибке в таблице
+    // уже написан stats_load_error, и экран надо показать, а не держать
+    // под загрузкой.
+    return Promise.all([onlineStatsLoaded, botStatsLoaded]);
 }
 
 if (btnShowStats) {
@@ -7731,9 +7778,12 @@ if (btnShowStats) {
     // requireFirebaseAuthAsync() дожидается authPromise, если вход ещё
     // идёт, и только потом пропускает дальше; при неуспехе сам объясняет
     // причину. Сам openStatsModal() не трогаем.
-    btnShowStats.addEventListener("click", async function () {
-        if (!(await requireFirebaseAuthAsync())) return;
-        openStatsModal();
+    btnShowStats.addEventListener("click", function () {
+        // openStatsModal() возвращает промис обеих первичных загрузок,
+        // поэтому cover держится до готовности данных или ошибки.
+        return runAfterAuthWithCover(function () {
+            return openStatsModal();
+        });
     });
 }
 
