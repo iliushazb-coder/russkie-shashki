@@ -749,5 +749,56 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
     })());
 }
 
+console.log('\n=== 16. REDUCED-MOTION: ДАМКА ПОЯВЛЯЕТСЯ СРАЗУ ===');
+{
+    // При выключенных анимациях animationend не приходит, и уборка
+    // срабатывает только по страховочному таймауту (~950 мс). Всё это
+    // время настоящая дамка не должна оставаться скрытой, иначе игрок
+    // почти секунду видит пустую клетку.
+    const rmBlocks = CSS.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
+    const rm = rmBlocks.find(function (b) { return /king-promotion-flip/.test(b); });
+
+    check('16.1 блок reduced-motion найден', !!rm);
+    check('16.2 reduced-motion гасит ВСЕ три наложения',
+        !!rm && /\.king-promotion-flip,/.test(rm) && /\.king-promotion-flip-back,/.test(rm) &&
+        /\.king-promotion-flip-king/.test(rm) && /animation: none/.test(rm));
+    check('16.3 reduced-motion НЕ скрывает настоящую дамку',
+        !!rm && /\.piece-hidden-for-promotion[^{]*\{[^}]*opacity:\s*1/.test(rm));
+
+    // Защита от двойной шашки: во время полёта оба класса висят вместе,
+    // и переопределение не должно перебивать сокрытие на время полёта.
+    check('16.4 переопределение не действует, пока шашка летит', (function () {
+        if (!rm) return false;
+        const m = /(\.piece-hidden-for-promotion[^{]*)\{[^}]*opacity:\s*1/.exec(rm);
+        return !!m && /:not\(\.piece-hidden-for-ghost\)/.test(m[1]);
+    })());
+
+    // Каскад: считаем специфичность и порядок, а не надеемся на них.
+    check('16.5 переопределение реально выигрывает каскад после полёта', (function () {
+        if (!rm) return false;
+        // Базовое правило сокрытия -- одиночный класс, (0,1,0).
+        const base = /\.piece-hidden-for-promotion \{[^}]*opacity:\s*0\s*!important/.test(CSS);
+        // Переопределение -- два класса, (0,2,0), и тоже !important.
+        const over = /\.piece-hidden-for-promotion:not\(\.piece-hidden-for-ghost\) \{[^}]*opacity:\s*1\s*!important/.test(rm);
+        return base && over;
+    })());
+    check('16.6 оба правила помечены !important (иначе одно из них не сработает)', (function () {
+        if (!rm) return false;
+        const over = /:not\(\.piece-hidden-for-ghost\) \{[^}]*opacity:\s*1\s*!important/.test(rm);
+        const hide = /\.piece-hidden-for-promotion \{[^}]*opacity:\s*0\s*!important/.test(CSS);
+        return over && hide;
+    })());
+
+    // Обычный режим не задет: сокрытие остаётся.
+    check('16.7 в обычном режиме настоящая дамка по-прежнему скрыта', (function () {
+        const outside = CSS.slice(0, CSS.indexOf('@media (prefers-reduced-motion'));
+        return /\.piece-hidden-for-promotion \{[^}]*opacity:\s*0\s*!important/.test(outside);
+    })());
+    check('16.8 звук при reduced-motion не отключается', (function () {
+        // В блоке reduced-motion не должно быть ничего про звук.
+        return !!rm && !/audio|sound|king-promotion\.wav/i.test(rm);
+    })());
+}
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);
