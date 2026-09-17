@@ -53,7 +53,7 @@ if (sharedApi) {
     CLUSTER_FUNCS.forEach(function (fn) {
         check('B.2 экспортирует ' + fn, typeof sharedApi[fn] === 'function');
     });
-    check('B.3 ровно 3 ключа в экспорте (не больше)', Object.keys(sharedApi).length === 3,
+    check('B.3 ровно 4 ключа в экспорте (не больше)', Object.keys(sharedApi).length === 4,
         JSON.stringify(Object.keys(sharedApi)));
 }
 check('B.4 IIFE + "use strict"', /^\(function \(global\) \{\s*\n\s*"use strict";/.test(SHARED_SRC));
@@ -66,14 +66,15 @@ console.log('');
 console.log('=== C. index.html: порядок и способ загрузки script tags ===');
 {
     const stackIdx = HTML.indexOf('shared/captured-stack-utils.js?v=1');
-    const startupIdx = HTML.indexOf('shared/startup-cover-utils.js?v=1');
+    const startupVerMatch = /shared\/startup-cover-utils\.js\?v=\d+/.exec(HTML);
+    const startupIdx = startupVerMatch ? startupVerMatch.index : -1;
     const scriptVerMatch = /script\.js\?v=(\d+)/.exec(HTML);
     const scriptIdx = scriptVerMatch ? scriptVerMatch.index : -1;
-    check('C.1 shared/startup-cover-utils.js?v=1 присутствует', startupIdx !== -1);
+    check('C.1 shared/startup-cover-utils.js подключён с числовой версией', startupIdx !== -1);
     check('C.2 порядок: captured-stack-utils.js < startup-cover-utils.js < script.js',
         stackIdx !== -1 && stackIdx < startupIdx && startupIdx < scriptIdx,
         'stack@' + stackIdx + ' startup@' + startupIdx + ' script@' + scriptIdx);
-    const tagMatch = /<script src="shared\/startup-cover-utils\.js\?v=1"[^>]*><\/script>/.exec(HTML);
+    const tagMatch = /<script src="shared\/startup-cover-utils\.js\?v=\d+"[^>]*><\/script>/.exec(HTML);
     check('C.3 тег без async/defer/type="module"', !!tagMatch, tagMatch ? tagMatch[0] : 'не найден');
 }
 
@@ -82,17 +83,20 @@ console.log('=== D. script.js реально получает функции и�
 {
     check('D.1 fail-loud проверка на RussianCheckersStartupCoverUtils.hasInviteIntent присутствует',
         /if \(!window\.RussianCheckersStartupCoverUtils \|\| typeof window\.RussianCheckersStartupCoverUtils\.hasInviteIntent !== "function"\) \{\s*\n\s*throw new Error\("RussianCheckersStartupCoverUtils failed to load"\);/.test(SCRIPT_SRC));
-    check('D.2 destructuring всех трёх присутствует',
-        SCRIPT_SRC.indexOf('const { hideStartupCover, hasInviteIntent, markStartupCoverAsInvite } = window.RussianCheckersStartupCoverUtils;') !== -1);
+    check('D.2 destructuring всех четырёх присутствует',
+        SCRIPT_SRC.indexOf('const { hideStartupCover, showStartupCover, hasInviteIntent, markStartupCoverAsInvite } = window.RussianCheckersStartupCoverUtils;') !== -1);
     check('D.3 fail-loud проверка идёт РАНЬШЕ destructuring', (function () {
         const guardPos = SCRIPT_SRC.indexOf('RussianCheckersStartupCoverUtils.hasInviteIntent !== "function"');
-        const destrPos = SCRIPT_SRC.indexOf('const { hideStartupCover, hasInviteIntent, markStartupCoverAsInvite }');
+        const destrPos = SCRIPT_SRC.indexOf('const { hideStartupCover, showStartupCover, hasInviteIntent, markStartupCoverAsInvite }');
         return guardPos !== -1 && destrPos !== -1 && guardPos < destrPos;
     })());
     check('D.4 нет client-side fallback-копии',
         !/=\s*window\.RussianCheckersStartupCoverUtils\s*\|\|/.test(SCRIPT_SRC));
-    check('D.5 все 6 реальных production call sites на месте (4×hideStartupCover + 1×hasInviteIntent + 1×markStartupCoverAsInvite)',
-        (SCRIPT_SRC.match(/hideStartupCover\(\)/g) || []).length === 4 &&
+    // hideStartupCover: 4 прежних стартовых вызова + 1 в finally у
+    // runAfterAuthWithCover(). showStartupCover: ровно один -- в нём же.
+    check('D.5 все production call sites на месте (5×hideStartupCover + 1×showStartupCover + 1×hasInviteIntent + 1×markStartupCoverAsInvite)',
+        (SCRIPT_SRC.match(/hideStartupCover\(\)/g) || []).length === 5 &&
+        (SCRIPT_SRC.match(/showStartupCover\(\)/g) || []).length === 1 &&
         (SCRIPT_SRC.match(/hasInviteIntent\(\)/g) || []).length === 1 &&
         (SCRIPT_SRC.match(/markStartupCoverAsInvite\(\)/g) || []).length === 1);
 }
@@ -126,13 +130,166 @@ CLUSTER_FUNCS.forEach(function (fn) {
 
 console.log('');
 console.log('=== G. Cache-bust ===');
-check('G.1 HTML содержит shared/startup-cover-utils.js?v=1', /shared\/startup-cover-utils\.js\?v=1/.test(HTML));
+// Числовая граница, а не точное равенство: файл получил showStartupCover(),
+// поэтому его cache-bust штатно поднимается и будет расти дальше.
+check('G.1 HTML содержит shared/startup-cover-utils.js с версией >= 2', (function () {
+    const m = /shared\/startup-cover-utils\.js\?v=(\d+)/.exec(HTML);
+    return !!m && parseInt(m[1], 10) >= 2;
+})());
 check('G.2 HTML содержит script.js с версией >= 205 (поднят: script.js получил новую fail-loud зависимость от RussianCheckersStartupCoverUtils; конкретное число не фиксируем -- оно продолжит расти с будущими bump)',
     (function () {
         const m = /script\.js\?v=(\d+)/.exec(HTML);
         return !!m && parseInt(m[1], 10) >= 205;
     })());
 check('G.3 HTML НЕ содержит старую script.js?v=204', !/script\.js\?v=204/.test(HTML));
+
+console.log('');
+console.log('=== H. ПОВЕДЕНИЕ showStartupCover / hideStartupCover ===');
+// Здесь проверяется не текст, а РАБОТА функций: поднимаем минимальный
+// стаб DOM и смотрим на фактическое состояние классов.
+{
+    function makeEl(initialClasses) {
+        const set = new Set(initialClasses || []);
+        return {
+            classList: {
+                add: (c) => set.add(c),
+                remove: (c) => set.delete(c),
+                contains: (c) => set.has(c)
+            },
+            _has: (c) => set.has(c)
+        };
+    }
+
+    const savedDocument = global.document;
+    function withDom(coverClasses, rootClasses, fn) {
+        const cover = makeEl(coverClasses);
+        const root = makeEl(rootClasses);
+        global.document = {
+            getElementById: (id) => (id === 'startup-cover' ? cover : null),
+            documentElement: root
+        };
+        try { fn(cover, root); }
+        finally { global.document = savedDocument; }
+    }
+
+    withDom(['hidden'], [], function (cover) {
+        sharedApi.showStartupCover();
+        check('H.1 showStartupCover снимает класс hidden', !cover._has('hidden'));
+    });
+
+    withDom([], [], function (cover) {
+        sharedApi.hideStartupCover();
+        check('H.2 hideStartupCover возвращает класс hidden', cover._has('hidden'));
+    });
+
+    withDom(['hidden'], [], function (cover) {
+        sharedApi.showStartupCover();
+        sharedApi.hideStartupCover();
+        check('H.3 функции парны: show -> hide возвращает исходное состояние',
+            cover._has('hidden'));
+    });
+
+    // Для кнопок меню нужен нейтральный «Загрузка…», а не
+    // «Подключение к столу…» от invite-запуска.
+    withDom(['hidden'], ['invite-launch-hint'], function (cover, root) {
+        sharedApi.showStartupCover();
+        check('H.4 показ снимает invite-launch-hint (нейтральный текст)',
+            !root._has('invite-launch-hint'));
+        check('H.5 при этом cover действительно показан', !cover._has('hidden'));
+    });
+
+    // Отсутствие элемента не должно ронять приложение.
+    (function () {
+        const saved = global.document;
+        global.document = { getElementById: () => null, documentElement: null };
+        let threw = false;
+        try { sharedApi.showStartupCover(); } catch (e) { threw = true; }
+        global.document = saved;
+        check('H.6 showStartupCover не падает, если элемента нет', !threw);
+    })();
+}
+
+console.log('');
+console.log('=== I. script.js: cover вокруг ожидания auth ===');
+{
+    const m = /async function runAfterAuthWithCover\(onReady\)[\s\S]*?\n}/.exec(SCRIPT_SRC);
+    check('I.1 хелпер runAfterAuthWithCover существует', !!m);
+    if (m) {
+        const body = m[0];
+        const showPos = body.indexOf('showStartupCover()');
+        const awaitPos = body.indexOf('await requireFirebaseAuthAsync()');
+        const finallyPos = body.indexOf('finally');
+        const hidePos = body.indexOf('hideStartupCover()');
+
+        check('I.2 cover показывается ДО ожидания auth',
+            showPos !== -1 && awaitPos !== -1 && showPos < awaitPos);
+        // Ключевое: ждём не только вход, но и результат onReady(). Иначе
+        // кружок исчезал бы раньше данных.
+        check('I.2b хелпер ждёт результат onReady, а не просто вызывает его',
+            /await onReady\(\);/.test(body));
+        check('I.3 ворота auth остаются обязательными',
+            /if \(!\(await requireFirebaseAuthAsync\(\)\)\) return;/.test(body));
+        check('I.4 скрытие стоит в finally, то есть и при отказе, и при исключении',
+            finallyPos !== -1 && hidePos !== -1 && finallyPos < hidePos);
+        check('I.5 скрытие НЕ вызывается до finally (нет раннего hide)',
+            body.indexOf('hideStartupCover()') === body.lastIndexOf('hideStartupCover()'));
+    }
+
+    // Обе кнопки обязаны идти через хелпер, а не мимо него.
+    check('I.6 «Кто играет?» использует хелпер',
+        /btnPlayOnline\.addEventListener\("click",[\s\S]{0,600}?runAfterAuthWithCover\(/.test(SCRIPT_SRC));
+    check('I.7 «Статистика» использует хелпер',
+        /btnShowStats\.addEventListener\("click",[\s\S]{0,300}?runAfterAuthWithCover\(/.test(SCRIPT_SRC));
+}
+
+console.log('');
+console.log('=== J. COVER ЖДЁТ ПЕРВИЧНУЮ ЗАГРУЗКУ ДАННЫХ ===');
+{
+    // «Статистика»: openStatsModal() обязана быть awaitable, иначе cover
+    // снимется до прихода данных и пользователь увидит пустое окно.
+    const m = /function openStatsModal\(\)[\s\S]*?\n}/.exec(SCRIPT_SRC);
+    check('J.1 openStatsModal найдена', !!m);
+    if (m) {
+        const body = m[0];
+        check('J.2 промис онлайн-таблицы захвачен',
+            /const onlineStatsLoaded = Promise\.all\(/.test(body));
+        check('J.3 промис таблицы бота захвачен',
+            /botStatsLoaded = database\.ref\("statsBot"\)/.test(body));
+        check('J.4 бот-промис инициализирован, даже если вкладки нет',
+            /let botStatsLoaded = Promise\.resolve\(\)/.test(body));
+        check('J.5 функция возвращает ОБА промиса',
+            /return Promise\.all\(\[onlineStatsLoaded, botStatsLoaded\]\)/.test(body));
+        // Ошибки гасятся внутри, значит cover снимется и при отказе чтения,
+        // а не подвиснет.
+        check('J.6 обе ветки гасят ошибку своим catch (обещание не отвергается)',
+            /statsLeaderboard\.textContent = t\("stats_load_error"\)/.test(body) &&
+            /statsLeaderboardBot\.textContent = t\("stats_load_error"\)/.test(body));
+    }
+    check('J.7 обработчик «Статистики» возвращает промис openStatsModal',
+        /return runAfterAuthWithCover\(function \(\) \{\s*\n\s*return openStatsModal\(\);/.test(SCRIPT_SRC));
+
+    // «Кто играет?»: сознательно ждём ТОЛЬКО вход. Тест закрепляет это
+    // решение, чтобы следующий читатель не счёл его упущением.
+    const lobby = /btnPlayOnline\.addEventListener\("click"[\s\S]*?\n\}\);/.exec(SCRIPT_SRC);
+    check('J.8 обработчик лобби найден', !!lobby);
+    if (lobby) {
+        check('J.9 лобби НЕ возвращает промис из onReady (ждём только вход)',
+            /showGroupLobby\(\);\s*\n\s*\}\);/.test(lobby[0]) &&
+            !/return showGroupLobby\(\)/.test(lobby[0]));
+    }
+    // Запрет на обходные приёмы, которые мы намеренно не стали применять.
+    const lobbyFn = /function showGroupLobby\(\)[\s\S]*?\n}/.exec(SCRIPT_SRC);
+    if (lobbyFn) {
+        check('J.10 в лобби не добавлен лишний once("value") ради ожидания',
+            !/once\("value"\)/.test(lobbyFn[0]));
+        check('J.11 схема child_added/changed/removed сохранена',
+            /on\("child_added"/.test(lobbyFn[0]) &&
+            /on\("child_changed"/.test(lobbyFn[0]) &&
+            /on\("child_removed"/.test(lobbyFn[0]));
+        check('J.12 у лобби есть собственный индикатор загрузки',
+            /t\("loading"\)/.test(lobbyFn[0]));
+    }
+}
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 if (failed > 0) process.exit(1);
