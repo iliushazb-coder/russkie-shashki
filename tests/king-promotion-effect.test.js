@@ -339,5 +339,106 @@ console.log('\n=== 12. ЗВУК ПРЕВРАЩЕНИЯ -- ЛОКАЛЬНЫЙ WAV
         /function playMoveSound\(\) \{ playWoodKnock\(0\.09, 0\.32, 1700\); \}/.test(AUDIO3));
 }
 
+console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШКИ ===');
+{
+    // Move-ghost вешается на ТУ ЖЕ конечную клетку и летит к ней от
+    // исходной, а настоящая дамка на это время скрыта. Если наложение
+    // показать сразу, первые MOVE_GHOST_DURATION_MS были бы видны ДВЕ
+    // обычные шашки. Проверяем, что этого не происходит.
+    const eff = funcBody(CLEAN, 'playKingPromotionEffect');
+    check('13.1 функция найдена', !!eff);
+
+    check('13.2 базовый opacity наложения = 0 (до старта невидимо)',
+        /\.king-promotion-flip \{[\s\S]*?opacity: 0;[\s\S]*?animation: kingPromotionFlip/.test(CSS));
+
+    check('13.3 задержка берётся из CSS-переменной, а не числом',
+        /animation: kingPromotionFlip [^;]*var\(--king-promotion-delay/.test(CSS));
+    check('13.4 свечение имеет ТУ ЖЕ задержку',
+        /animation: kingPromotionGlow [^;]*var\(--king-promotion-delay/.test(CSS));
+    check('13.4b длительность тоже переменной у обоих',
+        /animation: kingPromotionFlip var\(--king-promotion-duration\)/.test(CSS) &&
+        /animation: kingPromotionGlow var\(--king-promotion-duration\)/.test(CSS));
+    // Запрет строгий: числа длительности в CSS быть не должно ВООБЩЕ --
+    // ни в самой анимации, ни как запасное значение переменной. Иначе
+    // рядом с KING_PROMOTION_DURATION_MS появляется второй источник истины.
+    check('13.4c число длительности не дублируется в CSS нигде', (function () {
+        const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
+        if (!m) return false;
+        const promo = CSS.match(/animation: kingPromotion[\s\S]*?;/g) || [];
+        const inAnim = promo.some(function (b) { return b.indexOf(m[1] + 'ms') !== -1; });
+        const asFallback = CSS.indexOf('--king-promotion-duration,') !== -1;
+        return !inAnim && !asFallback;
+    })());
+    check('13.4d длительность ровно вдвое больше прежних 340 мс', (function () {
+        const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
+        return !!m && parseInt(m[1], 10) === 680;
+    })());
+    check('13.4e MOVE_GHOST_DURATION_MS не менялся', (function () {
+        const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
+        return !!m && parseInt(m[1], 10) === 150;
+    })());
+    check('13.4f длительность передаётся переменной обоим элементам', (function () {
+        const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
+        return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 2;
+    })());
+    check('13.5 в CSS нет захардкоженной длительности полёта',
+        !/150ms/.test(CSS));
+
+    if (eff) {
+        check('13.6 задержка связана с MOVE_GHOST_DURATION_MS, а не с magic number',
+            /const startDelayMs = MOVE_GHOST_DURATION_MS;/.test(eff));
+        check('13.7 переменная выставляется и наложению, и свечению',
+            (eff.match(/setProperty\("--king-promotion-delay"/g) || []).length === 2);
+        check('13.8 fallback timeout учитывает И задержку, И длительность эффекта',
+            /setTimeout\(cleanup, startDelayMs \+ KING_PROMOTION_DURATION_MS \+ \d+\)/.test(eff));
+        check('13.9 cleanup удаляет себя из activeGhostCancelFns (симметрично соседям)',
+            /activeGhostCancelFns = activeGhostCancelFns\.filter\(function \(fn\) \{ return fn !== cleanup; \}\)/.test(eff));
+    }
+
+    // Исполняем и смотрим на фактические значения, а не на текст.
+    (function () {
+        const props = {};
+        const timeouts = [];
+        const saved = { st: global.setTimeout, doc: global.document, sq: global.squareElements, fns: global.activeGhostCancelFns, cs: global.currentState };
+        global.MOVE_GHOST_DURATION_MS = 150;
+        global.KING_PROMOTION_DURATION_MS = 340;
+        global.activeGhostCancelFns = [];
+        global.document = {
+            createElement: function () {
+                return {
+                    className: '', parentNode: null,
+                    style: { setProperty: function (k, v) { props[k] = v; } },
+                    addEventListener: function () {}
+                };
+            }
+        };
+        global.squareElements = { '0_1': { appendChild: function () {} } };
+        global.setTimeout = function (fn, ms) { timeouts.push(ms); return 0; };
+        global.currentState = { moveType: 'king', lastMove: { to: { row: 0, col: 1 } }, pieces: { '0_1': { color: 'light', king: true } } };
+
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'playKingPromotionEffect'));
+        playKingPromotionEffect();
+
+        check('13.10 переменная задержки равна длительности полёта',
+            props['--king-promotion-delay'] === global.MOVE_GHOST_DURATION_MS + 'ms',
+            String(props['--king-promotion-delay']));
+        check('13.11 fallback timeout не короче задержки + анимации',
+            timeouts.length > 0 && timeouts[0] >= global.MOVE_GHOST_DURATION_MS + global.KING_PROMOTION_DURATION_MS,
+            'timeout=' + timeouts[0] + ' нужно >= ' + (global.MOVE_GHOST_DURATION_MS + global.KING_PROMOTION_DURATION_MS));
+        check('13.12 cleanup зарегистрирован ровно один раз',
+            global.activeGhostCancelFns.length === 1);
+        if (global.activeGhostCancelFns.length === 1) {
+            global.activeGhostCancelFns[0]();
+            check('13.13 после вызова cleanup сам себя удалил из списка',
+                global.activeGhostCancelFns.length === 0);
+        }
+
+        global.setTimeout = saved.st; global.document = saved.doc;
+        global.squareElements = saved.sq; global.activeGhostCancelFns = saved.fns;
+        global.currentState = saved.cs;
+    })();
+}
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);
