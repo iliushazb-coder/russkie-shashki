@@ -1574,10 +1574,90 @@ h1 {
     to { transform: rotate(360deg); }
 }
 
+/* ===== ПРЕВРАЩЕНИЕ В ДАМКУ -- одноразовый эффект =====
+   Наложение поверх клетки, построенное по образцу .move-ghost-piece.
+   Класса .king у него НЕТ намеренно: в .king стоит
+   transform: scale(1.1) !important, а !important по каскаду приоритетнее
+   анимации (и !important внутри @keyframes игнорируется), поэтому любая
+   анимация transform на самой дамке была бы подавлена. Наложение этой
+   проблемы лишено и заодно не трогает настоящую фигуру.
+
+   Текстура меняется «в середине» без единой строчки JS: под наложением
+   уже лежит готовая дамка, а наложение показывает обычную шашку и к
+   середине эффекта растворяется, открывая её. */
+.king-promotion-flip {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 6;
+    will-change: transform, opacity;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+    /* До старта анимации наложение полностью невидимо: в это время шашка
+       ещё летит move-ghost'ом к этой же клетке, и показывать здесь вторую
+       обычную шашку нельзя. Задержка приходит из JS переменной
+       --king-promotion-delay, равной MOVE_GHOST_DURATION_MS, чтобы число
+       не дублировалось в двух местах. Фолбэк 0ms -- на случай, если
+       переменная почему-то не выставлена. */
+    opacity: 0;
+    animation: kingPromotionFlip 340ms cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
+   и её собственные тени. */
+.king-promotion-glow {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 96%;
+    height: 96%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 4;
+    opacity: 0;
+    background: radial-gradient(circle,
+        rgba(255, 228, 150, 0.85) 0%,
+        rgba(255, 205, 90, 0.35) 45%,
+        rgba(255, 190, 60, 0) 72%);
+    /* Та же задержка, что у наложения: свечение не должно опережать полёт. */
+    animation: kingPromotionGlow 340ms ease-out var(--king-promotion-delay, 0ms) forwards;
+}
+
+@keyframes kingPromotionFlip {
+    /* Подъём и разгон поворота -- ещё обычная шашка */
+    0%   { transform: translateY(0) rotateX(0deg) scale(1);      opacity: 1; }
+    30%  { transform: translateY(-18%) rotateX(70deg) scale(1.1); opacity: 1; }
+    /* Середина: ребро повёрнуто к зрителю, наложение исчезает и открывает
+       уже отрисованную дамку -- это и есть «смена текстуры» */
+    52%  { transform: translateY(-20%) rotateX(90deg) scale(1.12); opacity: 0; }
+    100% { transform: translateY(0) rotateX(180deg) scale(1);     opacity: 0; }
+}
+
+@keyframes kingPromotionGlow {
+    0%   { opacity: 0;    transform: scale(0.75); }
+    35%  { opacity: 0.95; transform: scale(1.12); }
+    100% { opacity: 0;    transform: scale(1.35); }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .startup-cover-spinner {
         animation: none;
         opacity: 0.7;
+    }
+    /* Ни подъёма, ни поворота: наложение просто не показывается, и дамка
+       появляется мгновенно. Звук при этом остаётся -- он не является
+       движением. */
+    .king-promotion-flip {
+        animation: none !important;
+        opacity: 0 !important;
+    }
+    .king-promotion-glow {
+        animation: none;
+        opacity: 0;
     }
 }
 

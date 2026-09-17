@@ -186,8 +186,14 @@ check('9.9 финальные акценты тише прежней фанфа�
 console.log('\n=== 10. ОСТАЛЬНЫЕ ЗВУКИ НЕ ТРОНУТЫ ===');
 check('10.1 playMoveSound без изменений',
     /function playMoveSound\(\) \{ playWoodKnock\(0\.09, 0\.32, 1700\); \}/.test(AUDIO_SRC));
-check('10.2 playKingSound без изменений (это пункт другого PR)',
-    /function playKingSound\(\) \{\s*\n\s*playTone\(523, 0\.1, 0\.22\);/.test(AUDIO_SRC));
+// Пункт №2 намеренно переработал playKingSound (impact + колокол +
+// shimmer), поэтому прежняя привязка к трезвучию C-E-G снята. Здесь
+// важно другое: звук превращения существует, экспортирован и остаётся
+// ОТДЕЛЬНЫМ от звуков исхода партии -- то есть пункт №1 не задет.
+check('10.2 playKingSound существует и отделён от звуков исхода партии',
+    /function playKingSound\(\)/.test(AUDIO_SRC) &&
+    /playKingSound,/.test(AUDIO_SRC) &&
+    !/function playKingSound\(\)[\s\S]{0,400}?(playVictorySound|playDefeatSound|playDrawSound)/.test(AUDIO_SRC));
 check('10.3 playKingCaptureSound без изменений',
     /function playKingCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.18, 0\.6, 600\);/.test(AUDIO_SRC));
 check('10.4 playCaptureSound без изменений',
