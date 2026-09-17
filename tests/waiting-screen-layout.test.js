@@ -42,8 +42,20 @@ if (cssRule) {
   check('waiting status resets default paragraph margin (in style.css)', /margin:\s*0/.test(rule));
 }
 
-check('stylesheet cache-bust is v21', /<link rel="stylesheet" href="style\.css\?v=21">/.test(html));
-check('script cache-bust remains v210', /<script src="script\.js\?v=210"><\/script>/.test(html));
+// Cache-bust проверяем числовой границей, а не точным равенством — так же,
+// как в остальных сюитах после мастер-плана №6. Прежние
+// "stylesheet cache-bust is v21" / "script cache-bust remains v210"
+// фиксировали снимок и ломались при каждом штатном bump'е, хотя README
+// прямо предписывает поднимать версию для изменившегося ресурса. Важно,
+// что версия присутствует, числовая и не ниже исторической границы.
+check('stylesheet cache-bust >= v20', (function () {
+  const m = /<link rel="stylesheet" href="style\.css\?v=(\d+)">/.exec(html);
+  return !!m && parseInt(m[1], 10) >= 20;
+})());
+check('script cache-bust >= v205', (function () {
+  const m = /<script src="script\.js\?v=(\d+)"><\/script>/.exec(html);
+  return !!m && parseInt(m[1], 10) >= 205;
+})());
 
 console.log(`\nИТОГ waiting-screen layout: ${passed}/${passed + failed}`);
 if (failed) process.exitCode = 1;
