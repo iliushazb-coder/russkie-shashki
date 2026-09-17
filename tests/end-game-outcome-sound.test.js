@@ -154,8 +154,14 @@ check('9.2 playDefeatSound существует', /function playDefeatSound\(\)/
 check('9.3 playDrawSound существует', /function playDrawSound\(\)/.test(AUDIO_SRC));
 check('9.4 все три экспортированы',
     /playVictorySound,/.test(AUDIO_SRC) && /playDefeatSound,/.test(AUDIO_SRC) && /playDrawSound,/.test(AUDIO_SRC));
-check('9.5 новых аудио-ассетов не добавлено (только синтез)',
-    !/new Audio\(|\.mp3|\.wav|\.ogg|fetch\(/.test(AUDIO_SRC));
+// Звуки ИСХОДА ПАРТИИ по-прежнему синтезируются -- ассет в модуле есть,
+// но он относится к превращению в дамку (отдельная задача владельца).
+check('9.5 звуки исхода партии синтезируются, а не берутся из файла', (function () {
+    return ['playVictorySound', 'playDefeatSound', 'playDrawSound'].every(function (fn) {
+        const b = funcBody(AUDIO_SRC, fn);
+        return !!b && !/\.wav|\.mp3|new Audio\(|fetch\(/.test(b);
+    });
+})());
 check('9.6 поражение звучит НИСХОДЯЩЕ (вторая нота ниже первой)', (function () {
     const b = funcBody(AUDIO_SRC, 'playDefeatSound');
     if (!b) return false;

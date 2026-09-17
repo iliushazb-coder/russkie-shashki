@@ -71,35 +71,69 @@
         playWoodKnock(0.13, 0.5, 850);
         setTimeout(function () { playWoodKnock(0.1, 0.32, 650); }, 55);
     }
-    // Превращение в дамку. Раньше это было ровное трезвучие C-E-G из трёх
-    // одинаковых синусов -- узнаваемо, но звучало дёшево и «по-аркадному».
+    // ПРЕВРАЩЕНИЕ В ДАМКУ -- локальный WAV, а не синтез.
     //
-    // Теперь тот же момент собран из трёх слоёв, как настоящий
-    // «королевский» акцент:
-    //   1. мягкий низкий impact -- приглушённый стук, вес и опора;
-    //   2. чистый bell/chime -- основной тон с обертоном на квинту выше,
-    //      у обертона своя, более резкая атака и более короткий хвост,
-    //      отчего тембр читается как металл/стекло, а не как «пиу»;
-    //   3. тихий высокий shimmer с задержкой -- послезвучие, которое и
-    //      создаёт ощущение «дорого».
+    // Синтезированные варианты владельцу резали слух: любые попытки собрать
+    // мотив из осцилляторов давали то узкий средне-высокий резонанс, то
+    // отдельный тяжёлый удар в конце. Выбранный файл -- четыре одинаковых
+    // по огибающей деревянных тона, и воспроизводится он как есть.
     //
-    // Громкости намеренно ниже прежних: акцент должен быть заметным, но не
-    // громким. Никаких новых ассетов -- всё синтезируется тем же Web Audio,
-    // поэтому слабые устройства ничего не загружают.
-    function playKingSound() {
-        // 1. Импакт: тот же генератор, что у обычного хода, но ниже и мягче.
-        playWoodKnock(0.11, 0.26, 420);
+    // Файл лежит локально в репозитории: никаких обращений к сторонним
+    // сервисам и никаких сетевых запросов во время партии -- он скачивается
+    // и декодируется один раз при загрузке страницы.
+    //
+    // Воспроизведение идёт через ТОТ ЖЕ audioContext, что и остальные
+    // звуки, поэтому существующий unlock по первому касанию
+    // (unlockAudioContext) работает без изменений, и отдельная система
+    // включения/выключения звука не нужна: она уже общая.
+    //
+    // Узел createBufferSource -- тот же тип, что уже используется в
+    // playWoodKnock, то есть новый паттерн в модуль не вводится.
+    const KING_SOUND_URL = "assets/king-promotion.wav?v=1";
+    const KING_SOUND_VOLUME = 0.55;
 
-        // 2. Колокол: основной тон + квинта. Квинта тише и короче -- она
-        //    даёт призвук, а не второй голос.
-        setTimeout(function () {
-            playTone(784, 0.34, 0.20);
-            playTone(1175, 0.16, 0.07);
-        }, 55);
+    let kingSoundBuffer = null;
+    let kingSoundPending = null;
 
-        // 3. Shimmer: высокий, очень тихий, с запозданием -- «хвост».
-        setTimeout(function () { playTone(1568, 0.26, 0.045); }, 190);
+    function preloadKingSound() {
+        if (kingSoundBuffer || kingSoundPending) return kingSoundPending;
+        // Только в браузере: в Node (behavioral-тесты модуля) ни fetch к
+        // относительному пути, ни decodeAudioData смысла не имеют.
+        if (typeof global.document === "undefined" || typeof global.fetch !== "function") return null;
+        kingSoundPending = global.fetch(KING_SOUND_URL)
+            .then(function (response) { return response.arrayBuffer(); })
+            .then(function (raw) {
+                return new Promise(function (resolve, reject) {
+                    audioContext.decodeAudioData(raw, resolve, reject);
+                });
+            })
+            .then(function (buffer) { kingSoundBuffer = buffer; return buffer; })
+            .catch(function () { kingSoundPending = null; return null; });
+        return kingSoundPending;
     }
+
+    function playKingSound() {
+        if (!kingSoundBuffer) {
+            // Ещё не декодирован (или файл недоступен) -- пробуем подгрузить
+            // на будущее и молчим. Сознательно НЕ откатываемся на прежний
+            // синтезированный звук: именно он владельцу и не подошёл, так
+            // что тишина здесь лучше неприятного сигнала.
+            preloadKingSound();
+            return;
+        }
+        const source = audioContext.createBufferSource();
+        const gainNode = audioContext.createGain();
+        source.buffer = kingSoundBuffer;
+        gainNode.gain.setValueAtTime(KING_SOUND_VOLUME, audioContext.currentTime);
+        source.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        source.start();
+    }
+
+    // Предзагрузка сразу при загрузке модуля: к моменту первого превращения
+    // буфер уже декодирован, поэтому звук стартует без задержки.
+    preloadKingSound();
+
     function playKingCaptureSound() {
         playWoodKnock(0.18, 0.6, 600);
         setTimeout(function () { playWoodKnock(0.13, 0.42, 480); }, 65);
@@ -168,6 +202,7 @@
         playMoveSound,
         playCaptureSound,
         playKingSound,
+        preloadKingSound,
         playKingCaptureSound,
         playWinSound,
         playVictorySound,
