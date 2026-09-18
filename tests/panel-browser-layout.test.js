@@ -308,8 +308,8 @@ function buildModalFixture() {
 // №42-B2a: fixture для 4 АСИНХРОННЫХ диалогов. В отличие от B1, они
 // открываются программно (функцией, имитирующей реальный паттерн
 // checkDrawProposal()/checkRematchProposal()/renderEndGameModal()/
-// checkSpectatorGameInterrupted() -- guard "openModal только если
-// classList.contains('hidden')"), а не кликом. Клик-привязка кнопок --
+// checkSpectatorGameInterrupted() -- guard через isModalLogicallyOpen:
+// видимую modal не переоткрывает, а .modal-closing разрешает reopen), а не кликом. Клик-привязка кнопок --
 // та же представительная closeModal(modal), что и в B1-fixture; реальное
 // соответствие call-site'ов этому паттерну отдельно проверяется
 // source-guard'ами в modal-dialog-focus-b2a.test.js.
@@ -333,9 +333,9 @@ function buildAsyncModalFixture() {
         if (idx === -1) throw new Error('line not found for extraction: ' + marker);
         return SRC.slice(idx, SRC.indexOf(';', idx) + 1);
     }
-    const drawGuardLine = extractLine('if (drawOfferModal.classList.contains("hidden"))');
-    const rematchGuardLine = extractLine('if (rematchRequestModal.classList.contains("hidden"))');
-    const endGameGuardLine = extractLine('if (endGameModal.classList.contains("hidden"))');
+    const drawGuardLine = extractLine('if (!isModalLogicallyOpen(drawOfferModal))');
+    const rematchGuardLine = extractLine('if (!isModalLogicallyOpen(rematchRequestModal))');
+    const endGameGuardLine = extractLine('if (!isModalLogicallyOpen(endGameModal))');
 
     const modalIds = ['draw-offer-modal', 'rematch-request-modal', 'end-game-modal', 'spectator-interrupted-modal'];
     const modalsHtml = modalIds.map(function (id) {

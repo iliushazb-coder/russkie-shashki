@@ -112,17 +112,19 @@ check('openModal(drawOfferModal) БЕЗ returnFocus:false (screen никогда
 check('openModal(rematchRequestModal) БЕЗ returnFocus:false',
   /openModal\(rematchRequestModal\)/.test(SRC) && !/openModal\(rematchRequestModal, \{ returnFocus: false \}\)/.test(SRC));
 
-console.log('=== 8. review fix: guard от повторного открытия на неизменённом состоянии (redundant re-render) ===');
+console.log('=== 8. review fix + №3B: redundant re-render guard знает про closing-state ===');
 // checkDrawProposal/checkRematchProposal/renderEndGameModal вызываются на
-// КАЖДЫЙ renderBoard(), не только при новом предложении -- без guard'а
-// каждый несвязанный ре-рендер стирал бы фокус пользователя обратно на
-// initial-focus, даже если он уже протабился внутри диалога.
-check('drawOfferModal: openModal вызывается только при classList.contains("hidden")',
-  /if \(drawOfferModal\.classList\.contains\("hidden"\)\) openModal\(drawOfferModal\)/.test(SRC));
+// КАЖДЫЙ renderBoard(). Видимая открытая модалка не должна переоткрываться
+// и сбрасывать фокус, но .modal-closing уже ЛОГИЧЕСКИ закрыта и должна
+// разрешать reopen, чтобы openModal отменил её stale close-cycle.
+check('drawOfferModal: guard через isModalLogicallyOpen',
+  /if \(!isModalLogicallyOpen\(drawOfferModal\)\) openModal\(drawOfferModal\)/.test(SRC));
 check('rematchRequestModal: тот же guard',
-  /if \(rematchRequestModal\.classList\.contains\("hidden"\)\) openModal\(rematchRequestModal\)/.test(SRC));
-check('endGameModal: тот же guard',
-  /if \(endGameModal\.classList\.contains\("hidden"\)\) openModal\(endGameModal, \{ returnFocus: false \}\)/.test(SRC));
+  /if \(!isModalLogicallyOpen\(rematchRequestModal\)\) openModal\(rematchRequestModal\)/.test(SRC));
+check('endGameModal: тот же guard + returnFocus:false',
+  /if \(!isModalLogicallyOpen\(endGameModal\)\) openModal\(endGameModal, \{ returnFocus: false \}\)/.test(SRC));
+check('isModalLogicallyOpen: closing считается закрытым',
+  /function isModalLogicallyOpen[\s\S]*!modal\.classList\.contains\("modal-closing"\)/.test(SRC));
 
 console.log('=== 8b. review fix: closeModal() не крадёт фокус у ДРУГОГО уже открытого диалога ===');
 // Подтверждаем ДВЕ вещи: (1) реальный порядок renderBoard() -- именно
@@ -150,8 +152,8 @@ console.log('=== 8b. review fix: closeModal() не крадёт фокус у Д
     `rematch@${idxRematch} draw@${idxDraw}`);
 }
 const CLOSE_BODY_B2A = helperBody('closeModal');
-check('closeModal(): проверяет, не находится ли фокус внутри ДРУГОГО видимого .modal-overlay, перед восстановлением trigger',
-  /\.closest\(["']\.modal-overlay:not\(\.hidden\)["']\)/.test(CLOSE_BODY_B2A));
+check('closeModal(): проверяет ДРУГУЮ логически открытую modal (hidden и closing исключены)',
+  /\.closest\(["']\.modal-overlay:not\(\.hidden\):not\(\.modal-closing\)["']\)/.test(CLOSE_BODY_B2A));
 check('closeModal(): при активном другом модальном диалоге НЕ вызывает .focus() на старом trigger (условие обёрнуто, не удалено)',
   /if \(!activeInsideOtherOpenModal && state\.trigger/.test(CLOSE_BODY_B2A));
 

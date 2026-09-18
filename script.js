@@ -1180,8 +1180,7 @@ function closeModal(modal) {
             && typeof document.activeElement.closest === "function"
             && document.activeElement.closest(".modal-overlay:not(.hidden):not(.modal-closing)"));
 
-        if (!activeInsideOtherOpenModal
-            && state.trigger
+        if (!activeInsideOtherOpenModal && state.trigger
             && document.body.contains(state.trigger)
             && state.trigger.offsetParent !== null) {
             state.trigger.focus();
