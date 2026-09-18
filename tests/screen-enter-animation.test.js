@@ -135,20 +135,18 @@ console.log('\n=== 6. ХАРАКТЕР АНИМАЦИИ ===');
 {
     const m = /animation: screenEnter (\d+)ms ([^;]+);/.exec(CSS_CLEAN);
     check('6.1 длительность объявлена', !!m);
-    check('6.2 длительность в диапазоне 150-200 мс', (function () {
-        if (!m) return false;
-        const ms = parseInt(m[1], 10);
-        return ms >= 150 && ms <= 200;
-    })(), m ? m[1] + 'ms' : '?');
+    check('6.2 длительность ровно 200 мс', !!m && parseInt(m[1], 10) === 200,
+        m ? m[1] + 'ms' : '?');
 
     const kf = /@keyframes screenEnter \{[\s\S]*?\n\}/.exec(CSS_CLEAN);
     check('6.3 анимируется прозрачность', !!kf && /opacity: 0/.test(kf[0]));
     check('6.4 есть небольшой подъём', !!kf && /translateY\(\d+px\)/.test(kf[0]));
-    check('6.5 подъём не больше 10px', (function () {
+    // При 6px движение почти не читалось, поэтому подъём увеличен.
+    check('6.5 подъём ровно 10px', (function () {
         if (!kf) return false;
         const t = /translateY\((\d+)px\)/.exec(kf[0]);
-        return !!t && parseInt(t[1], 10) <= 10;
-    })());
+        return !!t && parseInt(t[1], 10) === 10;
+    })(), kf ? (/translateY\((\d+)px\)/.exec(kf[0]) || [])[1] : '?');
     // Тяжёлых эффектов быть не должно: доска -- самый горячий путь рендера.
     check('6.6 нет масштаба, размытия и теней', !!kf && !/scale\(|blur\(|box-shadow/.test(kf[0]));
     check('6.7 easing без отскока (спокойное появление)', (function () {
@@ -162,9 +160,9 @@ console.log('\n=== 6. ХАРАКТЕР АНИМАЦИИ ===');
 }
 
 console.log('\n=== 7. CACHE-BUST ===');
-check('7.1 style.css поднят (>= 28)', (function () {
+check('7.1 style.css поднят (>= 29)', (function () {
     const m = /style\.css\?v=(\d+)/.exec(HTML);
-    return !!m && parseInt(m[1], 10) >= 28;
+    return !!m && parseInt(m[1], 10) >= 29;
 })(), (/style\.css\?v=(\d+)/.exec(HTML) || [])[1]);
 
 console.log('\n=== 8. МОДАЛКИ НЕ ТРОНУТЫ (это #3B) ===');
@@ -177,6 +175,88 @@ check('8.1 closeModal по-прежнему ставит hidden первой с�
 })());
 check('8.2 у .modal-overlay не появилось классов закрытия',
     !/modal-closing/.test(CSS_CLEAN) && !/modal-closing/.test(CLEAN));
+
+console.log('\n=== 9. НАЖАТИЕ КНОПКИ: СТЕКЛЯННЫЙ FEEDBACK ===');
+{
+    const activeRule = /\.menu-button:active \{([^}]*)\}/.exec(CSS_CLEAN);
+    const afterRule = /\.menu-button::after \{([^}]*)\}/.exec(CSS_CLEAN);
+    const afterActive = /\.menu-button:active::after \{([^}]*)\}/.exec(CSS_CLEAN);
+
+    check('9.1 правило нажатия найдено', !!activeRule);
+    check('9.2 декоративный слой ::after объявлен', !!afterRule);
+    check('9.3 слой зажигается именно при нажатии', !!afterActive && /opacity:\s*1/.test(afterActive[1]));
+
+    // Декоративный слой не должен перехватывать клики -- иначе обработчик
+    // кнопки перестал бы срабатывать.
+    check('9.4 слой не перехватывает события', !!afterRule && /pointer-events:\s*none/.test(afterRule[1]));
+    check('9.5 радиус слоя совпадает с кнопкой', !!afterRule && /border-radius:\s*inherit/.test(afterRule[1]));
+    check('9.6 слой покрывает кнопку целиком', !!afterRule && /inset:\s*0/.test(afterRule[1]));
+    check('9.7 в покое слой невидим', !!afterRule && /opacity:\s*0/.test(afterRule[1]));
+
+    // Физическое утопление: одного масштаба мало, нужен и сдвиг вниз.
+    check('9.8 кнопка утапливается (масштаб + сдвиг)',
+        !!activeRule && /transform:\s*scale\([\d.]+\)\s*translateY\(\d+px\)/.test(activeRule[1]));
+    check('9.9 рамка при нажатии ярче', !!activeRule && /border-color:/.test(activeRule[1]));
+    check('9.10 есть выраженный внутренний блик',
+        !!activeRule && /inset 0 2px 0 rgba/.test(activeRule[1]));
+    check('9.11 есть внутренняя тень снизу (ощущение вдавленности)',
+        !!activeRule && /inset 0 -3px/.test(activeRule[1]));
+
+    // Не казино: никаких неоновых приёмов.
+    check('9.12 без неона и тяжёлых фильтров', (function () {
+        if (!activeRule || !afterRule) return false;
+        const both = activeRule[1] + afterRule[1];
+        return !/filter:|blur\(|drop-shadow\(/.test(both);
+    })());
+
+    // Опасная кнопка обязана остаться красной: у .menu-button:active
+    // специфичность выше, чем у .danger-button, и без своего правила
+    // рамка перекрасилась бы в золотистую.
+    check('9.13 danger-button сохраняет красный характер при нажатии', (function () {
+        const dr = /\.danger-button:active \{([^}]*)\}/.exec(CSS_CLEAN);
+        return !!dr && /border-color:/.test(dr[1]);
+    })());
+    check('9.14 у danger-button свой оттенок блика',
+        /\.danger-button::after \{[^}]*background:/.test(CSS_CLEAN));
+
+    // room-item-button переиспользует класс menu-button -- эффект
+    // распространяется на него автоматически, отдельной логики не нужно.
+    check('9.15 room-item-button не переопределяет нажатие',
+        !/\.room-item-button:active/.test(CSS_CLEAN));
+
+    // Системная подсветка тапа смазала бы собственный эффект.
+    check('9.16 системная подсветка тапа отключена у кнопки', (function () {
+        const base = /\.menu-button \{([^}]*)\}/.exec(CSS_CLEAN);
+        return !!base && /-webkit-tap-highlight-color:\s*transparent/.test(base[1]);
+    })());
+    check('9.17 переход по border-color объявлен', (function () {
+        const base = /\.menu-button \{([^}]*)\}/.exec(CSS_CLEAN);
+        return !!base && /transition:[^;]*border-color/.test(base[1]);
+    })());
+
+    // Никакого JS: эффект чисто визуальный и не может задержать обработчик.
+    check('9.18 нажатие не требует JS', !/menu-button[^\n]*addEventListener\("(touchstart|pointerdown|mousedown)"/.test(CLEAN));
+}
+
+console.log('\n=== 10. REDUCED-MOTION ДЛЯ КНОПКИ ===');
+{
+    const blocks = CSS_CLEAN.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
+    const rm = blocks.find(function (b) { return /menu-button/.test(b); });
+    check('10.1 блок покрывает кнопку', !!rm);
+    check('10.2 движение при нажатии отключено',
+        !!rm && /\.menu-button:active \{\s*transform: none;/.test(rm));
+    check('10.3 плавные переходы отключены',
+        !!rm && /\.menu-button \{\s*transition: none;/.test(rm));
+    // Проверять надо ИМЕННО правило кнопки: в том же media-блоке лежат
+    // наложения превращения, у которых opacity: 0 !important законен.
+    check('10.4 световой отклик СОХРАНЁН (он статичен, движением не является)', (function () {
+        if (!rm) return false;
+        const btnAfter = /\.menu-button::after \{([^}]*)\}/.exec(rm);
+        // У слоя отключается только переход; гасить сам блик нельзя,
+        // иначе нажатие перестанет читаться вовсе.
+        return !!btnAfter && /transition:\s*none/.test(btnAfter[1]) && !/opacity/.test(btnAfter[1]);
+    })());
+}
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);

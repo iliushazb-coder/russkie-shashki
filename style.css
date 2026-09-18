@@ -69,11 +69,15 @@
 #group-lobby-screen:not(.hidden),
 #waiting-screen:not(.hidden),
 #game-screen:not(.hidden) {
-    animation: screenEnter 180ms cubic-bezier(.22, .61, .36, 1) both;
+    animation: screenEnter 200ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes screenEnter {
-    from { opacity: 0; transform: translateY(6px); }
+    /* 10px вместо прежних 6: при 6px движение почти не читалось.
+       Только сдвиг и прозрачность -- ни масштаба, ни фильтров: доска
+       перерисовывается чаще всего, и тащить её через тяжёлые свойства
+       ради украшения нельзя. */
+    from { opacity: 0; transform: translateY(10px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
@@ -160,15 +164,58 @@ h1 {
         inset 0 1.5px 0 rgba(255,225,170,0.4),
         inset 0 -2px 4px rgba(0,0,0,0.3),
         0 0 20px rgba(255, 180, 90, 0.10);
-    transition: transform 0.15s cubic-bezier(.4,0,.2,1), box-shadow 0.15s ease;
+    /* Системная подсветка тапа на мобильных накладывалась бы поверх
+       нашего собственного feedback'а и смазывала его. Отключаем только
+       её -- свой эффект нажатия остаётся. */
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.15s cubic-bezier(.4,0,.2,1), box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+/* Декоративный стеклянный блик. Отдельным слоем, а не тенью на самой
+   кнопке: так он появляется и гаснет независимо от её собственных теней и
+   не мешает им. Радиус повторяет кнопку, клики сквозь него проходят. */
+.menu-button::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    background:
+        linear-gradient(180deg, rgba(255,240,205,0.30), rgba(255,220,160,0.06) 42%, rgba(255,255,255,0) 70%);
+    transition: opacity 0.14s ease;
 }
 
 .menu-button:active {
-    transform: scale(0.96);
+    /* Физическое утопление: кнопка чуть уменьшается И опускается на
+       полпикселя -- одного масштаба мало, чтобы прочиталось нажатие. */
+    transform: scale(0.965) translateY(1px);
+    /* Рамка ярче -- край как будто ловит свет. */
+    border-color: rgba(255, 226, 168, 0.75);
     box-shadow:
-        0 4px 12px rgba(0,0,0,0.5),
-        inset 0 1px 0 rgba(255,225,170,0.25),
-        0 0 24px rgba(255, 180, 90, 0.25);
+        /* внешняя тень короче: кнопка ближе к поверхности */
+        0 3px 9px rgba(0,0,0,0.55),
+        /* внутренний блик выражен сильнее прежнего */
+        inset 0 2px 0 rgba(255,235,195,0.55),
+        /* и тень изнутри снизу -- ощущение вдавленности */
+        inset 0 -3px 7px rgba(0,0,0,0.45),
+        0 0 22px rgba(255, 185, 95, 0.22);
+}
+
+.menu-button:active::after {
+    opacity: 1;
+}
+
+/* Красный характер сохраняется: без этого правила рамка из
+   .menu-button:active (специфичность выше, чем у .danger-button)
+   перекрасила бы опасную кнопку в обычную золотистую. */
+.danger-button:active {
+    border-color: rgba(255, 170, 158, 0.8);
+}
+
+.danger-button::after {
+    background:
+        linear-gradient(180deg, rgba(255,215,205,0.30), rgba(255,180,170,0.06) 42%, rgba(255,255,255,0) 70%);
 }
 
 .room-item-button {
@@ -1792,6 +1839,18 @@ h1 {
     #waiting-screen:not(.hidden),
     #game-screen:not(.hidden) {
         animation: none;
+    }
+    /* Кнопка не движется: ни утопления, ни плавных переходов. Световой
+       отклик при этом остаётся -- он статичен и движением не является,
+       а без него нажатие перестало бы читаться вовсе. */
+    .menu-button {
+        transition: none;
+    }
+    .menu-button:active {
+        transform: none;
+    }
+    .menu-button::after {
+        transition: none;
     }
     /* Ни подъёма, ни поворота: наложение просто не показывается, и дамка
        появляется мгновенно. Звук при этом остаётся -- он не является
