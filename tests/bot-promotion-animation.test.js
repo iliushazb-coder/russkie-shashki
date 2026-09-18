@@ -49,19 +49,71 @@ function constOf(name) {
 const CLEAN = noComments(SRC);
 
 // --- Исполняемая песочница для playMoveGhostAnimation -------------------
+//
+// Клетки и фигура подставляются НАСТОЯЩИЕ (в виде минимальных заглушек),
+// а не пустыми объектами. Иначе genuine new move упирался бы в защитный
+// выход `if (!fromSquareEl || !toSquareEl || !realPieceEl) return;` ДО
+// вызова playKingPromotionEffect(), и главный регрессионный сценарий --
+// "первая доставка реально запускает превращение" -- остался бы
+// непроверенным.
+//
+// Заглушки ровно те, что нужны функции дальше по коду:
+// getBoundingClientRect для двух клеток, classList и appendChild, плюс
+// document.createElement и activeGhostCancelFns. Браузерным тестом это не
+// становится.
+function makeSquare() {
+    const children = [];
+    return {
+        getBoundingClientRect: function () { return { left: 0, top: 0, width: 40, height: 40 }; },
+        appendChild: function (el) { children.push(el); el.parentNode = this; },
+        _children: children
+    };
+}
+function makeElement() {
+    const cls = new Set();
+    return {
+        className: '',
+        parentNode: null,
+        style: { transform: '', setProperty: function () {} },
+        classList: {
+            add: function (c) { cls.add(c); },
+            remove: function (c) { cls.delete(c); },
+            contains: function (c) { return cls.has(c); }
+        },
+        addEventListener: function () {},
+        remove: function () { this.parentNode = null; },
+        _cls: cls
+    };
+}
+
 function runGhost(state, lastAnimated) {
     const calls = { cancels: 0, promotions: 0 };
     const saved = {};
     ['cancelActiveGhostAnimations', 'playKingPromotionEffect', 'squareElements',
-     'pieceElements', 'currentState', 'lastAnimatedMoveCount'].forEach(function (k) {
+     'pieceElements', 'currentState', 'lastAnimatedMoveCount', 'activeGhostCancelFns',
+     'document', 'setTimeout', 'requestAnimationFrame',
+     'MOVE_GHOST_DURATION_MS'].forEach(function (k) {
         saved[k] = global[k];
     });
     global.cancelActiveGhostAnimations = function () { calls.cancels++; };
     global.playKingPromotionEffect = function () { calls.promotions++; };
-    // Клеток в DOM нет -- функция дойдёт до защитного выхода уже ПОСЛЕ
-    // интересующих нас ветвлений, чего для этих проверок достаточно.
+    global.activeGhostCancelFns = [];
+    global.document = { createElement: function () { return makeElement(); } };
+    global.setTimeout = function () { return 0; };
+    // Ghost стартует внутри rAF. Не исполняем колбэк: нас интересуют
+    // ветвления до него, а реальный полёт в Node всё равно не измерить.
+    global.requestAnimationFrame = function () { return 0; };
+    global.MOVE_GHOST_DURATION_MS = constOf('MOVE_GHOST_DURATION_MS') || 150;
+
     global.squareElements = {};
     global.pieceElements = {};
+    if (state && state.lastMove) {
+        const fromKey = state.lastMove.from.row + '_' + state.lastMove.from.col;
+        const toKey = state.lastMove.to.row + '_' + state.lastMove.to.col;
+        global.squareElements[fromKey] = makeSquare();
+        global.squareElements[toKey] = makeSquare();
+        global.pieceElements[toKey] = makeElement();
+    }
     global.currentState = state;
     global.lastAnimatedMoveCount = lastAnimated;
 
@@ -70,7 +122,9 @@ function runGhost(state, lastAnimated) {
     playMoveGhostAnimation([]);
 
     calls.lastAnimated = global.lastAnimatedMoveCount;
-    Object.keys(saved).forEach(function (k) { global[k] = saved[k]; });
+    Object.keys(saved).forEach(function (k) {
+        if (saved[k] === undefined) delete global[k]; else global[k] = saved[k];
+    });
     return calls;
 }
 
@@ -79,7 +133,9 @@ function moveState(moveCount, extra) {
         moveCount: moveCount,
         moveType: 'king',
         lastMove: { from: { row: 1, col: 1 }, to: { row: 0, col: 2 } },
-        pieces: {}
+        // Фигура на клетке назначения обязательна: без неё функция выходит
+        // на `if (!pieceData) return;` до вызова эффекта.
+        pieces: { '0_2': { color: 'light', king: true } }
     }, extra || {});
 }
 
@@ -98,12 +154,21 @@ console.log('=== A. ПОВТОРНЫЙ РЕНДЕР ТОГО ЖЕ ХОДА ===')
         return guard !== -1 && lastCancel !== -1 && guard < lastCancel;
     })());
 
+    // Сначала убеждаемся, что harness вообще доводит до эффекта: иначе
+    // все проверки ниже были бы бессмысленны -- функция выходила бы на
+    // защитном выходе по отсутствию клеток и ничего бы не вызывала.
+    const genuine = runGhost(moveState(6), 5);
+    check('A.0 genuine new king move РЕАЛЬНО запускает превращение',
+        genuine.promotions === 1, 'promotions: ' + genuine.promotions);
+    check('A.0b и при этом снимает предыдущие наложения',
+        genuine.cancels === 1, 'отмен: ' + genuine.cancels);
+
     // Главная проверка дефекта -- ИСПОЛНЕНИЕМ.
     const repeat = runGhost(moveState(7), 7);
     check('A.4 повторная доставка НЕ вызывает cancelActiveGhostAnimations',
         repeat.cancels === 0, 'отмен: ' + repeat.cancels);
     check('A.5 повторная доставка не перезапускает эффект',
-        repeat.promotions === 0);
+        repeat.promotions === 0, 'promotions: ' + repeat.promotions);
 
     const fresh = runGhost(moveState(8), 7);
     check('A.6 настоящий новый ход очищает предыдущие ghosts',
@@ -114,7 +179,7 @@ console.log('=== A. ПОВТОРНЫЙ РЕНДЕР ТОГО ЖЕ ХОДА ===')
     check('A.8 первый рендер после attach очищает старые анимации',
         firstRender.cancels === 1, 'отмен: ' + firstRender.cancels);
     check('A.9 первый рендер НЕ проигрывает чужой прошлый ход',
-        firstRender.promotions === 0);
+        firstRender.promotions === 0, 'promotions: ' + firstRender.promotions);
     check('A.10 первый рендер запоминает moveCount', firstRender.lastAnimated === 5);
 
     const noMove = runGhost({ moveCount: 5, lastMove: null }, 3);
@@ -152,13 +217,33 @@ console.log('\n=== A2. СЦЕНАРИЙ ДВОЙНОЙ ДОСТАВКИ OWNER-SY
         return /\n    renderBoard\(\);/.test(b);
     })());
 
-    // Проигрываем обе доставки подряд, как это делает Firebase.
+    // Проигрываем обе доставки подряд, ровно как это делает транзакция
+    // RTDB: локальное применение, затем подтверждение сервером.
     const first = runGhost(moveState(9), 8);
-    check('A2.4 первая доставка: отмена прошлого и обработка нового хода',
-        first.cancels === 1 && first.lastAnimated === 9);
+    check('A2.4 первая доставка ЗАПУСКАЕТ превращение ровно один раз',
+        first.promotions === 1, 'promotions: ' + first.promotions);
+    check('A2.5 первая доставка снимает предыдущие наложения',
+        first.cancels === 1, 'отмен: ' + first.cancels);
+    check('A2.6 первая доставка запоминает moveCount', first.lastAnimated === 9);
+
     const second = runGhost(moveState(9), 9);
-    check('A2.5 вторая доставка того же revision НИЧЕГО не отменяет',
+    check('A2.7 вторая доставка того же moveCount НИЧЕГО не отменяет',
         second.cancels === 0, 'отмен: ' + second.cancels);
+    check('A2.8 вторая доставка НЕ запускает превращение повторно',
+        second.promotions === 0, 'promotions: ' + second.promotions);
+
+    // Полная последовательность одного коммита в одном прогоне: сначала
+    // локальная доставка, следом серверная. Именно она воспроизводит
+    // исходный дефект -- раньше вторая убивала эффект первой.
+    (function () {
+        const stateAtRevision = moveState(9);
+        const local = runGhost(stateAtRevision, 8);
+        const confirmed = runGhost(stateAtRevision, local.lastAnimated);
+        check('A2.9 за один коммит превращение запускается один раз и не отменяется',
+            local.promotions === 1 && confirmed.promotions === 0 && confirmed.cancels === 0,
+            'local: p=' + local.promotions + ' c=' + local.cancels +
+            ', confirmed: p=' + confirmed.promotions + ' c=' + confirmed.cancels);
+    })();
 }
 
 console.log('\n=== B. ПРЕВРАЩЕНИЕ БОТА ВНУТРИ СЕРИИ ВЗЯТИЙ ===');
