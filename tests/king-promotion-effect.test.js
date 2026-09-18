@@ -222,8 +222,11 @@ console.log('\n=== 8. НИЧЕГО ЛИШНЕГО НЕ ЗАТРОНУТО ===');
 const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
 check('8.1 playKingCaptureSound не тронут (это НЕ превращение со взятием)',
     /function playKingCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.18, 0\.6, 600\);/.test(AUDIO));
-check('8.2 диспетчер звуков не изменён',
-    /if \(type === "king"\) \{\s*\n\s*playKingSound\(\);/.test(AUDIO));
+// Диспетчер получил третий параметр -- задержку запуска звука
+// превращения. Проверяем ИНВАРИАНТ: тип "king" по-прежнему уходит именно
+// в playKingSound, а не куда-то ещё.
+check('8.2 диспетчер по-прежнему направляет "king" в playKingSound',
+    /if \(type === "king"\) \{\s*\n\s*playKingSound\(/.test(AUDIO));
 check('8.3 мёртвый CSS короны пока не удалён (вне scope этого PR)',
     /\.king::before \{\s*\n\s*display: none !important;/.test(CSS));
 check('8.4 эффект не трогает currentState и не пишет в Firebase',
@@ -423,9 +426,14 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         const asFallback = CSS.indexOf('--king-promotion-duration,') !== -1;
         return !inAnim && !asFallback;
     })());
-    check('13.4d длительность ровно вдвое больше прежних 340 мс', (function () {
+    // Длительность менялась по запросу владельца: 340 -> 680 -> 1500.
+    // Точное значение закреплено в 17.1, здесь только разумные границы,
+    // чтобы случайная правка не сделала эффект мгновенным или бесконечным.
+    check('13.4d длительность в разумных границах', (function () {
         const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
-        return !!m && parseInt(m[1], 10) === 680;
+        if (!m) return false;
+        const v = parseInt(m[1], 10);
+        return v >= 300 && v <= 2000;
     })());
     check('13.4e MOVE_GHOST_DURATION_MS не менялся', (function () {
         const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
@@ -798,6 +806,346 @@ console.log('\n=== 16. REDUCED-MOTION: ДАМКА ПОЯВЛЯЕТСЯ СРАЗ�
         // В блоке reduced-motion не должно быть ничего про звук.
         return !!rm && !/audio|sound|king-promotion\.wav/i.test(rm);
     })());
+}
+
+console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИЕМ ДАМКИ ===');
+{
+    function constOf(name) {
+        const m = new RegExp('const ' + name + ' = ([\\d.]+)').exec(CLEAN);
+        return m ? parseFloat(m[1]) : null;
+    }
+    const ghost = constOf('MOVE_GHOST_DURATION_MS');
+    const dur = constOf('KING_PROMOTION_DURATION_MS');
+    const frac = constOf('KING_PROMOTION_REVEAL_FRACTION');
+    const off = constOf('KING_SOUND_RESOLVE_OFFSET_MS');
+    // Объявлена многострочным выражением, поэтому вычисляем её так же,
+    // как это делает сам код, из тех же констант.
+    const delay = (ghost !== null && dur !== null && frac !== null && off !== null)
+        ? Math.max(0, Math.round(ghost + dur * frac - off))
+        : null;
+
+    check('17.1 длительность превращения = 1500 мс', dur === 1500, String(dur));
+    check('17.2 длительность полёта не менялась', ghost === 150, String(ghost));
+
+    // Доля должна совпадать с кадром в CSS -- иначе звук уедет молча.
+    check('17.3 доля появления дамки совпадает с кадром в CSS', (function () {
+        const b = /@keyframes kingPromotionFlipKing \{[\s\S]*?\n\}/.exec(CSS);
+        if (!b || frac === null) return false;
+        const m = /([\d.]+)%\s*\{[^}]*opacity:\s*1/.exec(b[0]);
+        return !!m && Math.abs(parseFloat(m[1]) / 100 - frac) < 0.001;
+    })(), 'CSS vs константа');
+
+    // Позиция последней ноты проверяется ПО САМОМУ ФАЙЛУ, а не на слово.
+    check('17.4 смещение разрешающей ноты совпадает с реальным WAV', (function () {
+        const wav = fs.readFileSync(path.join(__dirname, '..', 'assets', 'king-promotion.wav'));
+        // Минимальный разбор PCM WAV: ищем чанки fmt и data.
+        let pos = 12, rate = 0, bits = 0, ch = 1, dataOff = 0, dataLen = 0;
+        while (pos + 8 <= wav.length) {
+            const id = wav.toString('ascii', pos, pos + 4);
+            const size = wav.readUInt32LE(pos + 4);
+            if (id === 'fmt ') {
+                ch = wav.readUInt16LE(pos + 10);
+                rate = wav.readUInt32LE(pos + 12);
+                bits = wav.readUInt16LE(pos + 22);
+            } else if (id === 'data') { dataOff = pos + 8; dataLen = size; break; }
+            pos += 8 + size + (size % 2);
+        }
+        if (!rate || bits !== 16 || !dataLen) return false;
+        const n = Math.floor(dataLen / 2 / ch);
+        const env = new Float64Array(n);
+        for (let i = 0; i < n; i++) env[i] = Math.abs(wav.readInt16LE(dataOff + i * 2 * ch)) / 32767;
+        // сглаживание и поиск атак
+        const win = Math.floor(rate * 0.004);
+        const sm = new Float64Array(n);
+        let acc = 0;
+        for (let i = 0; i < n; i++) {
+            acc += env[i];
+            if (i >= win) acc -= env[i - win];
+            sm[i] = acc / Math.min(i + 1, win);
+        }
+        let peak = 0;
+        for (let i = 0; i < n; i++) if (sm[i] > peak) peak = sm[i];
+        const thr = peak * 0.25;
+        const onsets = [];
+        const gap = Math.floor(rate * 0.09);
+        for (let i = 0; i < n; i++) {
+            if (sm[i] > thr && (onsets.length === 0 || i - onsets[onsets.length - 1] > gap)) onsets.push(i);
+        }
+        if (onsets.length < 4) return false;
+        const lastMs = onsets[3] / rate * 1000;
+        return Math.abs(lastMs - off) <= 30;
+    })(), 'константа ' + off + ' мс');
+
+    // Задержка обязана вычисляться, а не быть вписанной числом.
+    check('17.5 задержка выводится из констант, а не захардкожена',
+        /KING_PROMOTION_SOUND_DELAY_MS = Math\.max\(0, Math\.round\([\s\S]*?MOVE_GHOST_DURATION_MS[\s\S]*?KING_PROMOTION_DURATION_MS \* KING_PROMOTION_REVEAL_FRACTION[\s\S]*?KING_SOUND_RESOLVE_OFFSET_MS/.test(CLEAN));
+
+    const reveal = ghost !== null && dur !== null && frac !== null ? Math.round(ghost + dur * frac) : null;
+    check('17.6 дамка появляется на 1238 мс от начала хода', reveal === 1238, String(reveal));
+    check('17.7 задержка звука = 818 мс', delay === 818, String(delay));
+    check('17.8 разрешающая нота попадает ТОЧНО в момент появления дамки',
+        delay !== null && off !== null && (delay + off) === reveal,
+        (delay + off) + ' vs ' + reveal);
+
+    // Планирование только через Web Audio.
+    check('17.9 задержка реализована планировщиком Web Audio, без setTimeout', (function () {
+        const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
+        const b = funcBody(AUDIO, 'playKingSound');
+        return !!b && /source\.start\(audioContext\.currentTime \+/.test(b) && !/setTimeout/.test(b);
+    })());
+    // Задержка теперь приходит функцией: она различает обычный режим и
+    // reduced-motion. Проверяем, что она проброшена во все точки.
+    check('17.10 задержка проброшена во все точки вызова',
+        (CLEAN.match(/playSoundForMoveType\([^)]*kingPromotionSoundDelayMs\(\)\)/g) || []).length === 4);
+    check('17.11 сам WAV не изменён и не растянут', (function () {
+        const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
+        const b = funcBody(AUDIO, 'playKingSound');
+        return !!b && !/playbackRate|detune/.test(b);
+    })());
+}
+
+console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА ПРЕВРАЩЕНИЯ ===');
+{
+    // Отложенная подача создала возможность, которой раньше не было:
+    // к моменту воспроизведения партия может закончиться или игрок уйти с
+    // доски. Здесь модуль реально ИСПОЛНЯЕТСЯ на фейковом Web Audio, а не
+    // проверяется регуляркой -- гонку ссылок иначе не поймать.
+    const started = [];
+    const stopped = [];
+    let now = 0;
+    function makeSource() {
+        const src = {
+            buffer: null, onended: null, _started: false,
+            connect: function () {},
+            start: function (t) { src._started = true; started.push(t); },
+            stop: function () {
+                if (!src._started) throw new Error('InvalidStateError');
+                stopped.push(src);
+                if (typeof src.onended === 'function') src.onended();
+            }
+        };
+        return src;
+    }
+    const fakeCtx = {
+        state: 'running',
+        get currentTime() { return now; },
+        sampleRate: 44100,
+        destination: {},
+        createBufferSource: makeSource,
+        createGain: function () { return { connect: function () {}, gain: { setValueAtTime: function () {} } }; },
+        createBuffer: function () { return { getChannelData: function () { return new Float32Array(4); } }; },
+        createBiquadFilter: function () { return { connect: function () {}, frequency: {}, Q: {} }; },
+        createOscillator: function () { return { connect: function () {}, frequency: {}, start: function () {}, stop: function () {} }; }
+    };
+    const savedAC = global.AudioContext;
+    const savedDoc = global.document;
+    global.AudioContext = function () { return fakeCtx; };
+    delete global.document; // чтобы preload не пытался fetch'ить
+    delete require.cache[require.resolve('../shared/audio-effects.js')];
+    const audio = require('../shared/audio-effects.js');
+    global.AudioContext = savedAC;
+    if (savedDoc) global.document = savedDoc;
+
+    check('18.1 cancelKingSound экспортирована', typeof audio.cancelKingSound === 'function');
+
+    // Буфер в Node не декодируется, поэтому подменяем внутреннее
+    // состояние через тот же путь, что использует продакшен: играем
+    // только если буфер есть. Здесь буфера нет -> звук не стартует,
+    // и это само по себе проверяемое поведение.
+    check('18.2 без декодированного буфера звук не планируется', (function () {
+        started.length = 0;
+        audio.playKingSound(818);
+        return started.length === 0;
+    })());
+
+    // Дальше проверяем саму МЕХАНИКУ отмены на исходнике: поведение
+    // с буфером в Node воспроизвести нельзя, но инварианты ссылки видны
+    // в коде и должны быть именно такими.
+    const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
+    const cancelBody = funcBody(AUDIO, 'cancelKingSound');
+    const playBody = funcBody(AUDIO, 'playKingSound');
+
+    check('18.3 ссылка обнуляется ДО stop (иначе onended затрёт новое состояние)', (function () {
+        if (!cancelBody) return false;
+        const nulled = cancelBody.indexOf('scheduledKingSource = null;');
+        const stop = cancelBody.indexOf('source.stop()');
+        return nulled !== -1 && stop !== -1 && nulled < stop;
+    })());
+    check('18.4 stop обёрнут в try/catch (узел мог уже завершиться)',
+        !!cancelBody && /try \{ source\.stop\(\); \} catch/.test(cancelBody));
+    check('18.5 отмена берёт локальную копию ссылки',
+        !!cancelBody && /const source = scheduledKingSource;/.test(cancelBody));
+
+    check('18.6 старый onended НЕ обнуляет ссылку на новый source',
+        !!playBody && /if \(scheduledKingSource === source\) scheduledKingSource = null;/.test(playBody));
+    check('18.7 новый вызов отменяет предыдущий ожидающий мотив', (function () {
+        if (!playBody) return false;
+        const cancel = playBody.indexOf('cancelKingSound()');
+        const create = playBody.indexOf('createBufferSource()');
+        return cancel !== -1 && create !== -1 && cancel < create;
+    })());
+    check('18.8 ссылка сохраняется до start, чтобы её можно было отменить', (function () {
+        if (!playBody) return false;
+        const save = playBody.indexOf('scheduledKingSource = source;');
+        const start = playBody.indexOf('source.start(');
+        return save !== -1 && start !== -1 && save < start;
+    })());
+
+    // Точки подключения.
+    check('18.9 исход партии отменяет превращение ПЕРВЫМ действием', (function () {
+        const b = funcBody(CLEAN, 'playEndGameOutcomeSound');
+        if (!b) return false;
+        const cancel = b.indexOf('cancelKingSound()');
+        const firstLogic = b.indexOf('if (!currentState');
+        return cancel !== -1 && firstLogic !== -1 && cancel < firstLogic;
+    })());
+    check('18.10 уход с игрового экрана отменяет звук', (function () {
+        const b = funcBody(CLEAN, 'showScreen');
+        return !!b && /if \(screen !== gameScreen\) cancelKingSound\(\);/.test(b);
+    })());
+    check('18.11 переход НА игровой экран звук НЕ отменяет', (function () {
+        const b = funcBody(CLEAN, 'showScreen');
+        // Отмена обязана быть под условием, а не безусловной.
+        return !!b && !/^\s*cancelKingSound\(\);/m.test(b);
+    })());
+    // Отмена не должна висеть на уборке эффекта: при multi-capture
+    // следующий прыжок отменяет ghost-анимации, а звук обязан прозвучать.
+    check('18.12 уборка эффекта превращения звук НЕ отменяет', (function () {
+        const b = funcBody(CLEAN, 'playKingPromotionEffect');
+        return !!b && b.indexOf('cancelKingSound') === -1;
+    })());
+    check('18.13 для отмены не используется setTimeout',
+        !!cancelBody && !/setTimeout/.test(cancelBody) && !!playBody && !/setTimeout/.test(playBody));
+
+    // --- Сценарии ИСПОЛНЕНИЕМ, а не по тексту -------------------------
+    (function () {
+        let cancels = 0;
+        let outcome = [];
+        const saved = {};
+        ['cancelKingSound', 'playVictorySound', 'playDefeatSound', 'playDrawSound',
+         'hideStartupCover', 'currentState', 'isSpectator', 'myTelegramId', 'myColor',
+         'menuScreen', 'timeControlScreen', 'waitingScreen', 'gameScreen', 'document'
+        ].forEach(function (k) { saved[k] = global[k]; });
+
+        global.cancelKingSound = function () { cancels++; };
+        global.playVictorySound = function () { outcome.push('victory'); };
+        global.playDefeatSound = function () { outcome.push('defeat'); };
+        global.playDrawSound = function () { outcome.push('draw'); };
+        global.hideStartupCover = function () {};
+        function el() { return { classList: { add: function () {}, remove: function () {} } }; }
+        global.menuScreen = el(); global.timeControlScreen = el();
+        global.waitingScreen = el(); global.gameScreen = el();
+        global.document = { getElementById: function () { return el(); } };
+
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'showScreen'));
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'playEndGameOutcomeSound'));
+
+        // Победный ход с превращением: мотив отменён, исход звучит.
+        cancels = 0; outcome = [];
+        global.isSpectator = false; global.myTelegramId = 'tg_1001'; global.myColor = 'light';
+        global.currentState = { winner: 'light', moveType: 'king',
+            players: { light: { id: 'tg_1001' }, dark: { id: 'tg_1002' } } };
+        playEndGameOutcomeSound();
+        check('18.14 победа с превращением: мотив отменён', cancels === 1, 'отмен: ' + cancels);
+        check('18.15 победа с превращением: звук исхода остаётся',
+            outcome.join(',') === 'victory', outcome.join(',') || '(тишина)');
+
+        // Поражение -- то же самое.
+        cancels = 0; outcome = [];
+        global.currentState = { winner: 'dark', moveType: 'king',
+            players: { light: { id: 'tg_1001' }, dark: { id: 'tg_1002' } } };
+        playEndGameOutcomeSound();
+        check('18.16 поражение с превращением: мотив отменён, исход звучит',
+            cancels === 1 && outcome.join(',') === 'defeat');
+
+        // Уход с доски отменяет.
+        cancels = 0;
+        showScreen(global.menuScreen);
+        check('18.17 уход в меню отменяет мотив', cancels === 1, 'отмен: ' + cancels);
+        cancels = 0;
+        showScreen(global.waitingScreen);
+        check('18.18 переход на экран ожидания отменяет мотив', cancels === 1);
+
+        // Переход НА доску не отменяет -- там звук должен прозвучать.
+        cancels = 0;
+        showScreen(global.gameScreen);
+        check('18.19 переход на игровой экран НЕ отменяет мотив', cancels === 0, 'отмен: ' + cancels);
+
+        // Обычное превращение без финала: отмены не происходит вовсе.
+        cancels = 0; outcome = [];
+        global.currentState = { winner: null, moveType: 'king', players: {} };
+        playEndGameOutcomeSound();
+        check('18.20 превращение без финала: исход молчит',
+            outcome.length === 0, outcome.join(','));
+
+        Object.keys(saved).forEach(function (k) {
+            if (saved[k] === undefined) delete global[k]; else global[k] = saved[k];
+        });
+    })();
+}
+
+console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
+{
+    // При выключенном движении наложения не показываются, и настоящая
+    // дамка открывается сразу после полёта. Длинная задержка, рассчитанная
+    // под полуторную секунду вращения, привела бы мотив почти на 700 мс
+    // позже уже видимой дамки.
+    const fn = funcBody(CLEAN, 'kingPromotionSoundDelayMs');
+    check('19.1 функция задержки существует', !!fn);
+    check('19.2 задержка вычисляется при каждом вызове, а не кэшируется',
+        !!fn && /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/.test(fn));
+
+    if (fn) {
+        const saved = global.window;
+        const constM = /const KING_PROMOTION_SOUND_DELAY_MS = Math\.max\(0, Math\.round\(([\s\S]*?)\)\);/.exec(CLEAN);
+        check('19.3 базовая константа по-прежнему выводится из таймингов', !!constM);
+
+        const ghost = parseFloat(/const MOVE_GHOST_DURATION_MS = ([\d.]+)/.exec(CLEAN)[1]);
+        const dur = parseFloat(/const KING_PROMOTION_DURATION_MS = ([\d.]+)/.exec(CLEAN)[1]);
+        const frac = parseFloat(/const KING_PROMOTION_REVEAL_FRACTION = ([\d.]+)/.exec(CLEAN)[1]);
+        const off = parseFloat(/const KING_SOUND_RESOLVE_OFFSET_MS = ([\d.]+)/.exec(CLEAN)[1]);
+        global.KING_PROMOTION_SOUND_DELAY_MS = Math.max(0, Math.round(ghost + dur * frac - off));
+
+        // eslint-disable-next-line no-eval
+        eval(fn);
+
+        global.window = { matchMedia: function () { return { matches: false }; } };
+        const normal = kingPromotionSoundDelayMs();
+        global.window = { matchMedia: function () { return { matches: true }; } };
+        const reduced = kingPromotionSoundDelayMs();
+        global.window = {};
+        const noMM = kingPromotionSoundDelayMs();
+        global.window = saved;
+
+        check('19.4 обычный режим -> 818 мс', normal === 818, String(normal));
+        check('19.5 reduced-motion -> длинной задержки нет', reduced === 0, String(reduced));
+        check('19.6 без matchMedia остаётся обычное поведение', noMM === 818, String(noMM));
+        check('19.7 режимы действительно различаются', normal !== reduced);
+    }
+
+    // Все точки вызова обязаны спрашивать функцию, а не константу.
+    check('19.8 все четыре вызова используют функцию, а не константу напрямую',
+        (CLEAN.match(/playSoundForMoveType\([^)]*kingPromotionSoundDelayMs\(\)\)/g) || []).length === 4);
+    check('19.9 константа больше не передаётся в звук напрямую',
+        !/playSoundForMoveType\([^)]*KING_PROMOTION_SOUND_DELAY_MS\)/.test(CLEAN));
+
+    // Отмена и приоритет исхода не задеты этой правкой.
+    check('19.10 cancelKingSound по-прежнему подключена к обеим точкам',
+        /if \(screen !== gameScreen\) cancelKingSound\(\);/.test(CLEAN) &&
+        (function () {
+            const b = funcBody(CLEAN, 'playEndGameOutcomeSound');
+            return !!b && b.indexOf('cancelKingSound()') !== -1;
+        })());
+    check('19.11 для выбора задержки не используется setTimeout',
+        !!fn && !/setTimeout/.test(fn));
+    check('19.12 1500 мс и 540 градусов не тронуты',
+        /const KING_PROMOTION_DURATION_MS = 1500;/.test(CLEAN) && /rotateX\(540deg\)/.test(CSS));
+
+    // Устаревший комментарий про «вдвое медленнее» должен быть исправлен.
+    check('19.13 комментарий о длительности не утверждает неверное',
+        !/вдвое медленнее прежних 340/.test(SRC));
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

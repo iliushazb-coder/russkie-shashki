@@ -1127,6 +1127,16 @@ function closeModal(modal) {
 
 function showScreen(screen) {
     hideStartupCover();
+    // Уходим с доски -- снимаем ещё не прозвучавший мотив превращения.
+    // Звук стартует почти через секунду после хода, поэтому игрок успевает
+    // выйти в меню или из партии зрителем раньше, чем мотив зазвучит, и
+    // тот догнал бы его уже на другом экране.
+    //
+    // Переход НА игровой экран ничего не отменяет: там звук как раз и
+    // должен прозвучать. И это ниже снятия стартовой заглушки намеренно:
+    // тот вызов обязан оставаться первой строкой функции, что закреплено
+    // отдельным тестом в startup-cover.
+    if (screen !== gameScreen) cancelKingSound();
     menuScreen.classList.add("hidden");
     timeControlScreen.classList.add("hidden");
     waitingScreen.classList.add("hidden");
@@ -1182,6 +1192,7 @@ const {
     playMoveSound,
     playCaptureSound,
     playKingSound,
+    cancelKingSound,
     playKingCaptureSound,
     playWinSound,
     playVictorySound,
@@ -2622,14 +2633,59 @@ function playMoveGhostAnimation(capturedSnapshots) {
 // Смена текстуры «в середине» получается сама собой: под наложением уже
 // лежит настоящая дамка, наложение показывает ОБЫЧНУЮ текстуру и к
 // середине эффекта исчезает, открывая её.
-// Ровно вдвое медленнее прежних 340 мс -- по прямому запросу владельца
-// после ручного теста. Форма flip, траектория, высота подъёма, момент
-// смены текстуры и glow НЕ менялись: эффект только растянут во времени.
+// Длительность подбиралась владельцем вручную: 340 -> 680 -> 1500 мс.
+// Менялась только она -- форма flip, траектория, высота подъёма, момент
+// смены текстуры и glow во всех правках оставались прежними.
 //
 // Это ЕДИНСТВЕННЫЙ источник истины: значение уезжает в CSS переменной
 // (см. ниже), поэтому flip и glow берут его отсюда, а fallback cleanup
 // считает от него же.
-const KING_PROMOTION_DURATION_MS = 680;
+const KING_PROMOTION_DURATION_MS = 1500;
+
+// Доля анимации, на которой дамка становится видимой. Значение обязано
+// совпадать с кадром 72.5% в @keyframes kingPromotionFlipKing: именно там
+// обычная сторона гаснет, а дамка зажигается. Держим его здесь, потому
+// что от него считается момент запуска звука.
+const KING_PROMOTION_REVEAL_FRACTION = 0.725;
+
+// Положение ПОСЛЕДНЕЙ, разрешающей ноты внутри king-promotion.wav.
+// Мотив состоит из четырёх нот на 0 / 140 / 280 / 420 мс.
+const KING_SOUND_RESOLVE_OFFSET_MS = 420;
+
+// Звук стартует с задержкой, чтобы его разрешающая нота попала ровно в
+// момент появления дамки. Файл не растягивается -- сдвигается только
+// момент запуска, больше регулировать нечем: длина мотива фиксирована.
+//
+// Считается из констант, а не пишется числом: при смене длительности
+// анимации задержка обязана пересчитаться сама, иначе звук молча уедет.
+const KING_PROMOTION_SOUND_DELAY_MS = Math.max(0, Math.round(
+    MOVE_GHOST_DURATION_MS
+    + KING_PROMOTION_DURATION_MS * KING_PROMOTION_REVEAL_FRACTION
+    - KING_SOUND_RESOLVE_OFFSET_MS
+));
+
+// Фактическая задержка запуска мотива.
+//
+// При включённом «Уменьшении движения» наложения выключены, и настоящая
+// дамка открывается сразу после полёта -- примерно на
+// MOVE_GHOST_DURATION_MS. Длинная задержка, рассчитанная под полуторную
+// секунду вращения, в этом режиме приводила бы мотив почти на 700 мс
+// позже уже видимой дамки.
+//
+// Подогнать последнюю ноту и здесь невозможно: она звучит на
+// KING_SOUND_RESOLVE_OFFSET_MS, а это позже момента появления, то есть
+// потребовалась бы отрицательная задержка. Поэтому просто запускаем без
+// задержки -- ближайшее достижимое совпадение, и ровно то, что просил
+// владелец.
+//
+// Значение читается при каждом вызове, а не кэшируется: пользователь
+// может переключить настройку, не перезагружая мини-апп.
+function kingPromotionSoundDelayMs() {
+    const mm = typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")
+        : null;
+    return (mm && mm.matches) ? 0 : KING_PROMOTION_SOUND_DELAY_MS;
+}
 
 function playKingPromotionEffect() {
     if (!currentState || currentState.moveType !== "king" || !currentState.lastMove) return;
@@ -3045,6 +3101,13 @@ function buildDrawResultText(winReason) {
 // ни победы, ни поражения. Ничья -- исход самой партии, а не игрока,
 // поэтому её зритель слышит наравне со всеми.
 function playEndGameOutcomeSound() {
+    // Исход партии важнее превращения. Ход может быть одновременно
+    // превращением и победным (движок считает moveType и winner
+    // независимо), а мотив дамки к этому моменту уже запланирован на
+    // KING_PROMOTION_SOUND_DELAY_MS вперёд -- без отмены он догнал бы
+    // экран результата почти через секунду после фанфары.
+    cancelKingSound();
+
     if (!currentState || !currentState.winner) return;
 
     if (currentState.winner === "draw") {
@@ -4186,7 +4249,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         pendingMoveStartedAt = Date.now();
         syncRecoveryFailed = false;
 
-        playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
+        playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing, kingPromotionSoundDelayMs());
         renderBoard();
 
         // №23: завершающий сегмент рейтингового хода (mustContinueFrom===null)
@@ -4308,7 +4371,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 currentState.winReason = drawState.drawReason;
             }
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
-            playSoundForMoveType(result.moveType, movingPieceWasKing);
+            playSoundForMoveType(result.moveType, movingPieceWasKing, kingPromotionSoundDelayMs());
             renderBoard();
             if (isBotGame && !localOnlyBotGame) syncBotStateToFirebase();
         }
@@ -4525,7 +4588,7 @@ function startOnlineGame() {
                     const fromKey = currentState.lastMove.from.row + "_" + currentState.lastMove.from.col;
                     movingPieceWasKing = !!(piecesBeforeThisUpdate[fromKey] && piecesBeforeThisUpdate[fromKey].king);
                 }
-                playSoundForMoveType(currentState.moveType, movingPieceWasKing);
+                playSoundForMoveType(currentState.moveType, movingPieceWasKing, kingPromotionSoundDelayMs());
             }
             lastSeenMoveCount = currentState.moveCount;
             lastRenderedSignature = newSignature;
@@ -5156,7 +5219,7 @@ function onOwnerSessionUpdate(session) {
     }
 
     if (!isFirstDeliverySinceAttach && session.revision !== lastRenderedOwnerRevision) {
-        playSoundForMoveType(currentState.moveType, currentState.moveType === "king");
+        playSoundForMoveType(currentState.moveType, currentState.moveType === "king", kingPromotionSoundDelayMs());
     }
     lastRenderedOwnerRevision = session.revision;
 

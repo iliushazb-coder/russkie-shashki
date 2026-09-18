@@ -112,7 +112,37 @@
         return kingSoundPending;
     }
 
-    function playKingSound() {
+    // Запланированный, но ещё не прозвучавший мотив превращения.
+    // Отложенная подача (звук стартует почти через секунду после хода)
+    // создала возможность, которой раньше не было: к моменту
+    // воспроизведения партия может уже закончиться или игрок может уйти с
+    // доски. Такой звук надо уметь отменять.
+    let scheduledKingSource = null;
+
+    // stop() на узле, который запланирован, но ещё не начался, по
+    // спецификации отменяет воспроизведение -- это штатная идиома Web
+    // Audio, без таймеров. Если звук уже отзвучал, вызов безвреден.
+    //
+    // Ссылка обнуляется ДО stop(): иначе синхронный onended успел бы
+    // выполниться раньше и затереть состояние, выставленное позже.
+    function cancelKingSound() {
+        const source = scheduledKingSource;
+        if (!source) return;
+        scheduledKingSource = null;
+        try { source.stop(); } catch (e) { /* узел уже завершён -- не страшно */ }
+    }
+
+    // delayMs -- ОТЛОЖЕННЫЙ старт через планировщик Web Audio, не через
+    // setTimeout. source.start(время) ставит воспроизведение на точку
+    // аудио-часов: она не зависит от загруженности главного потока, тогда
+    // как setTimeout на слабом устройстве легко уезжает на десятки
+    // миллисекунд. Для попадания последней ноты мотива точно в момент
+    // превращения это принципиально.
+    //
+    // Сам файл не трогается и не растягивается -- сдвигается только момент
+    // запуска. Вызывающий сам считает задержку: модуль звука ничего не
+    // знает про тайминги анимации и знать не должен.
+    function playKingSound(delayMs) {
         if (!kingSoundBuffer) {
             // Ещё не декодирован (или файл недоступен) -- пробуем подгрузить
             // на будущее и молчим. Сознательно НЕ откатываемся на прежний
@@ -121,13 +151,27 @@
             preloadKingSound();
             return;
         }
+        // Новый мотив отменяет предыдущий, ещё не прозвучавший: двух
+        // запланированных превращений одновременно быть не должно.
+        cancelKingSound();
+
         const source = audioContext.createBufferSource();
         const gainNode = audioContext.createGain();
         source.buffer = kingSoundBuffer;
         gainNode.gain.setValueAtTime(KING_SOUND_VOLUME, audioContext.currentTime);
         source.connect(gainNode);
         gainNode.connect(audioContext.destination);
-        source.start();
+        const startDelaySec = (typeof delayMs === "number" && delayMs > 0) ? delayMs / 1000 : 0;
+
+        scheduledKingSource = source;
+        // Сверка с source обязательна. Без неё onended СТАРОГО узла, придя
+        // с опозданием, обнулил бы ссылку на уже запланированный НОВЫЙ --
+        // и тот стало бы невозможно отменить.
+        source.onended = function () {
+            if (scheduledKingSource === source) scheduledKingSource = null;
+        };
+
+        source.start(audioContext.currentTime + startDelaySec);
     }
 
     // Предзагрузка сразу при загрузке модуля: к моменту первого превращения
@@ -181,9 +225,9 @@
         setTimeout(function () { playTone(523, 0.15, 0.3); }, 150);
         setTimeout(function () { playTone(659, 0.3, 0.3); }, 300);
     }
-    function playSoundForMoveType(type, wasKing) {
+    function playSoundForMoveType(type, wasKing, kingSoundDelayMs) {
         if (type === "king") {
-            playKingSound();
+            playKingSound(kingSoundDelayMs);
         } else if (type === "capture") {
             if (wasKing) {
                 playKingCaptureSound();
@@ -202,6 +246,7 @@
         playMoveSound,
         playCaptureSound,
         playKingSound,
+        cancelKingSound,
         preloadKingSound,
         playKingCaptureSound,
         playWinSound,

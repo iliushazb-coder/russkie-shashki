@@ -41,6 +41,12 @@ let played = [];
 global.playVictorySound = function () { played.push('victory'); };
 global.playDefeatSound = function () { played.push('defeat'); };
 global.playDrawSound = function () { played.push('draw'); };
+// Звук исхода теперь первым делом снимает ещё не прозвучавший мотив
+// превращения: ход может быть одновременно победным и превращающим.
+// Для этой сюиты достаточно счётчика -- сама отмена проверяется в
+// king-promotion-effect.
+let cancelledKingSounds = 0;
+global.cancelKingSound = function () { cancelledKingSounds++; };
 if (body) {
     // eslint-disable-next-line no-eval
     eval(body);
@@ -123,6 +129,23 @@ check('6.3 таймаут: проигравший слышит defeat',
 check('6.4 техническая победа: победитель слышит victory',
     outcome(online('light', 'technical'), false, 'tg_1001', 'light') === 'victory');
 
+console.log('\n=== 6b. ПРИОРИТЕТ НАД ЗВУКОМ ПРЕВРАЩЕНИЯ ===');
+// Победный ход может быть одновременно превращением. Мотив дамки к этому
+// моменту уже запланирован на ~818 мс вперёд, и без отмены он догнал бы
+// экран результата почти через секунду после звука исхода.
+check('6b.1 звук исхода снимает запланированный мотив превращения', (function () {
+    cancelledKingSounds = 0;
+    outcome(online('light', 'resign'), false, 'tg_1001', 'light');
+    return cancelledKingSounds === 1;
+})());
+check('6b.2 отмена идёт ПЕРВЫМ действием, до любых проверок', (function () {
+    const b = funcBody(SRC, 'playEndGameOutcomeSound');
+    if (!b) return false;
+    const cancel = b.indexOf('cancelKingSound()');
+    const firstCheck = b.indexOf('if (!currentState');
+    return cancel !== -1 && firstCheck !== -1 && cancel < firstCheck;
+})());
+
 console.log('\n=== 7. НЕЗАВЕРШЁННАЯ ПАРТИЯ МОЛЧИТ ===');
 check('7.1 winner отсутствует -> тишина',
     outcome({ winner: null, players: {} }, false, 'tg_1001', 'light') === '(silence)');
@@ -196,17 +219,20 @@ check('10.1 playMoveSound без изменений',
 // shimmer), поэтому прежняя привязка к трезвучию C-E-G снята. Здесь
 // важно другое: звук превращения существует, экспортирован и остаётся
 // ОТДЕЛЬНЫМ от звуков исхода партии -- то есть пункт №1 не задет.
+// playKingSound принимает задержку запуска, поэтому сигнатура уже не
+// пустая. Проверяем главное: функция есть, экспортирована и НЕ перепутана
+// со звуками исхода партии.
 check('10.2 playKingSound существует и отделён от звуков исхода партии',
-    /function playKingSound\(\)/.test(AUDIO_SRC) &&
+    /function playKingSound\(/.test(AUDIO_SRC) &&
     /playKingSound,/.test(AUDIO_SRC) &&
-    !/function playKingSound\(\)[\s\S]{0,400}?(playVictorySound|playDefeatSound|playDrawSound)/.test(AUDIO_SRC));
+    !/function playKingSound\([\s\S]{0,400}?(playVictorySound|playDefeatSound|playDrawSound)/.test(AUDIO_SRC));
 check('10.3 playKingCaptureSound без изменений',
     /function playKingCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.18, 0\.6, 600\);/.test(AUDIO_SRC));
 check('10.4 playCaptureSound без изменений',
     /function playCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.12, 0\.42, 1100\);/.test(AUDIO_SRC) ||
     /function playCaptureSound\(\)/.test(AUDIO_SRC));
-check('10.5 диспетчер ходов playSoundForMoveType не тронут',
-    /if \(type === "king"\) \{\s*\n\s*playKingSound\(\);/.test(AUDIO_SRC));
+check('10.5 диспетчер ходов по-прежнему направляет "king" в playKingSound',
+    /if \(type === "king"\) \{\s*\n\s*playKingSound\(/.test(AUDIO_SRC));
 check('10.6 playWinSound сохранён как экспорт (обратная совместимость)',
     /function playWinSound\(\)/.test(AUDIO_SRC) && /playWinSound,/.test(AUDIO_SRC));
 
