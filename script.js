@@ -1207,6 +1207,62 @@ const {
 document.addEventListener("touchstart", unlockAudioContext, { once: true });
 document.addEventListener("click", unlockAudioContext, { once: true });
 
+// ===== ВСПЫШКА НАЖАТИЯ КНОПКИ =====
+//
+// :active живёт ровно столько, сколько палец на кнопке. При быстром тапе
+// это несколько десятков миллисекунд -- глаз не успевает увидеть отклик.
+// Класс ниже даёт вспышке гарантированные BUTTON_PRESS_FLASH_MS, даже
+// если отпустили мгновенно.
+//
+// Это ЧИСТО ВИЗУАЛЬНЫЙ слой. Ничего не откладывается: обработчик click,
+// showScreen, вход в комнату, запросы к Firebase и ход бота выполняются
+// ровно как раньше. Таймер существует только чтобы снять класс.
+//
+// Делегирование на document, а не слушатель на каждой кнопке: кнопки
+// создаются динамически (карточки комнат в лобби), и отдельная привязка
+// потребовала бы помнить про каждую новую.
+//
+// Захватывающая фаза (capture) выбрана намеренно: часть обработчиков
+// останавливает всплытие, и на всплытии вспышка до нас бы не дошла.
+//
+// Эффект принадлежит САМОЙ кнопке -- никаких overlay поверх интерфейса.
+// Если экран сменился, кнопка уезжает в display: none вместе со своим
+// экраном, и вспышка исчезает сама. В новом экране следа не остаётся.
+const BUTTON_PRESS_FLASH_MS = 300;
+const BUTTON_PRESS_FLASH_CLASS = "button-press-flash";
+// WeakMap, а не Map: кнопку могут удалить из DOM (список комнат
+// перерисовывается), и запись должна уходить вместе с ней, не удерживая
+// узел в памяти.
+const buttonPressFlashTimers = new WeakMap();
+
+document.addEventListener("pointerdown", function (event) {
+    const target = event.target;
+    if (!target || typeof target.closest !== "function") return;
+    const button = target.closest("button");
+    // disabled-кнопка отклика не даёт: нажатие всё равно ничего не сделает.
+    if (!button || button.disabled) return;
+
+    // Повторное нажатие по той же кнопке: снимаем прежний таймер и
+    // перезапускаем анимацию. Без снятия класса и принудительного
+    // пересчёта браузер считал бы анимацию той же самой и не начал бы её
+    // заново -- вторая вспышка просто не появилась бы.
+    const pending = buttonPressFlashTimers.get(button);
+    if (pending) {
+        clearTimeout(pending);
+        buttonPressFlashTimers.delete(button);
+        button.classList.remove(BUTTON_PRESS_FLASH_CLASS);
+        void button.offsetWidth;
+    }
+
+    button.classList.add(BUTTON_PRESS_FLASH_CLASS);
+    buttonPressFlashTimers.set(button, setTimeout(function () {
+        // Кнопки может уже не быть в DOM -- снять класс с оторванного узла
+        // безопасно, поэтому отдельная проверка не нужна.
+        button.classList.remove(BUTTON_PRESS_FLASH_CLASS);
+        buttonPressFlashTimers.delete(button);
+    }, BUTTON_PRESS_FLASH_MS));
+}, true);
+
 // ===== №43 slice 3: FORMAT UTILS (вынесены в shared/format-utils.js) =====
 if (!window.RussianCheckersFormatUtils || typeof window.RussianCheckersFormatUtils.formatTime !== "function") {
     throw new Error("RussianCheckersFormatUtils failed to load");
