@@ -222,8 +222,11 @@ console.log('\n=== 8. НИЧЕГО ЛИШНЕГО НЕ ЗАТРОНУТО ===');
 const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
 check('8.1 playKingCaptureSound не тронут (это НЕ превращение со взятием)',
     /function playKingCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.18, 0\.6, 600\);/.test(AUDIO));
-check('8.2 диспетчер звуков не изменён',
-    /if \(type === "king"\) \{\s*\n\s*playKingSound\(\);/.test(AUDIO));
+// Диспетчер получил третий параметр -- задержку запуска звука
+// превращения. Проверяем ИНВАРИАНТ: тип "king" по-прежнему уходит именно
+// в playKingSound, а не куда-то ещё.
+check('8.2 диспетчер по-прежнему направляет "king" в playKingSound',
+    /if \(type === "king"\) \{\s*\n\s*playKingSound\(/.test(AUDIO));
 check('8.3 мёртвый CSS короны пока не удалён (вне scope этого PR)',
     /\.king::before \{\s*\n\s*display: none !important;/.test(CSS));
 check('8.4 эффект не трогает currentState и не пишет в Firebase',
@@ -423,9 +426,14 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         const asFallback = CSS.indexOf('--king-promotion-duration,') !== -1;
         return !inAnim && !asFallback;
     })());
-    check('13.4d длительность ровно вдвое больше прежних 340 мс', (function () {
+    // Длительность менялась по запросу владельца: 340 -> 680 -> 1500.
+    // Точное значение закреплено в 17.1, здесь только разумные границы,
+    // чтобы случайная правка не сделала эффект мгновенным или бесконечным.
+    check('13.4d длительность в разумных границах', (function () {
         const m = /const KING_PROMOTION_DURATION_MS = (\d+);/.exec(CLEAN);
-        return !!m && parseInt(m[1], 10) === 680;
+        if (!m) return false;
+        const v = parseInt(m[1], 10);
+        return v >= 300 && v <= 2000;
     })());
     check('13.4e MOVE_GHOST_DURATION_MS не менялся', (function () {
         const m = /const MOVE_GHOST_DURATION_MS = (\d+);/.exec(CLEAN);
@@ -797,6 +805,100 @@ console.log('\n=== 16. REDUCED-MOTION: ДАМКА ПОЯВЛЯЕТСЯ СРАЗ�
     check('16.8 звук при reduced-motion не отключается', (function () {
         // В блоке reduced-motion не должно быть ничего про звук.
         return !!rm && !/audio|sound|king-promotion\.wav/i.test(rm);
+    })());
+}
+
+console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИЕМ ДАМКИ ===');
+{
+    function constOf(name) {
+        const m = new RegExp('const ' + name + ' = ([\\d.]+)').exec(CLEAN);
+        return m ? parseFloat(m[1]) : null;
+    }
+    const ghost = constOf('MOVE_GHOST_DURATION_MS');
+    const dur = constOf('KING_PROMOTION_DURATION_MS');
+    const frac = constOf('KING_PROMOTION_REVEAL_FRACTION');
+    const off = constOf('KING_SOUND_RESOLVE_OFFSET_MS');
+    // Объявлена многострочным выражением, поэтому вычисляем её так же,
+    // как это делает сам код, из тех же констант.
+    const delay = (ghost !== null && dur !== null && frac !== null && off !== null)
+        ? Math.max(0, Math.round(ghost + dur * frac - off))
+        : null;
+
+    check('17.1 длительность превращения = 1500 мс', dur === 1500, String(dur));
+    check('17.2 длительность полёта не менялась', ghost === 150, String(ghost));
+
+    // Доля должна совпадать с кадром в CSS -- иначе звук уедет молча.
+    check('17.3 доля появления дамки совпадает с кадром в CSS', (function () {
+        const b = /@keyframes kingPromotionFlipKing \{[\s\S]*?\n\}/.exec(CSS);
+        if (!b || frac === null) return false;
+        const m = /([\d.]+)%\s*\{[^}]*opacity:\s*1/.exec(b[0]);
+        return !!m && Math.abs(parseFloat(m[1]) / 100 - frac) < 0.001;
+    })(), 'CSS vs константа');
+
+    // Позиция последней ноты проверяется ПО САМОМУ ФАЙЛУ, а не на слово.
+    check('17.4 смещение разрешающей ноты совпадает с реальным WAV', (function () {
+        const wav = fs.readFileSync(path.join(__dirname, '..', 'assets', 'king-promotion.wav'));
+        // Минимальный разбор PCM WAV: ищем чанки fmt и data.
+        let pos = 12, rate = 0, bits = 0, ch = 1, dataOff = 0, dataLen = 0;
+        while (pos + 8 <= wav.length) {
+            const id = wav.toString('ascii', pos, pos + 4);
+            const size = wav.readUInt32LE(pos + 4);
+            if (id === 'fmt ') {
+                ch = wav.readUInt16LE(pos + 10);
+                rate = wav.readUInt32LE(pos + 12);
+                bits = wav.readUInt16LE(pos + 22);
+            } else if (id === 'data') { dataOff = pos + 8; dataLen = size; break; }
+            pos += 8 + size + (size % 2);
+        }
+        if (!rate || bits !== 16 || !dataLen) return false;
+        const n = Math.floor(dataLen / 2 / ch);
+        const env = new Float64Array(n);
+        for (let i = 0; i < n; i++) env[i] = Math.abs(wav.readInt16LE(dataOff + i * 2 * ch)) / 32767;
+        // сглаживание и поиск атак
+        const win = Math.floor(rate * 0.004);
+        const sm = new Float64Array(n);
+        let acc = 0;
+        for (let i = 0; i < n; i++) {
+            acc += env[i];
+            if (i >= win) acc -= env[i - win];
+            sm[i] = acc / Math.min(i + 1, win);
+        }
+        let peak = 0;
+        for (let i = 0; i < n; i++) if (sm[i] > peak) peak = sm[i];
+        const thr = peak * 0.25;
+        const onsets = [];
+        const gap = Math.floor(rate * 0.09);
+        for (let i = 0; i < n; i++) {
+            if (sm[i] > thr && (onsets.length === 0 || i - onsets[onsets.length - 1] > gap)) onsets.push(i);
+        }
+        if (onsets.length < 4) return false;
+        const lastMs = onsets[3] / rate * 1000;
+        return Math.abs(lastMs - off) <= 30;
+    })(), 'константа ' + off + ' мс');
+
+    // Задержка обязана вычисляться, а не быть вписанной числом.
+    check('17.5 задержка выводится из констант, а не захардкожена',
+        /KING_PROMOTION_SOUND_DELAY_MS = Math\.max\(0, Math\.round\([\s\S]*?MOVE_GHOST_DURATION_MS[\s\S]*?KING_PROMOTION_DURATION_MS \* KING_PROMOTION_REVEAL_FRACTION[\s\S]*?KING_SOUND_RESOLVE_OFFSET_MS/.test(CLEAN));
+
+    const reveal = ghost !== null && dur !== null && frac !== null ? Math.round(ghost + dur * frac) : null;
+    check('17.6 дамка появляется на 1238 мс от начала хода', reveal === 1238, String(reveal));
+    check('17.7 задержка звука = 818 мс', delay === 818, String(delay));
+    check('17.8 разрешающая нота попадает ТОЧНО в момент появления дамки',
+        delay !== null && off !== null && (delay + off) === reveal,
+        (delay + off) + ' vs ' + reveal);
+
+    // Планирование только через Web Audio.
+    check('17.9 задержка реализована планировщиком Web Audio, без setTimeout', (function () {
+        const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
+        const b = funcBody(AUDIO, 'playKingSound');
+        return !!b && /source\.start\(audioContext\.currentTime \+/.test(b) && !/setTimeout/.test(b);
+    })());
+    check('17.10 задержка проброшена во все точки вызова',
+        (CLEAN.match(/playSoundForMoveType\([^)]*KING_PROMOTION_SOUND_DELAY_MS\)/g) || []).length === 4);
+    check('17.11 сам WAV не изменён и не растянут', (function () {
+        const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
+        const b = funcBody(AUDIO, 'playKingSound');
+        return !!b && !/playbackRate|detune/.test(b);
     })());
 }
 

@@ -196,17 +196,20 @@ check('10.1 playMoveSound без изменений',
 // shimmer), поэтому прежняя привязка к трезвучию C-E-G снята. Здесь
 // важно другое: звук превращения существует, экспортирован и остаётся
 // ОТДЕЛЬНЫМ от звуков исхода партии -- то есть пункт №1 не задет.
+// playKingSound принимает задержку запуска, поэтому сигнатура уже не
+// пустая. Проверяем главное: функция есть, экспортирована и НЕ перепутана
+// со звуками исхода партии.
 check('10.2 playKingSound существует и отделён от звуков исхода партии',
-    /function playKingSound\(\)/.test(AUDIO_SRC) &&
+    /function playKingSound\(/.test(AUDIO_SRC) &&
     /playKingSound,/.test(AUDIO_SRC) &&
-    !/function playKingSound\(\)[\s\S]{0,400}?(playVictorySound|playDefeatSound|playDrawSound)/.test(AUDIO_SRC));
+    !/function playKingSound\([\s\S]{0,400}?(playVictorySound|playDefeatSound|playDrawSound)/.test(AUDIO_SRC));
 check('10.3 playKingCaptureSound без изменений',
     /function playKingCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.18, 0\.6, 600\);/.test(AUDIO_SRC));
 check('10.4 playCaptureSound без изменений',
     /function playCaptureSound\(\) \{\s*\n\s*playWoodKnock\(0\.12, 0\.42, 1100\);/.test(AUDIO_SRC) ||
     /function playCaptureSound\(\)/.test(AUDIO_SRC));
-check('10.5 диспетчер ходов playSoundForMoveType не тронут',
-    /if \(type === "king"\) \{\s*\n\s*playKingSound\(\);/.test(AUDIO_SRC));
+check('10.5 диспетчер ходов по-прежнему направляет "king" в playKingSound',
+    /if \(type === "king"\) \{\s*\n\s*playKingSound\(/.test(AUDIO_SRC));
 check('10.6 playWinSound сохранён как экспорт (обратная совместимость)',
     /function playWinSound\(\)/.test(AUDIO_SRC) && /playWinSound,/.test(AUDIO_SRC));
 

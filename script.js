@@ -2629,7 +2629,29 @@ function playMoveGhostAnimation(capturedSnapshots) {
 // Это ЕДИНСТВЕННЫЙ источник истины: значение уезжает в CSS переменной
 // (см. ниже), поэтому flip и glow берут его отсюда, а fallback cleanup
 // считает от него же.
-const KING_PROMOTION_DURATION_MS = 680;
+const KING_PROMOTION_DURATION_MS = 1500;
+
+// Доля анимации, на которой дамка становится видимой. Значение обязано
+// совпадать с кадром 72.5% в @keyframes kingPromotionFlipKing: именно там
+// обычная сторона гаснет, а дамка зажигается. Держим его здесь, потому
+// что от него считается момент запуска звука.
+const KING_PROMOTION_REVEAL_FRACTION = 0.725;
+
+// Положение ПОСЛЕДНЕЙ, разрешающей ноты внутри king-promotion.wav.
+// Мотив состоит из четырёх нот на 0 / 140 / 280 / 420 мс.
+const KING_SOUND_RESOLVE_OFFSET_MS = 420;
+
+// Звук стартует с задержкой, чтобы его разрешающая нота попала ровно в
+// момент появления дамки. Файл не растягивается -- сдвигается только
+// момент запуска, больше регулировать нечем: длина мотива фиксирована.
+//
+// Считается из констант, а не пишется числом: при смене длительности
+// анимации задержка обязана пересчитаться сама, иначе звук молча уедет.
+const KING_PROMOTION_SOUND_DELAY_MS = Math.max(0, Math.round(
+    MOVE_GHOST_DURATION_MS
+    + KING_PROMOTION_DURATION_MS * KING_PROMOTION_REVEAL_FRACTION
+    - KING_SOUND_RESOLVE_OFFSET_MS
+));
 
 function playKingPromotionEffect() {
     if (!currentState || currentState.moveType !== "king" || !currentState.lastMove) return;
@@ -4186,7 +4208,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         pendingMoveStartedAt = Date.now();
         syncRecoveryFailed = false;
 
-        playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing);
+        playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing, KING_PROMOTION_SOUND_DELAY_MS);
         renderBoard();
 
         // №23: завершающий сегмент рейтингового хода (mustContinueFrom===null)
@@ -4308,7 +4330,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 currentState.winReason = drawState.drawReason;
             }
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
-            playSoundForMoveType(result.moveType, movingPieceWasKing);
+            playSoundForMoveType(result.moveType, movingPieceWasKing, KING_PROMOTION_SOUND_DELAY_MS);
             renderBoard();
             if (isBotGame && !localOnlyBotGame) syncBotStateToFirebase();
         }
@@ -4525,7 +4547,7 @@ function startOnlineGame() {
                     const fromKey = currentState.lastMove.from.row + "_" + currentState.lastMove.from.col;
                     movingPieceWasKing = !!(piecesBeforeThisUpdate[fromKey] && piecesBeforeThisUpdate[fromKey].king);
                 }
-                playSoundForMoveType(currentState.moveType, movingPieceWasKing);
+                playSoundForMoveType(currentState.moveType, movingPieceWasKing, KING_PROMOTION_SOUND_DELAY_MS);
             }
             lastSeenMoveCount = currentState.moveCount;
             lastRenderedSignature = newSignature;
@@ -5156,7 +5178,7 @@ function onOwnerSessionUpdate(session) {
     }
 
     if (!isFirstDeliverySinceAttach && session.revision !== lastRenderedOwnerRevision) {
-        playSoundForMoveType(currentState.moveType, currentState.moveType === "king");
+        playSoundForMoveType(currentState.moveType, currentState.moveType === "king", KING_PROMOTION_SOUND_DELAY_MS);
     }
     lastRenderedOwnerRevision = session.revision;
 
