@@ -38,6 +38,7 @@ const FILES = [
   ['R2. КОД КОМНАТЫ КАК СЕКРЕТ ПРИГЛАШЕНИЯ', 'room-code-entropy.test.js'],
   ['R3. ЗВУК ИСХОДА ПАРТИИ', 'end-game-outcome-sound.test.js'],
   ['R4. ЭФФЕКТ ПРЕВРАЩЕНИЯ В ДАМКУ', 'king-promotion-effect.test.js'],
+  ['R5. ПОЯВЛЕНИЕ ЭКРАНОВ', 'screen-enter-animation.test.js'],
   ['S. BOTH-OFFLINE 60s + ЗАКРЫТИЕ ПУТЕЙ ВОСКРЕШЕНИЯ (v184)', 'both-offline-abandoned.test.js'],
   ['T. CLOCK SAFETY — серверное время вместо часов телефона', 'clock-safety.test.js'],
   ['U. ТАБЛИЦА СТАТИСТИКИ — ВСЕ ИГРОКИ В ОБЕИХ ВКЛАДКАХ', 'leaderboard-all-players.test.js'],
