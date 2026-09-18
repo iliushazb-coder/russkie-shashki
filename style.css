@@ -47,6 +47,36 @@
     display: none !important;
 }
 
+/* ===== ПОЯВЛЕНИЕ ЭКРАНОВ =====
+   Чисто CSS, без единой строки в JS. Работает за счёт того, что .hidden --
+   это display: none: скрытый элемент не отрисован и анимаций не имеет, а
+   в момент снятия класса он появляется и анимация запускается сама.
+   showScreen() при этом не меняется вообще: он как и раньше синхронно
+   снимает класс, ничего не ждёт и ничего не откладывает. Логика игры,
+   Firebase и подключение к комнате анимации не касаются.
+
+   Повторный showScreen() на уже видимый экран (бывает при reconnect)
+   ничего не перезапускает: класс не менялся, значит и анимации нет.
+   Это именно то, что нужно -- лишнего мигания не будет.
+
+   Старый экран по-прежнему исчезает мгновенно: у него появляется .hidden,
+   то есть display: none, и анимировать там нечего.
+
+   Эффект намеренно очень спокойный: только прозрачность и подъём на 6px.
+   Ни масштаба, ни размытия -- доска и панели не должны «прыгать». */
+#menu-screen:not(.hidden),
+#time-control-screen:not(.hidden),
+#group-lobby-screen:not(.hidden),
+#waiting-screen:not(.hidden),
+#game-screen:not(.hidden) {
+    animation: screenEnter 180ms cubic-bezier(.22, .61, .36, 1) both;
+}
+
+@keyframes screenEnter {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
 body {
     display: flex;
     justify-content: center;
@@ -1754,6 +1784,14 @@ h1 {
     .startup-cover-spinner {
         animation: none;
         opacity: 0.7;
+    }
+    /* Экраны появляются мгновенно, без подъёма и проявления. */
+    #menu-screen:not(.hidden),
+    #time-control-screen:not(.hidden),
+    #group-lobby-screen:not(.hidden),
+    #waiting-screen:not(.hidden),
+    #game-screen:not(.hidden) {
+        animation: none;
     }
     /* Ни подъёма, ни поворота: наложение просто не показывается, и дамка
        появляется мгновенно. Звук при этом остаётся -- он не является
