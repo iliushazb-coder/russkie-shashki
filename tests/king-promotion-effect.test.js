@@ -274,6 +274,7 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
         }
     };
     global.activeGhostCancelFns = [];
+    global.isBotGame = false; // человек против человека -- визуал включён
     const savedTimeout = global.setTimeout;
     global.setTimeout = function () { return 0; };
 
@@ -300,6 +301,7 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     function run(state) {
         created = [];
         global.activeGhostCancelFns = [];
+        global.isBotGame = false; // человек против человека -- визуал включён
         global.currentState = state;
         playKingPromotionEffect();
         return created.length;
@@ -328,6 +330,7 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     (function () {
         global._realClasses.clear();
         global.activeGhostCancelFns = [];
+        global.isBotGame = false; // человек против человека -- визуал включён
         global.currentState = { moveType: "king", lastMove: at, pieces: pieces };
         playKingPromotionEffect();
         check('10.8 настоящая дамка скрыта на время превращения',
@@ -465,6 +468,7 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         global.MOVE_GHOST_DURATION_MS = 150;
         global.KING_PROMOTION_DURATION_MS = 340;
         global.activeGhostCancelFns = [];
+        global.isBotGame = false; // человек против человека -- визуал включён
         global.document = {
             createElement: function () {
                 return {
@@ -502,7 +506,7 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
     })();
 }
 
-console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГРАДУСОВ ===');
+console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 360 ГРАДУСОВ ===');
 {
     function kfAngles(name) {
         const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
@@ -515,10 +519,22 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
     const back = kfAngles('kingPromotionFlipBack');
 
     check('14.1 keyframes обеих сторон существуют', !!man && !!king);
-    check('14.2 обычная сторона проходит ровно 540 градусов',
-        !!man && man[0][1] === 0 && man[man.length - 1][1] === 540);
-    check('14.3 сторона дамки проходит те же 540 (со сдвигом фазы)',
-        !!king && (king[king.length - 1][1] - king[0][1]) === 540);
+// Один полный оборот = ДВА прохода ребром, то есть два переворота.
+    // Прежние 540 давали три.
+    check('14.2 обычная сторона проходит ровно 360 градусов',
+        !!man && man[0][1] === 0 && man[man.length - 1][1] === 360);
+    check('14.2b это ровно два прохода ребром', (function () {
+        if (!man) return false;
+        let edges = 0;
+        for (let i = 1; i < man.length; i++) {
+            [90, 270].forEach(function (e) {
+                if (man[i - 1][1] < e && man[i][1] >= e) edges++;
+            });
+        }
+        return edges === 2;
+    })());
+    check('14.3 сторона дамки проходит те же 360',
+        !!king && (king[king.length - 1][1] - king[0][1]) === 360);
     // Сдвиг ровно 180 на КАЖДОМ ключе -- иначе стороны разъедутся и
     // появится момент, когда видны обе или ни одной.
     // Вторая обычная сторона обязана быть ровно на 180 от первой -- иначе
@@ -531,10 +547,13 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
             return byPct[b[0]] === undefined || b[1] - byPct[b[0]] === 180;
         });
     })());
-    check('14.4b дамка занимает ту же позицию, что вторая обычная', (function () {
-        if (!back || !king) return false;
+// При целом обороте фигура заканчивает лицом в исходном положении,
+    // поэтому дамка делит позицию с ПЕРВОЙ обычной стороной, а не со
+    // второй -- иначе в конце была бы видна обычная текстура.
+    check('14.4b дамка занимает ту же позицию, что ПЕРВАЯ обычная', (function () {
+        if (!man || !king) return false;
         const byPct = {};
-        back.forEach(function (b) { byPct[b[0]] = b[1]; });
+        man.forEach(function (m) { byPct[m[0]] = m[1]; });
         return king.every(function (k) { return byPct[k[0]] === undefined || byPct[k[0]] === k[1]; });
     })());
     // Монотонность: вращение не должно «отыгрывать назад».
@@ -701,8 +720,9 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
             timeline[timeline.length - 1].king && !timeline[timeline.length - 1].ordinary);
 
         // Вращение до превращения должно быть заметным.
-        check('15.11 до превращения фигура успевает повернуться больше чем на оборот',
-            at(man, timeline[firstKing].p, 'rot') >= 360);
+        check('15.11 до превращения фигура успевает пройти два переворота',
+            at(man, timeline[firstKing].p, 'rot') >= 270,
+            String(Math.round(at(man, timeline[firstKing].p, 'rot'))) + '°');
 
         // Точная заказанная последовательность по УГЛУ поворота, а не по
         // проценту: 0-90 A, 90-270 B, 270-450 A, после 450 только дамка.
@@ -723,21 +743,25 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
         }
         check('15.16 на 45 градусах видна первая обычная сторона', whoAt(45) === 'A', whoAt(45));
         check('15.17 на 180 градусах видна вторая обычная сторона', whoAt(180) === 'B', whoAt(180));
-        check('15.18 на 360 градусах снова первая обычная', whoAt(360) === 'A', whoAt(360));
-        check('15.19 на 500 градусах видна ТОЛЬКО дамка', whoAt(500) === 'king', whoAt(500));
-        check('15.20 на 300 градусах обычная, а не дамка', whoAt(300) === 'A', whoAt(300));
+        check('15.18 на 260 градусах ещё обычная (до подмены)', whoAt(260) === 'B', whoAt(260));
+        check('15.19 на 320 градусах видна ТОЛЬКО дамка', whoAt(320) === 'king', whoAt(320));
+        check('15.20 в самом конце оборота видна дамка', whoAt(359) === 'king', whoAt(359));
     }
 
     // Подмена обязана происходить на ребре, иначе она заметна.
+// Подмена идёт между ПЕРВОЙ обычной стороной и дамкой -- они делят
+    // позицию.
     check('15.12 обычная гаснет и дамка зажигается в один и тот же момент', (function () {
-        if (!back || !king) return false;
-        const off = back.find(function (k) { return k.op === 0; });
+        const manKf = parseKf('kingPromotionFlip');
+        if (!manKf || !king) return false;
+        const off = manKf.find(function (k) { return k.op === 0; });
         const on = king.find(function (k) { return k.op === 1; });
         return !!off && !!on && off.pct === on.pct;
     })());
     check('15.13 подмена происходит, когда сторона стоит ребром', (function () {
-        if (!back) return false;
-        const off = back.find(function (k) { return k.op === 0; });
+        const manKf = parseKf('kingPromotionFlip');
+        if (!manKf) return false;
+        const off = manKf.find(function (k) { return k.op === 0; });
         if (!off) return false;
         const m = ((off.rot % 360) + 360) % 360;
         return Math.abs(m - 90) < 12 || Math.abs(m - 270) < 12;
@@ -824,7 +848,15 @@ console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИ
         ? Math.max(0, Math.round(ghost + dur * frac - off))
         : null;
 
-    check('17.1 длительность превращения = 1500 мс', dur === 1500, String(dur));
+    // 1000 мс при 360 градусах -- это сохранение ТЕМПА, а не ускорение:
+    // 1500 * 360 / 540 = 1000, то есть один переворот занимает те же
+    // ~500 мс, что и раньше.
+    check('17.1 длительность превращения = 1000 мс', dur === 1000, String(dur));
+    check('17.1b темп на один переворот сохранён (~500 мс)', (function () {
+        const perFlip = dur / 2;          // 360 градусов = два переворота
+        const before = 1500 / 3;          // 540 градусов = три переворота
+        return Math.abs(perFlip - before) < 1;
+    })(), String(dur / 2) + ' мс');
     check('17.2 длительность полёта не менялась', ghost === 150, String(ghost));
 
     // Доля должна совпадать с кадром в CSS -- иначе звук уедет молча.
@@ -881,8 +913,11 @@ console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИ
         /KING_PROMOTION_SOUND_DELAY_MS = Math\.max\(0, Math\.round\([\s\S]*?MOVE_GHOST_DURATION_MS[\s\S]*?KING_PROMOTION_DURATION_MS \* KING_PROMOTION_REVEAL_FRACTION[\s\S]*?KING_SOUND_RESOLVE_OFFSET_MS/.test(CLEAN));
 
     const reveal = ghost !== null && dur !== null && frac !== null ? Math.round(ghost + dur * frac) : null;
-    check('17.6 дамка появляется на 1238 мс от начала хода', reveal === 1238, String(reveal));
-    check('17.7 задержка звука = 818 мс', delay === 818, String(delay));
+    check('17.6 дамка появляется на 875 мс от начала хода', reveal === 875, String(reveal));
+    // 150 + 1000*0.725 - 420 = 455. Значение НЕ вписано в код: формула
+    // пересчитала его сама после смены длительности.
+    check('17.7 задержка звука = 455 мс', delay === 455, String(delay));
+    check('17.7b число 455 в коде не захардкожено', !/\b455\b/.test(CLEAN));
     check('17.8 разрешающая нота попадает ТОЧНО в момент появления дамки',
         delay !== null && off !== null && (delay + off) === reveal,
         (delay + off) + ' vs ' + reveal);
@@ -1119,9 +1154,9 @@ console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
         const noMM = kingPromotionSoundDelayMs();
         global.window = saved;
 
-        check('19.4 обычный режим -> 818 мс', normal === 818, String(normal));
+        check('19.4 обычный режим -> 455 мс', normal === 455, String(normal));
         check('19.5 reduced-motion -> длинной задержки нет', reduced === 0, String(reduced));
-        check('19.6 без matchMedia остаётся обычное поведение', noMM === 818, String(noMM));
+        check('19.6 без matchMedia остаётся обычное поведение', noMM === 455, String(noMM));
         check('19.7 режимы действительно различаются', normal !== reduced);
     }
 
@@ -1140,8 +1175,18 @@ console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
         })());
     check('19.11 для выбора задержки не используется setTimeout',
         !!fn && !/setTimeout/.test(fn));
-    check('19.12 1500 мс и 540 градусов не тронуты',
-        /const KING_PROMOTION_DURATION_MS = 1500;/.test(CLEAN) && /rotateX\(540deg\)/.test(CSS));
+    check('19.12 длительность 1000 мс и поворот 360 градусов',
+        /const KING_PROMOTION_DURATION_MS = 1000;/.test(CLEAN) && /rotateX\(360deg\)/.test(CSS));
+    // 540deg в CSS остаётся законно: это финальный угол ВТОРОЙ обычной
+    // стороны, смещённой на 180 (180 + 360 = 540). Смотрим только на
+    // первую сторону и на дамку -- они обязаны заканчиваться на 360.
+    check('19.12b первая сторона и дамка заканчиваются на 360', (function () {
+        const man = /@keyframes kingPromotionFlip \{[\s\S]*?\n\}/.exec(CSS);
+        const king = /@keyframes kingPromotionFlipKing \{[\s\S]*?\n\}/.exec(CSS);
+        return !!man && !!king &&
+            /100%[^}]*rotateX\(360deg\)/.test(man[0]) &&
+            /100%[^}]*rotateX\(360deg\)/.test(king[0]);
+    })());
 
     // Устаревший комментарий про «вдвое медленнее» должен быть исправлен.
     check('19.13 комментарий о длительности не утверждает неверное',

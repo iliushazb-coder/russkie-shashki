@@ -1830,43 +1830,53 @@ button.danger-button.button-press-flash::after {
    различаются только углом и моментом включения.
    Финальный scale(1.1) совпадает с размером настоящей дамки (.king имеет
    scale(1.1)), поэтому снятия наложений не видно. */
+/* Один полный оборот = ДВА прохода ребром (на 90 и на 270 градусах), то
+   есть два переворота. Прежние 540 давали три.
+
+   Ключ на 72% ставит фигуру ровно на 270 градусов -- это второе ребро, и
+   именно там обычная сторона уступает место дамке.
+
+   Расстановка сторон отличается от версии с 540 градусами. При целом
+   обороте фигура заканчивает лицом в исходном положении, поэтому дамка
+   делит позицию с ПЕРВОЙ обычной стороной (тот же угол), а не со второй.
+   Вторая обычная сторона просто закрывает середину оборота и никакой
+   сменой прозрачности не управляет -- её прячет backface.
+
+   Все три наложения идут по ОДНОЙ траектории подъёма и масштаба.
+   Финальный scale(1.1) совпадает с размером настоящей дамки. */
 @keyframes kingPromotionFlip {
-    /* opacity: 1 нужен ЯВНО на каждом кадре. В общем селекторе стоит
-       базовое opacity: 0 (чтобы до старта анимации ничего не мелькало
-       поверх летящей шашки), а свойство, не упомянутое в keyframes,
-       сохраняет базовое значение -- без этих строк первая обычная сторона
-       была бы невидимой всю анимацию. */
-    0%   { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 1; }
-    12%  { transform: perspective(620px) translateY(-11%) rotateX(52deg)  scale(1.06); opacity: 1; }
-    38%  { transform: perspective(620px) translateY(-28%) rotateX(258deg) scale(1.17); opacity: 1; }
-    72%  { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); opacity: 1; }
-    88%  { transform: perspective(620px) translateY(-2%)  rotateX(522deg) scale(1.16); opacity: 1; }
-    100% { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  opacity: 1; }
+    0%    { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 1; }
+    15%   { transform: perspective(620px) translateY(-13%) rotateX(60deg)  scale(1.07); opacity: 1; }
+    40%   { transform: perspective(620px) translateY(-28%) rotateX(200deg) scale(1.17); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(270deg) scale(1.13); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(272deg) scale(1.13); opacity: 0; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(330deg) scale(1.16); opacity: 0; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(360deg) scale(1.1);  opacity: 0; }
 }
 
-/* Вторая ОБЫЧНАЯ сторона: угол +180, гаснет на 450 градусах (72%), когда
-   стоит ребром -- потому подмена невидима. После этого обычная текстура
-   не возвращается. */
+/* Вторая ОБЫЧНАЯ сторона: угол +180, закрывает середину оборота.
+   Прозрачностью не управляет -- когда она не нужна, её скрывает
+   backface-visibility. */
 @keyframes kingPromotionFlipBack {
     0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 1; }
-    12%   { transform: perspective(620px) translateY(-11%) rotateX(232deg) scale(1.06); opacity: 1; }
-    38%   { transform: perspective(620px) translateY(-28%) rotateX(438deg) scale(1.17); opacity: 1; }
-    72%   { transform: perspective(620px) translateY(-16%) rotateX(630deg) scale(1.13); opacity: 1; }
-    72.5% { transform: perspective(620px) translateY(-16%) rotateX(632deg) scale(1.13); opacity: 0; }
-    88%   { transform: perspective(620px) translateY(-2%)  rotateX(702deg) scale(1.16); opacity: 0; }
-    100%  { transform: perspective(620px) translateY(0)    rotateX(720deg) scale(1.1);  opacity: 0; }
+    15%   { transform: perspective(620px) translateY(-13%) rotateX(240deg) scale(1.07); opacity: 1; }
+    40%   { transform: perspective(620px) translateY(-28%) rotateX(380deg) scale(1.17); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(452deg) scale(1.13); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(510deg) scale(1.16); opacity: 1; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  opacity: 1; }
 }
 
-/* Дамка: та же позиция, что у второй обычной стороны, но зажигается
-   ровно там, где та гаснет -- на ребре. Один раз и навсегда. */
+/* Дамка: та же позиция, что у ПЕРВОЙ обычной стороны, зажигается ровно
+   там, где та гаснет -- на ребре в 270 градусов. Один раз и навсегда. */
 @keyframes kingPromotionFlipKing {
-    0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 0; }
-    12%   { transform: perspective(620px) translateY(-11%) rotateX(232deg) scale(1.06); opacity: 0; }
-    38%   { transform: perspective(620px) translateY(-28%) rotateX(438deg) scale(1.17); opacity: 0; }
-    72%   { transform: perspective(620px) translateY(-16%) rotateX(630deg) scale(1.13); opacity: 0; }
-    72.5% { transform: perspective(620px) translateY(-16%) rotateX(632deg) scale(1.13); opacity: 1; }
-    88%   { transform: perspective(620px) translateY(-2%)  rotateX(702deg) scale(1.16); opacity: 1; }
-    100%  { transform: perspective(620px) translateY(0)    rotateX(720deg) scale(1.1);  opacity: 1; }
+    0%    { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 0; }
+    15%   { transform: perspective(620px) translateY(-13%) rotateX(60deg)  scale(1.07); opacity: 0; }
+    40%   { transform: perspective(620px) translateY(-28%) rotateX(200deg) scale(1.17); opacity: 0; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(270deg) scale(1.13); opacity: 0; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(272deg) scale(1.13); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(330deg) scale(1.16); opacity: 1; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(360deg) scale(1.1);  opacity: 1; }
 }
 
 @keyframes kingPromotionGlow {
