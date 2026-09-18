@@ -322,7 +322,13 @@ console.log('\n=== B2. ЗВУК В БОТ-ИГРЕ СОХРАНЁН ===');
         const saved = { b: global.isBotGame, w: global.window, k: global.KING_PROMOTION_SOUND_DELAY_MS };
         global.isBotGame = isBot;
         global.window = { matchMedia: function () { return { matches: !!reduced }; } };
-        global.KING_PROMOTION_SOUND_DELAY_MS = 818;
+        // Значение берём из тех же констант, что и код, а не числом:
+        // после смены длительности превращения оно пересчитывается.
+        global.KING_PROMOTION_SOUND_DELAY_MS = Math.max(0, Math.round(
+            constOf('MOVE_GHOST_DURATION_MS')
+            + constOf('KING_PROMOTION_DURATION_MS') * parseFloat(
+                /const KING_PROMOTION_REVEAL_FRACTION = ([\d.]+)/.exec(CLEAN)[1])
+            - constOf('KING_SOUND_RESOLVE_OFFSET_MS')));
         // eslint-disable-next-line no-eval
         eval(funcBody(CLEAN, 'kingPromotionSoundDelayMs'));
         const v = kingPromotionSoundDelayMs();
@@ -331,8 +337,8 @@ console.log('\n=== B2. ЗВУК В БОТ-ИГРЕ СОХРАНЁН ===');
         return v;
     }
     check('B2.5 бот-игра -> звук без задержки', delayFor(true, false) === 0, String(delayFor(true, false)));
-    check('B2.6 человек против человека -> прежние 818 мс',
-        delayFor(false, false) === 818, String(delayFor(false, false)));
+    check('B2.6 человек против человека -> задержка из формулы (455 мс)',
+        delayFor(false, false) === 455, String(delayFor(false, false)));
     check('B2.7 reduced-motion по-прежнему снимает задержку', delayFor(false, true) === 0);
 }
 

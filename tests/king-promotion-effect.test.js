@@ -301,8 +301,7 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     function run(state) {
         created = [];
         global.activeGhostCancelFns = [];
-        global.isBotGame = false;
-    global.isBotGame = false; // человек против человека -- визуал включён
+        global.isBotGame = false; // человек против человека -- визуал включён
         global.currentState = state;
         playKingPromotionEffect();
         return created.length;
@@ -331,8 +330,7 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     (function () {
         global._realClasses.clear();
         global.activeGhostCancelFns = [];
-        global.isBotGame = false;
-    global.isBotGame = false; // человек против человека -- визуал включён
+        global.isBotGame = false; // человек против человека -- визуал включён
         global.currentState = { moveType: "king", lastMove: at, pieces: pieces };
         playKingPromotionEffect();
         check('10.8 настоящая дамка скрыта на время превращения',
@@ -470,8 +468,7 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         global.MOVE_GHOST_DURATION_MS = 150;
         global.KING_PROMOTION_DURATION_MS = 340;
         global.activeGhostCancelFns = [];
-        global.isBotGame = false;
-    global.isBotGame = false; // человек против человека -- визуал включён
+        global.isBotGame = false; // человек против человека -- визуал включён
         global.document = {
             createElement: function () {
                 return {
@@ -509,7 +506,7 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
     })();
 }
 
-console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГРАДУСОВ ===');
+console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 360 ГРАДУСОВ ===');
 {
     function kfAngles(name) {
         const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
@@ -851,7 +848,15 @@ console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИ
         ? Math.max(0, Math.round(ghost + dur * frac - off))
         : null;
 
-    check('17.1 длительность превращения = 1500 мс', dur === 1500, String(dur));
+    // 1000 мс при 360 градусах -- это сохранение ТЕМПА, а не ускорение:
+    // 1500 * 360 / 540 = 1000, то есть один переворот занимает те же
+    // ~500 мс, что и раньше.
+    check('17.1 длительность превращения = 1000 мс', dur === 1000, String(dur));
+    check('17.1b темп на один переворот сохранён (~500 мс)', (function () {
+        const perFlip = dur / 2;          // 360 градусов = два переворота
+        const before = 1500 / 3;          // 540 градусов = три переворота
+        return Math.abs(perFlip - before) < 1;
+    })(), String(dur / 2) + ' мс');
     check('17.2 длительность полёта не менялась', ghost === 150, String(ghost));
 
     // Доля должна совпадать с кадром в CSS -- иначе звук уедет молча.
@@ -908,8 +913,11 @@ console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИ
         /KING_PROMOTION_SOUND_DELAY_MS = Math\.max\(0, Math\.round\([\s\S]*?MOVE_GHOST_DURATION_MS[\s\S]*?KING_PROMOTION_DURATION_MS \* KING_PROMOTION_REVEAL_FRACTION[\s\S]*?KING_SOUND_RESOLVE_OFFSET_MS/.test(CLEAN));
 
     const reveal = ghost !== null && dur !== null && frac !== null ? Math.round(ghost + dur * frac) : null;
-    check('17.6 дамка появляется на 1238 мс от начала хода', reveal === 1238, String(reveal));
-    check('17.7 задержка звука = 818 мс', delay === 818, String(delay));
+    check('17.6 дамка появляется на 875 мс от начала хода', reveal === 875, String(reveal));
+    // 150 + 1000*0.725 - 420 = 455. Значение НЕ вписано в код: формула
+    // пересчитала его сама после смены длительности.
+    check('17.7 задержка звука = 455 мс', delay === 455, String(delay));
+    check('17.7b число 455 в коде не захардкожено', !/\b455\b/.test(CLEAN));
     check('17.8 разрешающая нота попадает ТОЧНО в момент появления дамки',
         delay !== null && off !== null && (delay + off) === reveal,
         (delay + off) + ' vs ' + reveal);
@@ -1146,9 +1154,9 @@ console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
         const noMM = kingPromotionSoundDelayMs();
         global.window = saved;
 
-        check('19.4 обычный режим -> 818 мс', normal === 818, String(normal));
+        check('19.4 обычный режим -> 455 мс', normal === 455, String(normal));
         check('19.5 reduced-motion -> длинной задержки нет', reduced === 0, String(reduced));
-        check('19.6 без matchMedia остаётся обычное поведение', noMM === 818, String(noMM));
+        check('19.6 без matchMedia остаётся обычное поведение', noMM === 455, String(noMM));
         check('19.7 режимы действительно различаются', normal !== reduced);
     }
 
@@ -1167,8 +1175,18 @@ console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
         })());
     check('19.11 для выбора задержки не используется setTimeout',
         !!fn && !/setTimeout/.test(fn));
-    check('19.12 1500 мс и 540 градусов не тронуты',
-        /const KING_PROMOTION_DURATION_MS = 1500;/.test(CLEAN) && /rotateX\(540deg\)/.test(CSS));
+    check('19.12 длительность 1000 мс и поворот 360 градусов',
+        /const KING_PROMOTION_DURATION_MS = 1000;/.test(CLEAN) && /rotateX\(360deg\)/.test(CSS));
+    // 540deg в CSS остаётся законно: это финальный угол ВТОРОЙ обычной
+    // стороны, смещённой на 180 (180 + 360 = 540). Смотрим только на
+    // первую сторону и на дамку -- они обязаны заканчиваться на 360.
+    check('19.12b первая сторона и дамка заканчиваются на 360', (function () {
+        const man = /@keyframes kingPromotionFlip \{[\s\S]*?\n\}/.exec(CSS);
+        const king = /@keyframes kingPromotionFlipKing \{[\s\S]*?\n\}/.exec(CSS);
+        return !!man && !!king &&
+            /100%[^}]*rotateX\(360deg\)/.test(man[0]) &&
+            /100%[^}]*rotateX\(360deg\)/.test(king[0]);
+    })());
 
     // Устаревший комментарий про «вдвое медленнее» должен быть исправлен.
     check('19.13 комментарий о длительности не утверждает неверное',
