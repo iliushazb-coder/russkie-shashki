@@ -274,6 +274,7 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
         }
     };
     global.activeGhostCancelFns = [];
+    global.isBotGame = false; // человек против человека -- визуал включён
     const savedTimeout = global.setTimeout;
     global.setTimeout = function () { return 0; };
 
@@ -300,6 +301,8 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     function run(state) {
         created = [];
         global.activeGhostCancelFns = [];
+        global.isBotGame = false;
+    global.isBotGame = false; // человек против человека -- визуал включён
         global.currentState = state;
         playKingPromotionEffect();
         return created.length;
@@ -328,6 +331,8 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
     (function () {
         global._realClasses.clear();
         global.activeGhostCancelFns = [];
+        global.isBotGame = false;
+    global.isBotGame = false; // человек против человека -- визуал включён
         global.currentState = { moveType: "king", lastMove: at, pieces: pieces };
         playKingPromotionEffect();
         check('10.8 настоящая дамка скрыта на время превращения',
@@ -465,6 +470,8 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         global.MOVE_GHOST_DURATION_MS = 150;
         global.KING_PROMOTION_DURATION_MS = 340;
         global.activeGhostCancelFns = [];
+        global.isBotGame = false;
+    global.isBotGame = false; // человек против человека -- визуал включён
         global.document = {
             createElement: function () {
                 return {
@@ -515,10 +522,22 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
     const back = kfAngles('kingPromotionFlipBack');
 
     check('14.1 keyframes обеих сторон существуют', !!man && !!king);
-    check('14.2 обычная сторона проходит ровно 540 градусов',
-        !!man && man[0][1] === 0 && man[man.length - 1][1] === 540);
-    check('14.3 сторона дамки проходит те же 540 (со сдвигом фазы)',
-        !!king && (king[king.length - 1][1] - king[0][1]) === 540);
+// Один полный оборот = ДВА прохода ребром, то есть два переворота.
+    // Прежние 540 давали три.
+    check('14.2 обычная сторона проходит ровно 360 градусов',
+        !!man && man[0][1] === 0 && man[man.length - 1][1] === 360);
+    check('14.2b это ровно два прохода ребром', (function () {
+        if (!man) return false;
+        let edges = 0;
+        for (let i = 1; i < man.length; i++) {
+            [90, 270].forEach(function (e) {
+                if (man[i - 1][1] < e && man[i][1] >= e) edges++;
+            });
+        }
+        return edges === 2;
+    })());
+    check('14.3 сторона дамки проходит те же 360',
+        !!king && (king[king.length - 1][1] - king[0][1]) === 360);
     // Сдвиг ровно 180 на КАЖДОМ ключе -- иначе стороны разъедутся и
     // появится момент, когда видны обе или ни одной.
     // Вторая обычная сторона обязана быть ровно на 180 от первой -- иначе
@@ -531,10 +550,13 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
             return byPct[b[0]] === undefined || b[1] - byPct[b[0]] === 180;
         });
     })());
-    check('14.4b дамка занимает ту же позицию, что вторая обычная', (function () {
-        if (!back || !king) return false;
+// При целом обороте фигура заканчивает лицом в исходном положении,
+    // поэтому дамка делит позицию с ПЕРВОЙ обычной стороной, а не со
+    // второй -- иначе в конце была бы видна обычная текстура.
+    check('14.4b дамка занимает ту же позицию, что ПЕРВАЯ обычная', (function () {
+        if (!man || !king) return false;
         const byPct = {};
-        back.forEach(function (b) { byPct[b[0]] = b[1]; });
+        man.forEach(function (m) { byPct[m[0]] = m[1]; });
         return king.every(function (k) { return byPct[k[0]] === undefined || byPct[k[0]] === k[1]; });
     })());
     // Монотонность: вращение не должно «отыгрывать назад».
@@ -701,8 +723,9 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
             timeline[timeline.length - 1].king && !timeline[timeline.length - 1].ordinary);
 
         // Вращение до превращения должно быть заметным.
-        check('15.11 до превращения фигура успевает повернуться больше чем на оборот',
-            at(man, timeline[firstKing].p, 'rot') >= 360);
+        check('15.11 до превращения фигура успевает пройти два переворота',
+            at(man, timeline[firstKing].p, 'rot') >= 270,
+            String(Math.round(at(man, timeline[firstKing].p, 'rot'))) + '°');
 
         // Точная заказанная последовательность по УГЛУ поворота, а не по
         // проценту: 0-90 A, 90-270 B, 270-450 A, после 450 только дамка.
@@ -723,21 +746,25 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
         }
         check('15.16 на 45 градусах видна первая обычная сторона', whoAt(45) === 'A', whoAt(45));
         check('15.17 на 180 градусах видна вторая обычная сторона', whoAt(180) === 'B', whoAt(180));
-        check('15.18 на 360 градусах снова первая обычная', whoAt(360) === 'A', whoAt(360));
-        check('15.19 на 500 градусах видна ТОЛЬКО дамка', whoAt(500) === 'king', whoAt(500));
-        check('15.20 на 300 градусах обычная, а не дамка', whoAt(300) === 'A', whoAt(300));
+        check('15.18 на 260 градусах ещё обычная (до подмены)', whoAt(260) === 'B', whoAt(260));
+        check('15.19 на 320 градусах видна ТОЛЬКО дамка', whoAt(320) === 'king', whoAt(320));
+        check('15.20 в самом конце оборота видна дамка', whoAt(359) === 'king', whoAt(359));
     }
 
     // Подмена обязана происходить на ребре, иначе она заметна.
+// Подмена идёт между ПЕРВОЙ обычной стороной и дамкой -- они делят
+    // позицию.
     check('15.12 обычная гаснет и дамка зажигается в один и тот же момент', (function () {
-        if (!back || !king) return false;
-        const off = back.find(function (k) { return k.op === 0; });
+        const manKf = parseKf('kingPromotionFlip');
+        if (!manKf || !king) return false;
+        const off = manKf.find(function (k) { return k.op === 0; });
         const on = king.find(function (k) { return k.op === 1; });
         return !!off && !!on && off.pct === on.pct;
     })());
     check('15.13 подмена происходит, когда сторона стоит ребром', (function () {
-        if (!back) return false;
-        const off = back.find(function (k) { return k.op === 0; });
+        const manKf = parseKf('kingPromotionFlip');
+        if (!manKf) return false;
+        const off = manKf.find(function (k) { return k.op === 0; });
         if (!off) return false;
         const m = ((off.rot % 360) + 360) % 360;
         return Math.abs(m - 90) < 12 || Math.abs(m - 270) < 12;

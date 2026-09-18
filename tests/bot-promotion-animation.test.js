@@ -246,63 +246,113 @@ console.log('\n=== A2. СЦЕНАРИЙ ДВОЙНОЙ ДОСТАВКИ OWNER-SY
     })();
 }
 
-console.log('\n=== B. ПРЕВРАЩЕНИЕ БОТА ВНУТРИ СЕРИИ ВЗЯТИЙ ===');
+console.log('\n=== B. В ИГРАХ С БОТОМ ВИЗУАЛА НЕТ ===');
 {
-    const ghost = constOf('MOVE_GHOST_DURATION_MS');
-    const king = constOf('KING_PROMOTION_DURATION_MS');
-    const base = constOf('BOT_MOVE_DELAY_MS');
-    const extra = constOf('BOT_PROMOTION_EXTRA_PAUSE_MS');
+    // Продуктовое решение владельца после ручного теста: в играх с ботом
+    // превращение происходит без анимации вовсе. Критерий -- isBotGame, а
+    // не цвет и не владелец хода.
+    const eff = funcBody(CLEAN, 'playKingPromotionEffect');
+    check('B.1 эффект найден', !!eff);
+    check('B.2 ранний выход по isBotGame', !!eff && /if \(isBotGame\) return;/.test(eff));
+    check('B.3 критерий именно isBotGame, а не цвет или владелец хода',
+        !!eff && !/botColor|myColor|currentState\.turn/.test(eff));
 
-    check('B.1 обычная пауза бота вынесена в константу', base === 150, String(base));
-    check('B.2 запас объявлен константой', extra !== null && extra > 0 && extra <= 200, String(extra));
-    check('B.3 длительность превращения не менялась', king === 1500, String(king));
-    check('B.4 длительность полёта не менялась', ghost === 150, String(ghost));
+    // Проверяем ИСПОЛНЕНИЕМ: в бот-игре не создаётся ни одного наложения,
+    // в игре человек против человека -- создаются.
+    function overlaysCreated(isBot) {
+        let made = 0;
+        const saved = {};
+        ['squareElements', 'pieceElements', 'document', 'activeGhostCancelFns',
+         'setTimeout', 'currentState', 'isBotGame', 'MOVE_GHOST_DURATION_MS',
+         'KING_PROMOTION_DURATION_MS'].forEach(function (k) { saved[k] = global[k]; });
+        global.squareElements = { '0_2': { appendChild: function () { made++; } } };
+        global.pieceElements = { '0_2': { classList: { add: function () {}, remove: function () {} } } };
+        global.document = { createElement: function () {
+            return { className: '', parentNode: null, style: { setProperty: function () {} },
+                     addEventListener: function () {} };
+        } };
+        global.activeGhostCancelFns = [];
+        global.setTimeout = function () { return 0; };
+        global.MOVE_GHOST_DURATION_MS = constOf('MOVE_GHOST_DURATION_MS');
+        global.KING_PROMOTION_DURATION_MS = constOf('KING_PROMOTION_DURATION_MS');
+        global.isBotGame = isBot;
+        global.currentState = { moveType: 'king', lastMove: { to: { row: 0, col: 2 } },
+                                pieces: { '0_2': { color: 'light', king: true } } };
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'playKingPromotionEffect'));
+        playKingPromotionEffect();
+        Object.keys(saved).forEach(function (k) {
+            if (saved[k] === undefined) delete global[k]; else global[k] = saved[k];
+        });
+        return made;
+    }
 
-    // Формула обязана считаться из констант, а не быть числом.
-    check('B.5 задержка выводится из констант, а не захардкожена',
-        /MOVE_GHOST_DURATION_MS \+ KING_PROMOTION_DURATION_MS \+ BOT_PROMOTION_EXTRA_PAUSE_MS/.test(CLEAN));
-    check('B.6 числа 1700 в коде нет', !/\b1700\b/.test(CLEAN));
-    check('B.7 итоговая пауза покрывает весь эффект',
-        (ghost + king + extra) >= (ghost + king), String(ghost + king + extra));
+    check('B.4 бот-игра: превращение НЕ создаёт наложений',
+        overlaysCreated(true) === 0, 'наложений: ' + overlaysCreated(true));
+    check('B.5 человек против человека: наложения создаются',
+        overlaysCreated(false) > 0, 'наложений: ' + overlaysCreated(false));
+
+    // Правило распространяется на все случаи бот-игры: превращение бота,
+    // превращение человека против бота, обычное и внутри серии.
+    check('B.6 выход по isBotGame стоит до любой работы с DOM', (function () {
+        if (!eff) return false;
+        const bot = eff.indexOf('if (isBotGame) return;');
+        const dom = eff.indexOf('document.createElement');
+        return bot !== -1 && dom !== -1 && bot < dom;
+    })());
+}
+
+console.log('\n=== B2. ЗВУК В БОТ-ИГРЕ СОХРАНЁН ===');
+{
+    // Звук живёт отдельно от визуала и всегда жил: ни одна из точек
+    // вызова не проходит через playKingPromotionEffect.
+    const eff = funcBody(CLEAN, 'playKingPromotionEffect');
+    check('B2.1 звук НЕ вызывается из эффекта',
+        !!eff && !/playKingSound|playSoundForMoveType/.test(eff));
+    check('B2.2 звук вызывается из своих точек',
+        (CLEAN.match(/playSoundForMoveType\(/g) || []).length >= 4);
+
+    // Задержка звука существует ради попадания ноты в момент появления
+    // дамки. В бот-игре появления нет -- ждать нечего.
+    const delayFn = funcBody(CLEAN, 'kingPromotionSoundDelayMs');
+    check('B2.3 функция задержки найдена', !!delayFn);
+    check('B2.4 в бот-игре задержки нет', !!delayFn && /if \(isBotGame\) return 0;/.test(delayFn));
+
+    function delayFor(isBot, reduced) {
+        const saved = { b: global.isBotGame, w: global.window, k: global.KING_PROMOTION_SOUND_DELAY_MS };
+        global.isBotGame = isBot;
+        global.window = { matchMedia: function () { return { matches: !!reduced }; } };
+        global.KING_PROMOTION_SOUND_DELAY_MS = 818;
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'kingPromotionSoundDelayMs'));
+        const v = kingPromotionSoundDelayMs();
+        global.isBotGame = saved.b; global.window = saved.w;
+        global.KING_PROMOTION_SOUND_DELAY_MS = saved.k;
+        return v;
+    }
+    check('B2.5 бот-игра -> звук без задержки', delayFor(true, false) === 0, String(delayFor(true, false)));
+    check('B2.6 человек против человека -> прежние 818 мс',
+        delayFor(false, false) === 818, String(delayFor(false, false)));
+    check('B2.7 reduced-motion по-прежнему снимает задержку', delayFor(false, true) === 0);
+}
+
+console.log('\n=== B3. СТАРАЯ ПАУЗА БОТА УДАЛЕНА ===');
+{
+    // Пауза добавлялась ради досмотра анимации превращения бота. Визуала
+    // больше нет -- ветка и константа удалены, а не оставлены мёртвыми.
+    check('B3.1 константа запаса удалена', !/BOT_PROMOTION_EXTRA_PAUSE_MS/.test(CLEAN));
+    check('B3.2 ветка mid-capture удалена', !/isBotPromotionMidCapture/.test(CLEAN));
+    check('B3.3 вычисляемой задержки бота больше нет', !/nextBotMoveDelayMs/.test(CLEAN));
+    check('B3.4 обычная пауза бота сохранена', constOf('BOT_MOVE_DELAY_MS') === 150);
 
     const render = funcBody(CLEAN, 'renderBoard');
-    check('B.8 renderBoard найдена', !!render);
-    if (render) {
-        // Условие должно требовать ОБА признака: превращение И продолжение
-        // серии. Иначе обычное превращение тоже получило бы паузу.
-        check('B.9 условие требует moveType "king"',
-            /isBotPromotionMidCapture[\s\S]{0,160}?currentState\.moveType === "king"/.test(render));
-        check('B.10 условие требует mustContinueFrom',
-            /isBotPromotionMidCapture[\s\S]{0,200}?mustContinueFrom !== null/.test(render));
-        check('B.11 таймер использует вычисленную задержку',
-            /setTimeout\(function\(\) \{[\s\S]*?\}, nextBotMoveDelayMs\);/.test(render));
-        check('B.12 обычные ходы бота остаются на BOT_MOVE_DELAY_MS',
-            /: BOT_MOVE_DELAY_MS;/.test(render));
-        check('B.13 после паузы вызывается тот же triggerBotMove',
-            /botMoveTimer = null;\s*\n\s*triggerBotMove\(\);/.test(render));
-        check('B.14 защита от второго таймера сохранена',
-            /if \(!botMoveTimer\) \{/.test(render));
-        check('B.15 планирование по-прежнему только когда ход бота',
-            /currentState\.turn === botColor/.test(render));
-    }
-
-    // Выбор задержки проверяем ИСПОЛНЕНИЕМ на четырёх состояниях.
-    function pickDelay(state) {
-        const isBotPromotionMidCapture = state.moveType === "king"
-            && state.mustContinueFrom !== null
-            && state.mustContinueFrom !== undefined;
-        return isBotPromotionMidCapture ? (ghost + king + extra) : base;
-    }
-    check('B.16 обычный ход бота -> 150 мс',
-        pickDelay({ moveType: 'move', mustContinueFrom: null }) === 150);
-    check('B.17 взятие без превращения -> 150 мс',
-        pickDelay({ moveType: 'capture', mustContinueFrom: { row: 2, col: 2 } }) === 150);
-    check('B.18 превращение БЕЗ продолжения -> 150 мс (лишней паузы нет)',
-        pickDelay({ moveType: 'king', mustContinueFrom: null }) === 150);
-    check('B.19 превращение В СЕРИИ -> производная пауза',
-        pickDelay({ moveType: 'king', mustContinueFrom: { row: 2, col: 2 } }) === ghost + king + extra);
-    check('B.20 mustContinueFrom === undefined трактуется как отсутствие',
-        pickDelay({ moveType: 'king' }) === 150);
+    check('B3.5 таймер использует только BOT_MOVE_DELAY_MS',
+        !!render && /\}, BOT_MOVE_DELAY_MS\);/.test(render));
+    check('B3.6 защита от второго таймера сохранена', !!render && /if \(!botMoveTimer\) \{/.test(render));
+    check('B3.7 планирование только когда ход бота',
+        !!render && /currentState\.turn === botColor/.test(render));
+    check('B3.8 после паузы вызывается тот же triggerBotMove',
+        !!render && /botMoveTimer = null;\s*\n\s*triggerBotMove\(\);/.test(render));
 }
 
 console.log('\n=== C. НИЧЕГО ЛИШНЕГО НЕ ЗАТРОНУТО ===');
