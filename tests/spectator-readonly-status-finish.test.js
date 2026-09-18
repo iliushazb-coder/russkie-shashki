@@ -64,6 +64,10 @@ try {
     eval(extractFunc('statusForColor'));
     eval(extractFunc('checkRematchProposal'));
     eval(extractFunc('checkDrawProposal'));
+    // №3B: renderEndGameModal теперь использует общий guard, который считает
+    // .modal-closing уже логически закрытой. Исполняем РЕАЛЬНЫЙ production
+    // helper вместе с извлечённой функцией, а не подменяем его тестовой копией.
+    eval(extractFunc('isModalLogicallyOpen'));
     eval(extractFunc('renderEndGameModal'));
 } catch (e) {
     loadError = e && e.message ? e.message : String(e);

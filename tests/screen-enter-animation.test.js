@@ -168,16 +168,22 @@ check('7.1 style.css поднят (>= 29)', (function () {
     return !!m && parseInt(m[1], 10) >= 29;
 })(), (/style\.css\?v=(\d+)/.exec(HTML) || [])[1]);
 
-console.log('\n=== 8. МОДАЛКИ НЕ ТРОНУТЫ (это #3B) ===');
-check('8.1 closeModal по-прежнему ставит hidden первой строкой', (function () {
+console.log('\n=== 8. №3B НЕ ЛОМАЕТ #3A: MODAL CLOSE ОТДЕЛЁН ОТ SCREEN ENTER ===');
+// Раньше этот раздел был временным scope-guard'ом "модалки не тронуты".
+// №3B теперь намеренно реализован, поэтому проверяем обратное: его lifecycle
+// существует только внутри modal helper/CSS и НЕ протёк в showScreen().
+check('8.1 closeModal теперь имеет отдельный modal-closing lifecycle', (function () {
     const body = funcBody(CLEAN, 'closeModal');
-    if (!body) return false;
-    const i = body.indexOf('modal.classList.add("hidden")');
-    const j = body.indexOf('modalFocusState.get(modal)');
-    return i !== -1 && j !== -1 && i < j;
+    return !!body && /modal-closing/.test(body) && /finishModalClose/.test(body);
 })());
-check('8.2 у .modal-overlay не появилось классов закрытия',
-    !/modal-closing/.test(CSS_CLEAN) && !/modal-closing/.test(CLEAN));
+check('8.2 CSS содержит modal-closing, но screenEnter rule не использует его',
+    /\.modal-overlay\.modal-closing/.test(CSS_CLEAN) &&
+    !!enterRule && !/modal-closing/.test(enterRule[0]));
+check('8.3 showScreen по-прежнему не знает о modal-closing',
+    (function () {
+        const body = funcBody(CLEAN, 'showScreen');
+        return !!body && !/modal-closing|finishModalClose|modalCloseState/.test(body);
+    })());
 
 console.log('\n=== 9. НАЖАТИЕ КНОПКИ: СТЕКЛЯННЫЙ FEEDBACK ===');
 {
