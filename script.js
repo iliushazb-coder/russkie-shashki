@@ -2560,9 +2560,31 @@ function captureCapturedPieceSnapshotsBeforeUpdate() {
 // заранее снятый (см. captureCapturedPieceSnapshotsBeforeUpdate) DOM-снимок,
 // поскольку у уже удалённой из pieces фигуры не осталось игровых данных.
 function playMoveGhostAnimation(capturedSnapshots) {
-    cancelActiveGhostAnimations();
-
+    // ПОРЯДОК ЗДЕСЬ ПРИНЦИПИАЛЕН.
+    //
+    // Раньше cancelActiveGhostAnimations() стояла первой строкой, до
+    // проверки isGenuinelyNewMove. Из-за этого ПОВТОРНЫЙ рендер того же
+    // хода сначала убивал уже идущую анимацию, а потом выходил, не
+    // запустив её заново.
+    //
+    // Повторный рендер того же хода -- норма, а не исключение. Ход бота
+    // коммитится транзакцией (commitBotMove), а транзакция RTDB применяет
+    // результат локально и поднимает value сразу, после чего поднимает его
+    // ВТОРОЙ раз при подтверждении сервером. Один коммит -- две доставки
+    // одного revision, и onOwnerSessionUpdate вызывает renderBoard на
+    // обеих (lastRenderedOwnerRevision гасит только звук).
+    //
+    // Наложение превращения невидимо первые MOVE_GHOST_DURATION_MS, пока
+    // шашка летит, а подтверждение сервера обычно приходит за 50-300 мс.
+    // Поэтому эффект гиб до того, как показывал хоть один кадр: дамка
+    // появлялась мгновенно, без анимации.
+    //
+    // То же касается хода человека в synced-режиме -- он коммитится такой
+    // же транзакцией. В локальной игре Firebase не участвует, доставка
+    // одна, и там дефект не проявлялся.
     if (!currentState || !currentState.lastMove) {
+        // Хода нет вообще -- старым наложениям здесь не место.
+        cancelActiveGhostAnimations();
         lastAnimatedMoveCount = currentState ? currentState.moveCount : null;
         return;
     }
@@ -2570,7 +2592,22 @@ function playMoveGhostAnimation(capturedSnapshots) {
     const isFirstRenderSinceAttach = (lastAnimatedMoveCount === null);
     const isGenuinelyNewMove = !isFirstRenderSinceAttach && currentState.moveCount !== lastAnimatedMoveCount;
     lastAnimatedMoveCount = currentState.moveCount;
+
+    if (isFirstRenderSinceAttach) {
+        // Подключение, reconnect, вход зрителя: ход, случившийся ДО нас,
+        // не проигрываем, но чужие наложения с прошлой сессии убираем.
+        cancelActiveGhostAnimations();
+        return;
+    }
+
+    // КЛЮЧЕВОЕ: повторная доставка того же хода не трогает уже идущую
+    // анимацию. Единственный путь, который ничего не отменяет.
     if (!isGenuinelyNewMove) return;
+
+    // Настоящий новый ход -- предыдущие наложения снимаем, как и раньше.
+    // Поэтому уборка превращения ОСТАЁТСЯ в activeGhostCancelFns: она
+    // нужна и здесь, и в обработчиках resize/orientation.
+    cancelActiveGhostAnimations();
 
     const move = currentState.lastMove;
     const fromKey = move.from.row + "_" + move.from.col;
@@ -2697,6 +2734,15 @@ function playMoveGhostAnimation(capturedSnapshots) {
 // (см. ниже), поэтому flip и glow берут его отсюда, а fallback cleanup
 // считает от него же.
 const KING_PROMOTION_DURATION_MS = 1500;
+
+// Обычная пауза перед автоматическим ходом бота. Прежде число 150 стояло
+// прямо в renderBoard; вынесено, чтобы отличать его от производной паузы
+// для превращения ниже.
+const BOT_MOVE_DELAY_MS = 150;
+
+// Небольшой запас, чтобы анимация превращения успела досмотреться до
+// конца, прежде чем бот продолжит серию взятий.
+const BOT_PROMOTION_EXTRA_PAUSE_MS = 50;
 
 // Доля анимации, на которой дамка становится видимой. Значение обязано
 // совпадать с кадром 72.5% в @keyframes kingPromotionFlipKing: именно там
@@ -2906,11 +2952,33 @@ function renderBoard() {
         // Если таймер уже стоит — не ставим второй. 
         // Задержка 150мс вместо 500мс, чтобы многоходовые взятия бота 
         // не создавали иллюзию зависания (3 прыжка = 0.45с вместо 1.5с).
+        //
+        // Единственное исключение -- бот стал дамкой ПОСРЕДИ обязательной
+        // серии взятий (mustContinueFrom !== null, то есть ход остаётся
+        // за ним). Эффект превращения невидим первые
+        // MOVE_GHOST_DURATION_MS, пока шашка летит, и только потом идут
+        // KING_PROMOTION_DURATION_MS самой трансформации. Следующий
+        // прыжок через обычные 150 мс приходится ровно на момент, когда
+        // наложение должно зажечься, и срезает анимацию до первого кадра.
+        //
+        // Правила не меняются: состояние уже authoritative, дамка уже
+        // существует, ход по-прежнему за ботом. Сдвигается только момент
+        // автоматического продолжения, чтобы пользователь увидел уже
+        // идущую анимацию.
+        const isBotPromotionMidCapture = currentState.moveType === "king"
+            && currentState.mustContinueFrom !== null
+            && currentState.mustContinueFrom !== undefined;
+        // Считается из существующих констант, а не пишется числом: при
+        // смене длительности превращения задержка обязана пересчитаться
+        // сама, иначе тихо разъедется.
+        const nextBotMoveDelayMs = isBotPromotionMidCapture
+            ? (MOVE_GHOST_DURATION_MS + KING_PROMOTION_DURATION_MS + BOT_PROMOTION_EXTRA_PAUSE_MS)
+            : BOT_MOVE_DELAY_MS;
         if (!botMoveTimer) {
             botMoveTimer = setTimeout(function() {
                 botMoveTimer = null;
                 triggerBotMove();
-            }, 150);
+            }, nextBotMoveDelayMs);
         }
     }
 }
