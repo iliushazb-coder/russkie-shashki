@@ -2740,10 +2740,6 @@ const KING_PROMOTION_DURATION_MS = 1500;
 // для превращения ниже.
 const BOT_MOVE_DELAY_MS = 150;
 
-// Небольшой запас, чтобы анимация превращения успела досмотреться до
-// конца, прежде чем бот продолжит серию взятий.
-const BOT_PROMOTION_EXTRA_PAUSE_MS = 50;
-
 // Доля анимации, на которой дамка становится видимой. Значение обязано
 // совпадать с кадром 72.5% в @keyframes kingPromotionFlipKing: именно там
 // обычная сторона гаснет, а дамка зажигается. Держим его здесь, потому
@@ -2791,6 +2787,18 @@ function kingPromotionSoundDelayMs() {
 
 function playKingPromotionEffect() {
     if (!currentState || currentState.moveType !== "king" || !currentState.lastMove) return;
+
+    // В игре с ботом визуального превращения нет вовсе -- продуктовое
+    // решение владельца. Шашка просто становится дамкой по authoritative
+    // состоянию.
+    //
+    // Критерий именно isBotGame, а не цвет или владелец хода: правило
+    // одинаково для превращения бота и для превращения человека против
+    // бота, для обычного хода и для превращения внутри серии взятий.
+    //
+    // Музыкальный мотив при этом ОСТАЁТСЯ: звук живёт отдельно, в
+    // playSoundForMoveType, и через этот эффект никогда не проходил.
+    if (isBotGame) return;
 
     const toKey = currentState.lastMove.to.row + "_" + currentState.lastMove.to.col;
     const squareEl = squareElements[toKey];
@@ -2953,32 +2961,17 @@ function renderBoard() {
         // Задержка 150мс вместо 500мс, чтобы многоходовые взятия бота 
         // не создавали иллюзию зависания (3 прыжка = 0.45с вместо 1.5с).
         //
-        // Единственное исключение -- бот стал дамкой ПОСРЕДИ обязательной
-        // серии взятий (mustContinueFrom !== null, то есть ход остаётся
-        // за ним). Эффект превращения невидим первые
-        // MOVE_GHOST_DURATION_MS, пока шашка летит, и только потом идут
-        // KING_PROMOTION_DURATION_MS самой трансформации. Следующий
-        // прыжок через обычные 150 мс приходится ровно на момент, когда
-        // наложение должно зажечься, и срезает анимацию до первого кадра.
-        //
-        // Правила не меняются: состояние уже authoritative, дамка уже
-        // существует, ход по-прежнему за ботом. Сдвигается только момент
-        // автоматического продолжения, чтобы пользователь увидел уже
-        // идущую анимацию.
-        const isBotPromotionMidCapture = currentState.moveType === "king"
-            && currentState.mustContinueFrom !== null
-            && currentState.mustContinueFrom !== undefined;
-        // Считается из существующих констант, а не пишется числом: при
-        // смене длительности превращения задержка обязана пересчитаться
-        // сама, иначе тихо разъедется.
-        const nextBotMoveDelayMs = isBotPromotionMidCapture
-            ? (MOVE_GHOST_DURATION_MS + KING_PROMOTION_DURATION_MS + BOT_PROMOTION_EXTRA_PAUSE_MS)
-            : BOT_MOVE_DELAY_MS;
+        // Отдельной длинной паузы для превращения посреди серии взятий
+        // здесь больше нет. Она существовала, чтобы анимация превращения
+        // успела досмотреться до конца, прежде чем бот продолжит бить.
+        // Визуального превращения в игре с ботом теперь нет вообще, так
+        // что ждать нечего -- все ходы бота снова идут через одну и ту же
+        // паузу.
         if (!botMoveTimer) {
             botMoveTimer = setTimeout(function() {
                 botMoveTimer = null;
                 triggerBotMove();
-            }, nextBotMoveDelayMs);
+            }, BOT_MOVE_DELAY_MS);
         }
     }
 }
