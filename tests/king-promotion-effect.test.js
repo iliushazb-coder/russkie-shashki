@@ -1265,5 +1265,41 @@ console.log('\n=== 20. ПОДЪЁМ НЕ ВЫХОДИТ ЗА ГРАНИЦЫ КЛ
         /72%[^}]*rotateX\(270deg\)/.test(CSS) && /72\.5%[^}]*opacity: 0/.test(CSS));
 }
 
+
+console.log('\n=== 21. ОПТИЧЕСКАЯ ЦЕНТРОВКА ФИШЕК ===');
+{
+    // После выравнивания самой доски реальные Telegram-скриншоты всё ещё
+    // показывали маленький систематический оптический сдвиг видимого диска
+    // влево. DOM-box .piece при этом уже был математически центрирован.
+    // Коррекция делается individual transform property "translate", а не
+    // обычным transform: так она не перетирает .king scale, selected pulse,
+    // move-ghost transform и promotion keyframes.
+    const pieceRule = /\.piece\s*\{([\s\S]*?)\n\}/.exec(CSS);
+    check('21.1 базовый .piece имеет оптическую коррекцию +0.5px вправо',
+        !!pieceRule && /translate:\s*0\.5px\s+0\s*;/.test(pieceRule[1]));
+
+    // Вертикальную координату намеренно не трогаем: пользовательский дефект
+    // по X воспроизводится на desktop/mobile, а отдельный вертикальный баг
+    // promotion исправлен траекторией keyframes в разделе 20.
+    check('21.2 коррекция не добавляет вертикального сдвига',
+        !!pieceRule && !/translate:\s*0\.5px\s+(?!0(?:\s|;))/.test(pieceRule[1]));
+
+    // Все временные визуальные слои обязаны носить тот же базовый .piece,
+    // иначе при начале/окончании хода возник бы полупиксельный скачок.
+    check('21.3 move ghost использует базовый .piece',
+        /ghost\.className\s*=\s*"piece "/.test(SRC));
+    check('21.4 captured ghost использует базовый .piece',
+        /capturedGhost\.className\s*=\s*"piece "/.test(SRC));
+    check('21.5 все три promotion-overlay используют базовый .piece',
+        /flip\.className\s*=\s*"piece "/.test(SRC) &&
+        /flipBack\.className\s*=\s*"piece "/.test(SRC) &&
+        /flipKing\.className\s*=\s*"piece "/.test(SRC));
+
+    // Статичные фигуры создаются тем же классом, значит обычная шашка и
+    // дамка получают ту же коррекцию без отдельных offsets.
+    check('21.6 статичная фигура создаётся с классом .piece',
+        /piece\.classList\.add\("piece",/.test(SRC));
+}
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);
