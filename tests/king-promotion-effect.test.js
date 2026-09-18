@@ -1193,5 +1193,113 @@ console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
         !/вдвое медленнее прежних 340/.test(SRC));
 }
 
+console.log('\n=== 20. ПОДЪЁМ НЕ ВЫХОДИТ ЗА ГРАНИЦЫ КЛЕТКИ ===');
+{
+    // Наложение -- 82% клетки (та же переменная, что у .piece), поэтому
+    // свободное поле вокруг него внутри .square -- (100%-82%)/2 = 9%
+    // высоты клетки. Раньше пик анимации (40%) поднимал наложение на
+    // translateY(-28%) собственной высоты и одновременно расширял его
+    // scale(1.17) -- суммарно верхний край уходил примерно на 30% высоты
+    // клетки выше её границы. При 340-680 мс это пролетало быстро и было
+    // незаметно; на нынешних 1000 мс держится ~400 мс и читается как
+    // "фигура вылетает из клетки вверх".
+    //
+    // Тест не проверяет конкретные числа -- он проверяет ИНВАРИАНТ:
+    // на любом кадре суммарный верхний выход (подъём в долях СОБСТВЕННОЙ
+    // высоты наложения + половина прироста от scale, оба переведены в
+    // доли высоты клетки через коэффициент 0.82) не должен превышать
+    // свободное поле в 9%. Значит правка future-owner может подбирать
+    // числа заново, а тест продолжит проверять реальный смысл, а не
+    // конкретные -7%/scale(1.05).
+    const PIECE_OF_CELL = 0.82;
+    const CELL_MARGIN = (1 - PIECE_OF_CELL) / 2; // 9%
+
+    function parseLiftScale(name) {
+        const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
+        if (!b) return null;
+        const re = /([\d.]+)%\s*\{[^}]*translateY\((-?[\d.]+)%\)[^}]*scale\(([\d.]+)\)/g;
+        const out = [];
+        let m;
+        while ((m = re.exec(b[0])) !== null) {
+            out.push({ pct: parseFloat(m[1]), liftY: Math.abs(parseFloat(m[2])) / 100, scale: parseFloat(m[3]) });
+        }
+        return out;
+    }
+
+    ['kingPromotionFlip', 'kingPromotionFlipBack', 'kingPromotionFlipKing'].forEach(function (name) {
+        const frames = parseLiftScale(name);
+        check('20.1 ' + name + ': keyframes с translateY/scale найдены', !!frames && frames.length > 0);
+        if (!frames) return;
+
+        let maxExcursion = 0, worstFrame = null;
+        frames.forEach(function (f) {
+            const liftInCell = f.liftY * PIECE_OF_CELL;
+            const scaleExtra = Math.max(0, (f.scale - 1) / 2) * PIECE_OF_CELL;
+            const total = liftInCell + scaleExtra;
+            if (total > maxExcursion) { maxExcursion = total; worstFrame = f.pct; }
+        });
+        check('20.2 ' + name + ': ни один кадр не выходит за свободное поле клетки (' +
+            (CELL_MARGIN * 100).toFixed(0) + '%)',
+            maxExcursion <= CELL_MARGIN + 0.001,
+            'худший кадр ' + worstFrame + '% -> ' + (maxExcursion * 100).toFixed(1) + '% (лимит ' + (CELL_MARGIN * 100).toFixed(0) + '%)');
+    });
+
+    // Финальный кадр (100%) обязан остаться ЯКОРЕМ -- ровно тем же
+    // translateY(0)/scale(1.1), что и раньше. Его нельзя было трогать при
+    // уменьшении подъёма: не совпади он с отдыхающей .king { scale(1.1) },
+    // в момент снятия наложения появился бы заметный скачок позиции.
+    ['kingPromotionFlip', 'kingPromotionFlipBack', 'kingPromotionFlipKing'].forEach(function (name) {
+        const b = new RegExp('@keyframes ' + name + ' \\{[\\s\\S]*?\\n\\}').exec(CSS);
+        check('20.3 ' + name + ': финальный кадр остался якорем translateY(0) scale(1.1)',
+            !!b && /100%\s*\{[^}]*translateY\(0\)[^}]*scale\(1\.1\)/.test(b[0]));
+    });
+
+    // Сама механика переворота (углы, момент смены стороны, длительность,
+    // задержка, звук) этим PR не затрагивается -- меняется только высота
+    // подъёма и масштаб.
+    check('20.4 длительность и задержка не менялись',
+        /const KING_PROMOTION_DURATION_MS = 1000;/.test(CLEAN) &&
+        /const MOVE_GHOST_DURATION_MS = 150;/.test(CLEAN));
+    check('20.5 угол поворота (360°) не менялся', /rotateX\(360deg\)/.test(CSS));
+    check('20.6 момент смены стороны (72% / 72.5%) не менялся',
+        /72%[^}]*rotateX\(270deg\)/.test(CSS) && /72\.5%[^}]*opacity: 0/.test(CSS));
+}
+
+
+console.log('\n=== 21. ОПТИЧЕСКАЯ ЦЕНТРОВКА ФИШЕК ===');
+{
+    // После выравнивания самой доски реальные Telegram-скриншоты всё ещё
+    // показывали маленький систематический оптический сдвиг видимого диска
+    // влево. DOM-box .piece при этом уже был математически центрирован.
+    // Коррекция делается individual transform property "translate", а не
+    // обычным transform: так она не перетирает .king scale, selected pulse,
+    // move-ghost transform и promotion keyframes.
+    const pieceRule = /\.piece\s*\{([\s\S]*?)\n\}/.exec(CSS);
+    check('21.1 базовый .piece имеет оптическую коррекцию +0.5px вправо',
+        !!pieceRule && /translate:\s*0\.5px\s+0\s*;/.test(pieceRule[1]));
+
+    // Вертикальную координату намеренно не трогаем: пользовательский дефект
+    // по X воспроизводится на desktop/mobile, а отдельный вертикальный баг
+    // promotion исправлен траекторией keyframes в разделе 20.
+    check('21.2 коррекция не добавляет вертикального сдвига',
+        !!pieceRule && !/translate:\s*0\.5px\s+(?!0(?:\s|;))/.test(pieceRule[1]));
+
+    // Все временные визуальные слои обязаны носить тот же базовый .piece,
+    // иначе при начале/окончании хода возник бы полупиксельный скачок.
+    check('21.3 move ghost использует базовый .piece',
+        /ghost\.className\s*=\s*"piece "/.test(SRC));
+    check('21.4 captured ghost использует базовый .piece',
+        /capturedGhost\.className\s*=\s*"piece "/.test(SRC));
+    check('21.5 все три promotion-overlay используют базовый .piece',
+        /flip\.className\s*=\s*"piece "/.test(SRC) &&
+        /flipBack\.className\s*=\s*"piece "/.test(SRC) &&
+        /flipKing\.className\s*=\s*"piece "/.test(SRC));
+
+    // Статичные фигуры создаются тем же классом, значит обычная шашка и
+    // дамка получают ту же коррекцию без отдельных offsets.
+    check('21.6 статичная фигура создаётся с классом .piece',
+        /piece\.classList\.add\("piece",/.test(SRC));
+}
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);

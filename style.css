@@ -740,6 +740,14 @@ button.danger-button.button-press-flash::after {
     display: flex;
     justify-content: center;
     align-items: center;
+    /* Реальные Telegram-скриншоты после геометрического фикса доски
+       показывают остаточный оптический сдвиг видимого диска примерно на
+       пол-CSS-пикселя влево. DOM-box при этом математически центрирован.
+       Individual translate не конфликтует с transform-анимациями/scale:
+       тот же .piece-класс носят статичная фигура, move-ghost, captured
+       ghost и все три promotion-overlay, поэтому коррекция применяется
+       ко всем состояниям одинаково и не создаёт скачка между ними. */
+    translate: 0.5px 0;
     animation: pieceAppear 0.24s cubic-bezier(.34,1.56,.64,1);
     transition: transform 0.2s cubic-bezier(.34,1.56,.64,1), box-shadow 0.2s ease;
     /* Подсказка браузеру заранее подготовить слой для анимации */
@@ -1464,11 +1472,12 @@ button.danger-button.button-press-flash::after {
    center delta = 0.000px в headless-рендере) -- добавление
    background-position: center сюда было бы no-op, поэтому его здесь нет.
 
-   Реальная причина видимого смещения фишек была в другом месте --
-   #board красил assets/board.png в область на 2px меньше, чем занимали
-   его собственные 8 grid-tracks (см. #board ниже, border -> outline),
-   и во внутренней сетке самого board.png, которая теперь геометрически
-   выправлена. См. tests/board-geometry.test.js. */
+   Крупный геометрический рассинхрон после PR #37 был устранён у #board
+   (border -> outline) и во внутренней сетке board.png. После этого на
+   реальных Telegram-скриншотах остался небольшой ОПТИЧЕСКИЙ сдвиг самого
+   видимого диска влево при математически точном DOM-центре. Он компенсирован
+   один раз в базовом .piece через translate: 0.5px 0, поэтому одинаково
+   действует на обычную фигуру, дамку, ghost и promotion-overlay. */
 .piece-dark {
     background-image: url('assets/piece_dark.png?v=2') !important;
     background-size: contain !important;
@@ -1872,13 +1881,23 @@ button.danger-button.button-press-flash::after {
 
    Все три наложения идут по ОДНОЙ траектории подъёма и масштаба.
    Финальный scale(1.1) совпадает с размером настоящей дамки. */
+/* Подъём и масштаб подобраны так, чтобы наложение (82% клетки) НЕ выходило
+   за пределы клетки ни в одном кадре: свободное поле вокруг .piece внутри
+   .square -- (100%-82%)/2 = 9% высоты клетки, и пиковый кадр (40%) держит
+   суммарный верхний выход в пределах этого поля (translateY в долях
+   собственной высоты overlay + половина прироста от scale). Раньше пик
+   давал ~30% выхода за клетку -- при 1000 мс это держалось на экране
+   достаточно долго, чтобы читаться как "фигура вылетает из клетки вверх".
+   Финальный кадр (100%) НЕ трогаем: scale(1.1) должен точно совпасть с
+   отдыхающей .king { transform: scale(1.1) }, иначе в момент снятия
+   наложения будет заметный скачок позиции. */
 @keyframes kingPromotionFlip {
     0%    { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 1; }
-    15%   { transform: perspective(620px) translateY(-13%) rotateX(60deg)  scale(1.07); opacity: 1; }
-    40%   { transform: perspective(620px) translateY(-28%) rotateX(200deg) scale(1.17); opacity: 1; }
-    72%   { transform: perspective(620px) translateY(-16%) rotateX(270deg) scale(1.13); opacity: 1; }
-    72.5% { transform: perspective(620px) translateY(-16%) rotateX(272deg) scale(1.13); opacity: 0; }
-    88%   { transform: perspective(620px) translateY(-2%)  rotateX(330deg) scale(1.16); opacity: 0; }
+    15%   { transform: perspective(620px) translateY(-3%)  rotateX(60deg)  scale(1.02); opacity: 1; }
+    40%   { transform: perspective(620px) translateY(-7%)  rotateX(200deg) scale(1.05); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-4%)  rotateX(270deg) scale(1.04); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-4%)  rotateX(272deg) scale(1.04); opacity: 0; }
+    88%   { transform: perspective(620px) translateY(-0.5%) rotateX(330deg) scale(1.045); opacity: 0; }
     100%  { transform: perspective(620px) translateY(0)    rotateX(360deg) scale(1.1);  opacity: 0; }
 }
 
@@ -1887,11 +1906,11 @@ button.danger-button.button-press-flash::after {
    backface-visibility. */
 @keyframes kingPromotionFlipBack {
     0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 1; }
-    15%   { transform: perspective(620px) translateY(-13%) rotateX(240deg) scale(1.07); opacity: 1; }
-    40%   { transform: perspective(620px) translateY(-28%) rotateX(380deg) scale(1.17); opacity: 1; }
-    72%   { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); opacity: 1; }
-    72.5% { transform: perspective(620px) translateY(-16%) rotateX(452deg) scale(1.13); opacity: 1; }
-    88%   { transform: perspective(620px) translateY(-2%)  rotateX(510deg) scale(1.16); opacity: 1; }
+    15%   { transform: perspective(620px) translateY(-3%)  rotateX(240deg) scale(1.02); opacity: 1; }
+    40%   { transform: perspective(620px) translateY(-7%)  rotateX(380deg) scale(1.05); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-4%)  rotateX(450deg) scale(1.04); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-4%)  rotateX(452deg) scale(1.04); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-0.5%) rotateX(510deg) scale(1.045); opacity: 1; }
     100%  { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  opacity: 1; }
 }
 
@@ -1899,11 +1918,11 @@ button.danger-button.button-press-flash::after {
    там, где та гаснет -- на ребре в 270 градусов. Один раз и навсегда. */
 @keyframes kingPromotionFlipKing {
     0%    { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 0; }
-    15%   { transform: perspective(620px) translateY(-13%) rotateX(60deg)  scale(1.07); opacity: 0; }
-    40%   { transform: perspective(620px) translateY(-28%) rotateX(200deg) scale(1.17); opacity: 0; }
-    72%   { transform: perspective(620px) translateY(-16%) rotateX(270deg) scale(1.13); opacity: 0; }
-    72.5% { transform: perspective(620px) translateY(-16%) rotateX(272deg) scale(1.13); opacity: 1; }
-    88%   { transform: perspective(620px) translateY(-2%)  rotateX(330deg) scale(1.16); opacity: 1; }
+    15%   { transform: perspective(620px) translateY(-3%)  rotateX(60deg)  scale(1.02); opacity: 0; }
+    40%   { transform: perspective(620px) translateY(-7%)  rotateX(200deg) scale(1.05); opacity: 0; }
+    72%   { transform: perspective(620px) translateY(-4%)  rotateX(270deg) scale(1.04); opacity: 0; }
+    72.5% { transform: perspective(620px) translateY(-4%)  rotateX(272deg) scale(1.04); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-0.5%) rotateX(330deg) scale(1.045); opacity: 1; }
     100%  { transform: perspective(620px) translateY(0)    rotateX(360deg) scale(1.1);  opacity: 1; }
 }
 
