@@ -69,7 +69,7 @@
 #group-lobby-screen:not(.hidden),
 #waiting-screen:not(.hidden),
 #game-screen:not(.hidden) {
-    animation: screenEnter 200ms cubic-bezier(.22, .61, .36, 1) both;
+    animation: screenEnter 280ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes screenEnter {
