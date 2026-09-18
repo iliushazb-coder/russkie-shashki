@@ -1008,6 +1008,51 @@ function generateRoomCode() {
 // повторное открытие/закрытие копило бы слушатели один на другим.
 const modalFocusState = new WeakMap();
 
+// №3B: визуальное закрытие модалки отделено от её ЛОГИЧЕСКОГО закрытия.
+// Focus/key handlers снимаются сразу, а opacity/scale могут спокойно
+// доиграть ещё несколько кадров. WeakMap хранит только текущий close-cycle
+// конкретной модалки; generation делает любой запоздалый callback старого
+// цикла безопасным no-op после повторного открытия.
+const modalCloseState = new WeakMap();
+let modalCloseGeneration = 0;
+const MODAL_CLOSE_FALLBACK_MS = 260; // CSS close = 180ms + запас на animationend
+
+function clearModalCloseState(modal, state) {
+    if (!state) return;
+    if (state.timerId !== null) clearTimeout(state.timerId);
+    if (state.onAnimationEnd) modal.removeEventListener("animationend", state.onAnimationEnd);
+    if (modalCloseState.get(modal) === state) modalCloseState.delete(modal);
+}
+
+function cancelPendingModalClose(modal) {
+    if (!modal) return;
+    const state = modalCloseState.get(modal);
+    if (state) clearModalCloseState(modal, state);
+    modal.classList.remove("modal-closing");
+}
+
+function finishModalClose(modal, generation) {
+    const state = modalCloseState.get(modal);
+    // Старый animationend/fallback от предыдущего close-cycle не имеет
+    // права спрятать уже переоткрытую модалку.
+    if (!state || state.generation !== generation) return;
+    clearModalCloseState(modal, state);
+    modal.classList.remove("modal-closing");
+    modal.classList.add("hidden");
+}
+
+function prefersReducedModalMotion() {
+    return typeof window !== "undefined"
+        && typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function isModalLogicallyOpen(modal) {
+    return !!modal
+        && !modal.classList.contains("hidden")
+        && !modal.classList.contains("modal-closing");
+}
+
 function getFocusableInModal(modal) {
     return Array.from(modal.querySelectorAll("button, [href], input, select, textarea, [tabindex]"))
         .filter(function (el) {
@@ -1024,6 +1069,17 @@ function getFocusableInModal(modal) {
 
 function openModal(modal, options) {
     if (!modal) return;
+
+    // №3B: если тот же диалог успели открыть снова, пока его прошлый
+    // close-animation ещё идёт, отменяем СТАРЫЕ listener/timer ДО любых
+    // действий с фокусом. Иначе старый fallback позже мог бы добавить
+    // .hidden уже новому открытию.
+    cancelPendingModalClose(modal);
+    modal.classList.remove("hidden");
+    modal.classList.remove("modal-closing");
+    modal.removeAttribute("aria-hidden");
+    modal.removeAttribute("inert");
+
     // №42-B2a: options.returnFocus -- необязательный, по умолчанию true (все
     // 4 существующих B1 call-site'а вызывают openModal(modal) одним
     // аргументом и продолжают вести себя ровно как раньше). false — для
@@ -1035,11 +1091,8 @@ function openModal(modal, options) {
     // стоит искусственно тащить фокус обратно.
     const returnFocus = !options || options.returnFocus !== false;
 
-    // Сам helper владеет переключением видимости: раньше эту роль играл
-    // classList.remove/add("hidden") на каждом call-site по отдельности,
-    // и вынести её сюда обязательно -- иначе .focus() ниже молча не
-    // сработает на элементе внутри ещё скрытого (display:none) блока.
-    modal.classList.remove("hidden");
+    // Сам helper по-прежнему владеет видимостью; снятие .hidden теперь
+    // выполнено выше вместе с отменой незавершённого close-cycle.
 
     // Идемпотентность: повторный openModal() до closeModal() (например,
     // двойной клик на кнопку, запускающую асинхронную проверку перед
@@ -1096,33 +1149,101 @@ function openModal(modal, options) {
 
 function closeModal(modal) {
     if (!modal) return;
-    modal.classList.add("hidden");
+
+    // Повторный close во время уже идущего визуального закрытия безопасен:
+    // логическая уборка была выполнена первым вызовом, новый timer/listener
+    // не создаём.
+    if (modal.classList.contains("modal-closing") || modalCloseState.has(modal)) return;
+
+    // Уже полностью скрытая модалка тоже закрыта идемпотентно.
+    if (modal.classList.contains("hidden")) return;
+
+    // ЛОГИЧЕСКИ диалог закрывается прямо сейчас. Класс одновременно
+    // исключает его из "других открытых модалок" и мгновенно выключает
+    // мышь/тап через CSS pointer-events:none.
+    modal.classList.add("modal-closing");
+
     const state = modalFocusState.get(modal);
+    const activeBeforeClose = document.activeElement;
+    const activeWasInsideClosingModal = !!(activeBeforeClose
+        && typeof modal.contains === "function"
+        && modal.contains(activeBeforeClose));
+
     if (state) {
         modal.removeEventListener("keydown", state.onKeydown);
         modalFocusState.delete(modal);
-        // review fix: если к моменту закрытия фокус уже находится ВНУТРИ
-        // ДРУГОГО видимого модального диалога -- например, renderBoard()
-        // за один проход сначала открывает end-game-modal, а следом
-        // (позже в той же функции) закрывает уже неактуальный
-        // draw-offer-modal -- не крадём фокус у более нового,
-        // действительно открытого сейчас диалога обратно на старый
-        // trigger. modal сам уже получил "hidden" строкой выше, поэтому
-        // :not(.hidden) естественно исключает его самого: если фокус всё
-        // ещё внутри ЭТОГО закрываемого диалога (обычный случай --
-        // пользователь закрыл его собственной кнопкой/Escape), проверка
-        // ничего не находит, и trigger восстанавливается как раньше.
+
+        // Закрывающееся окно НЕ считается открытым. Особенно важно для
+        // порядка renderBoard(): end-game уже мог получить фокус, а старый
+        // draw/rematch закрывается позже в том же синхронном проходе.
         const activeInsideOtherOpenModal = !!(document.activeElement
             && typeof document.activeElement.closest === "function"
-            && document.activeElement.closest(".modal-overlay:not(.hidden)"));
-        // Триггер мог исчезнуть из DOM или сам стать невидимым между
-        // открытием и закрытием (например, если в это время сменился
-        // экран) -- offsetParent-проверка защищает от .focus() на
-        // элементе, вернуть фокус на который уже бессмысленно.
-        if (!activeInsideOtherOpenModal && state.trigger && document.body.contains(state.trigger) && state.trigger.offsetParent !== null) {
+            && document.activeElement.closest(".modal-overlay:not(.hidden):not(.modal-closing)"));
+
+        if (!activeInsideOtherOpenModal
+            && state.trigger
+            && document.body.contains(state.trigger)
+            && state.trigger.offsetParent !== null) {
             state.trigger.focus();
+        } else if (!activeInsideOtherOpenModal
+            && activeWasInsideClosingModal
+            && activeBeforeClose
+            && typeof activeBeforeClose.blur === "function") {
+            // returnFocus:false или исчезнувший trigger: при display:none
+            // браузер раньше сам выбрасывал фокус наружу. Теперь display:none
+            // откладывается ради анимации, поэтому делаем это явно сразу.
+            activeBeforeClose.blur();
         }
+    } else if (activeWasInsideClosingModal
+        && activeBeforeClose
+        && typeof activeBeforeClose.blur === "function") {
+        activeBeforeClose.blur();
     }
+
+    // Логически закрытый диалог сразу исчезает из accessibility/focus tree,
+    // даже пока его последние 180ms ещё видны визуально.
+    modal.setAttribute("aria-hidden", "true");
+    modal.setAttribute("inert", "");
+
+    // Reduced Motion означает именно мгновенное закрытие, без ожидания
+    // animationend/fallback.
+    if (prefersReducedModalMotion()) {
+        modal.classList.remove("modal-closing");
+        modal.classList.add("hidden");
+        return;
+    }
+
+    const generation = ++modalCloseGeneration;
+    const closeState = {
+        generation: generation,
+        timerId: null,
+        onAnimationEnd: null
+    };
+
+    closeState.onAnimationEnd = function (event) {
+        // animationend от .modal-box всплывает до overlay; ждём только
+        // собственную close-анимацию overlay.
+        if (event.target !== modal || event.animationName !== "modalCloseOverlay") return;
+        finishModalClose(modal, generation);
+    };
+
+    modalCloseState.set(modal, closeState);
+    modal.addEventListener("animationend", closeState.onAnimationEnd);
+
+    // В unit/browser fixture без production CSS close-animation отсутствует.
+    // Тогда не оставляем "полузакрытую" модалку на 260ms: закрываем сразу.
+    // В production после .modal-closing animationName = modalCloseOverlay.
+    const animationName = (typeof window !== "undefined" && typeof window.getComputedStyle === "function")
+        ? window.getComputedStyle(modal).animationName
+        : "none";
+    if (!animationName || animationName === "none") {
+        finishModalClose(modal, generation);
+        return;
+    }
+
+    closeState.timerId = setTimeout(function () {
+        finishModalClose(modal, generation);
+    }, MODAL_CLOSE_FALLBACK_MS);
 }
 
 function showScreen(screen) {
@@ -3340,7 +3461,7 @@ function renderEndGameModal() {
             }
         }
 
-        if (endGameModal.classList.contains("hidden")) openModal(endGameModal, { returnFocus: false });
+        if (!isModalLogicallyOpen(endGameModal)) openModal(endGameModal, { returnFocus: false });
         
         // Настраиваем кнопки: зритель видит только "В меню", игрок видит обе
         const buttonsRow = endGameModal.querySelector(".modal-buttons");
@@ -6679,7 +6800,7 @@ function checkDrawProposal() {
         if (btnDrawDecline) btnDrawDecline.classList.remove("hidden");
         if (btnDrawCancel) btnDrawCancel.classList.add("hidden");
     }
-    if (drawOfferModal.classList.contains("hidden")) openModal(drawOfferModal);
+    if (!isModalLogicallyOpen(drawOfferModal)) openModal(drawOfferModal);
 }
 
 if (btnDrawAccept) {
@@ -7057,7 +7178,7 @@ function checkRematchProposal() {
         }
     } else {
         rematchRequestText.textContent = (proposal.name || t("opponent_default")) + t("offers_rematch");
-        if (rematchRequestModal.classList.contains("hidden")) openModal(rematchRequestModal);
+        if (!isModalLogicallyOpen(rematchRequestModal)) openModal(rematchRequestModal);
     }
 }
 

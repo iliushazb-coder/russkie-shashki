@@ -836,6 +836,178 @@ async function runAsyncModalFocusChecks(page, engineName) {
         active === 'btn-close-game', active);
 }
 
+
+/* №3B: реальная close-анимация в Chromium/WebKit.
+   В отличие от старых focus fixtures, здесь подключён ПОЛНЫЙ production CSS,
+   поэтому closeModal() действительно остаётся в .modal-closing ~180ms. */
+function buildModalCloseAnimationFixture() {
+    const helperStart = SRC.indexOf('const modalFocusState = new WeakMap();');
+    const heMarker = 'function closeModal(modal) {';
+    const heStart = SRC.indexOf(heMarker, helperStart);
+    let depth = 0, i = SRC.indexOf('{', heStart), end = -1;
+    for (; i < SRC.length; i++) {
+        if (SRC[i] === '{') depth++;
+        else if (SRC[i] === '}') { depth--; if (depth === 0) { end = i; break; } }
+    }
+    const helperSrc = SRC.slice(helperStart, end + 1);
+
+    function modalHtml(id) {
+        const start = HTML.indexOf('<div id="' + id + '"');
+        const m = /\n    <\/div>/.exec(HTML.slice(start));
+        return HTML.slice(start, start + m.index + m[0].length);
+    }
+
+    return '<!doctype html><html><head><style>' + CSS + '</style></head><body>'
+        + '<button id="ext-trigger">внешний триггер</button>'
+        + modalHtml('resign-confirm-modal') + modalHtml('back-confirm-modal')
+        + '<script>' + helperSrc + '\n'
+        + 'function __resetModalCloseFixture(){'
+        + ' document.querySelectorAll(".modal-overlay").forEach(function(m){'
+        + '   cancelPendingModalClose(m);'
+        + '   var s=modalFocusState.get(m);'
+        + '   if(s){m.removeEventListener("keydown",s.onKeydown);modalFocusState.delete(m);}'
+        + '   m.classList.remove("modal-closing");m.classList.add("hidden");'
+        + '   m.removeAttribute("aria-hidden");m.removeAttribute("inert");'
+        + ' });'
+        + ' document.getElementById("ext-trigger").focus();'
+        + '}'
+        + '</script></body></html>';
+}
+
+async function runModalCloseAnimationChecks(page, engineName) {
+    const reset = async function () {
+        await page.evaluate(function () { __resetModalCloseFixture(); });
+    };
+
+    console.log('\n=== №3B: modal close animation lifecycle ===');
+
+    // 1) Логическое закрытие сразу, визуальное — позже.
+    await reset();
+    await page.evaluate(function () {
+        openModal(document.getElementById('resign-confirm-modal'));
+    });
+    await page.evaluate(function () {
+        closeModal(document.getElementById('resign-confirm-modal'));
+    });
+    let state = await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        return {
+            hidden: m.classList.contains('hidden'),
+            closing: m.classList.contains('modal-closing'),
+            pointerEvents: getComputedStyle(m).pointerEvents,
+            ariaHidden: m.getAttribute('aria-hidden'),
+            inert: m.hasAttribute('inert'),
+            active: document.activeElement.id
+        };
+    });
+    check(engineName + ' 3B: close логически мгновенный, но визуально ещё идёт',
+        !state.hidden && state.closing, JSON.stringify(state));
+    check(engineName + ' 3B: closing сразу не принимает pointer events',
+        state.pointerEvents === 'none', state.pointerEvents);
+    check(engineName + ' 3B: closing сразу aria-hidden + inert',
+        state.ariaHidden === 'true' && state.inert, JSON.stringify(state));
+    check(engineName + ' 3B: focus вернулся на trigger ДО конца анимации',
+        state.active === 'ext-trigger', state.active);
+
+    await page.waitForFunction(function () {
+        return document.getElementById('resign-confirm-modal').classList.contains('hidden');
+    }, null, { timeout: 1200 });
+    state = await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
+    });
+    check(engineName + ' 3B: после animationend modal реально hidden и closing снят',
+        state.hidden && !state.closing, JSON.stringify(state));
+
+    // 2) Повторный close не создаёт новый цикл.
+    await reset();
+    await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        openModal(m); closeModal(m); closeModal(m);
+    });
+    await page.waitForFunction(function () {
+        return document.getElementById('resign-confirm-modal').classList.contains('hidden');
+    }, null, { timeout: 1200 });
+    check(engineName + ' 3B: повторный close безопасен',
+        await page.evaluate(function () {
+            const m = document.getElementById('resign-confirm-modal');
+            return m.classList.contains('hidden') && !m.classList.contains('modal-closing');
+        }));
+
+    // 3) Reopen во время close отменяет старый animationend И fallback.
+    await reset();
+    await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        openModal(m);
+        closeModal(m);
+    });
+    await page.waitForTimeout(45);
+    await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        openModal(m);
+        // Имитируем запоздалый animationend прошлого цикла: старого
+        // listener уже нет, событие не имеет права спрятать новое открытие.
+        m.dispatchEvent(new AnimationEvent('animationend', {
+            animationName: 'modalCloseOverlay', bubbles: true
+        }));
+    });
+    await page.waitForTimeout(330); // дольше fallback 260ms старого цикла
+    state = await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        return {
+            hidden: m.classList.contains('hidden'),
+            closing: m.classList.contains('modal-closing'),
+            ariaHidden: m.hasAttribute('aria-hidden'),
+            inert: m.hasAttribute('inert'),
+            active: document.activeElement.id
+        };
+    });
+    check(engineName + ' 3B: reopen переживает stale animationend/fallback',
+        !state.hidden && !state.closing && !state.ariaHidden && !state.inert,
+        JSON.stringify(state));
+    check(engineName + ' 3B: reopen снова дал initial focus',
+        state.active === 'btn-resign-no', state.active);
+
+    // 4) Позднее закрытие старого modal не крадёт focus у нового.
+    await reset();
+    await page.evaluate(function () {
+        const a = document.getElementById('resign-confirm-modal');
+        const b = document.getElementById('back-confirm-modal');
+        openModal(a);
+        openModal(b);
+        closeModal(a);
+    });
+    state = await page.evaluate(function () {
+        return {
+            active: document.activeElement.id,
+            bOpen: isModalLogicallyOpen(document.getElementById('back-confirm-modal')),
+            aClosing: document.getElementById('resign-confirm-modal').classList.contains('modal-closing')
+        };
+    });
+    check(engineName + ' 3B: late close старой modal НЕ крадёт focus у новой',
+        state.active === 'btn-back-bot-no' && state.bOpen && state.aClosing,
+        JSON.stringify(state));
+
+    // 5) prefers-reduced-motion: никакого визуального ожидания.
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await reset();
+    await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        openModal(m);
+        closeModal(m);
+    });
+    state = await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        return {
+            hidden: m.classList.contains('hidden'),
+            closing: m.classList.contains('modal-closing')
+        };
+    });
+    check(engineName + ' 3B: reduced-motion закрывает сразу',
+        state.hidden && !state.closing, JSON.stringify(state));
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+}
+
 async function runEngine(engine) {
     console.log('\n################  ДВИЖОК: ' + engine.name.toUpperCase() + '  ################');
     const browser = await engine.type.launch(engine.launchOptions);
@@ -979,6 +1151,14 @@ async function runEngine(engine) {
         await infoModalPage.setContent(buildInfoModalFixture());
         await runInfoModalFocusChecks(infoModalPage, engine.name);
         await infoModalPage.close();
+    }
+
+    console.log('\n=== №3B: smooth modal close (generation-safe) ===');
+    {
+        const modalClosePage = await browser.newPage();
+        await modalClosePage.setContent(buildModalCloseAnimationFixture());
+        await runModalCloseAnimationChecks(modalClosePage, engine.name);
+        await modalClosePage.close();
     }
 
     await browser.close();
