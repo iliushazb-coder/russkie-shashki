@@ -2633,9 +2633,9 @@ function playMoveGhostAnimation(capturedSnapshots) {
 // Смена текстуры «в середине» получается сама собой: под наложением уже
 // лежит настоящая дамка, наложение показывает ОБЫЧНУЮ текстуру и к
 // середине эффекта исчезает, открывая её.
-// Ровно вдвое медленнее прежних 340 мс -- по прямому запросу владельца
-// после ручного теста. Форма flip, траектория, высота подъёма, момент
-// смены текстуры и glow НЕ менялись: эффект только растянут во времени.
+// Длительность подбиралась владельцем вручную: 340 -> 680 -> 1500 мс.
+// Менялась только она -- форма flip, траектория, высота подъёма, момент
+// смены текстуры и glow во всех правках оставались прежними.
 //
 // Это ЕДИНСТВЕННЫЙ источник истины: значение уезжает в CSS переменной
 // (см. ниже), поэтому flip и glow берут его отсюда, а fallback cleanup
@@ -2663,6 +2663,29 @@ const KING_PROMOTION_SOUND_DELAY_MS = Math.max(0, Math.round(
     + KING_PROMOTION_DURATION_MS * KING_PROMOTION_REVEAL_FRACTION
     - KING_SOUND_RESOLVE_OFFSET_MS
 ));
+
+// Фактическая задержка запуска мотива.
+//
+// При включённом «Уменьшении движения» наложения выключены, и настоящая
+// дамка открывается сразу после полёта -- примерно на
+// MOVE_GHOST_DURATION_MS. Длинная задержка, рассчитанная под полуторную
+// секунду вращения, в этом режиме приводила бы мотив почти на 700 мс
+// позже уже видимой дамки.
+//
+// Подогнать последнюю ноту и здесь невозможно: она звучит на
+// KING_SOUND_RESOLVE_OFFSET_MS, а это позже момента появления, то есть
+// потребовалась бы отрицательная задержка. Поэтому просто запускаем без
+// задержки -- ближайшее достижимое совпадение, и ровно то, что просил
+// владелец.
+//
+// Значение читается при каждом вызове, а не кэшируется: пользователь
+// может переключить настройку, не перезагружая мини-апп.
+function kingPromotionSoundDelayMs() {
+    const mm = typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-reduced-motion: reduce)")
+        : null;
+    return (mm && mm.matches) ? 0 : KING_PROMOTION_SOUND_DELAY_MS;
+}
 
 function playKingPromotionEffect() {
     if (!currentState || currentState.moveType !== "king" || !currentState.lastMove) return;
@@ -4226,7 +4249,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
         pendingMoveStartedAt = Date.now();
         syncRecoveryFailed = false;
 
-        playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing, KING_PROMOTION_SOUND_DELAY_MS);
+        playSoundForMoveType(optimisticResult.moveType, movingPieceWasKing, kingPromotionSoundDelayMs());
         renderBoard();
 
         // №23: завершающий сегмент рейтингового хода (mustContinueFrom===null)
@@ -4348,7 +4371,7 @@ function performMove(fromRow, fromCol, toRow, toCol) {
                 currentState.winReason = drawState.drawReason;
             }
             selectedFrom = result.mustContinueFrom ? { row: result.mustContinueFrom.row, col: result.mustContinueFrom.col } : null;
-            playSoundForMoveType(result.moveType, movingPieceWasKing, KING_PROMOTION_SOUND_DELAY_MS);
+            playSoundForMoveType(result.moveType, movingPieceWasKing, kingPromotionSoundDelayMs());
             renderBoard();
             if (isBotGame && !localOnlyBotGame) syncBotStateToFirebase();
         }
@@ -4565,7 +4588,7 @@ function startOnlineGame() {
                     const fromKey = currentState.lastMove.from.row + "_" + currentState.lastMove.from.col;
                     movingPieceWasKing = !!(piecesBeforeThisUpdate[fromKey] && piecesBeforeThisUpdate[fromKey].king);
                 }
-                playSoundForMoveType(currentState.moveType, movingPieceWasKing, KING_PROMOTION_SOUND_DELAY_MS);
+                playSoundForMoveType(currentState.moveType, movingPieceWasKing, kingPromotionSoundDelayMs());
             }
             lastSeenMoveCount = currentState.moveCount;
             lastRenderedSignature = newSignature;
@@ -5196,7 +5219,7 @@ function onOwnerSessionUpdate(session) {
     }
 
     if (!isFirstDeliverySinceAttach && session.revision !== lastRenderedOwnerRevision) {
-        playSoundForMoveType(currentState.moveType, currentState.moveType === "king", KING_PROMOTION_SOUND_DELAY_MS);
+        playSoundForMoveType(currentState.moveType, currentState.moveType === "king", kingPromotionSoundDelayMs());
     }
     lastRenderedOwnerRevision = session.revision;
 

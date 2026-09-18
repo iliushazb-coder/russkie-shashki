@@ -893,8 +893,10 @@ console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИ
         const b = funcBody(AUDIO, 'playKingSound');
         return !!b && /source\.start\(audioContext\.currentTime \+/.test(b) && !/setTimeout/.test(b);
     })());
+    // Задержка теперь приходит функцией: она различает обычный режим и
+    // reduced-motion. Проверяем, что она проброшена во все точки.
     check('17.10 задержка проброшена во все точки вызова',
-        (CLEAN.match(/playSoundForMoveType\([^)]*KING_PROMOTION_SOUND_DELAY_MS\)/g) || []).length === 4);
+        (CLEAN.match(/playSoundForMoveType\([^)]*kingPromotionSoundDelayMs\(\)\)/g) || []).length === 4);
     check('17.11 сам WAV не изменён и не растянут', (function () {
         const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
         const b = funcBody(AUDIO, 'playKingSound');
@@ -1082,6 +1084,68 @@ console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА 
             if (saved[k] === undefined) delete global[k]; else global[k] = saved[k];
         });
     })();
+}
+
+console.log('\n=== 19. ЗАДЕРЖКА ЗВУКА ПРИ REDUCED-MOTION ===');
+{
+    // При выключенном движении наложения не показываются, и настоящая
+    // дамка открывается сразу после полёта. Длинная задержка, рассчитанная
+    // под полуторную секунду вращения, привела бы мотив почти на 700 мс
+    // позже уже видимой дамки.
+    const fn = funcBody(CLEAN, 'kingPromotionSoundDelayMs');
+    check('19.1 функция задержки существует', !!fn);
+    check('19.2 задержка вычисляется при каждом вызове, а не кэшируется',
+        !!fn && /window\.matchMedia\("\(prefers-reduced-motion: reduce\)"\)/.test(fn));
+
+    if (fn) {
+        const saved = global.window;
+        const constM = /const KING_PROMOTION_SOUND_DELAY_MS = Math\.max\(0, Math\.round\(([\s\S]*?)\)\);/.exec(CLEAN);
+        check('19.3 базовая константа по-прежнему выводится из таймингов', !!constM);
+
+        const ghost = parseFloat(/const MOVE_GHOST_DURATION_MS = ([\d.]+)/.exec(CLEAN)[1]);
+        const dur = parseFloat(/const KING_PROMOTION_DURATION_MS = ([\d.]+)/.exec(CLEAN)[1]);
+        const frac = parseFloat(/const KING_PROMOTION_REVEAL_FRACTION = ([\d.]+)/.exec(CLEAN)[1]);
+        const off = parseFloat(/const KING_SOUND_RESOLVE_OFFSET_MS = ([\d.]+)/.exec(CLEAN)[1]);
+        global.KING_PROMOTION_SOUND_DELAY_MS = Math.max(0, Math.round(ghost + dur * frac - off));
+
+        // eslint-disable-next-line no-eval
+        eval(fn);
+
+        global.window = { matchMedia: function () { return { matches: false }; } };
+        const normal = kingPromotionSoundDelayMs();
+        global.window = { matchMedia: function () { return { matches: true }; } };
+        const reduced = kingPromotionSoundDelayMs();
+        global.window = {};
+        const noMM = kingPromotionSoundDelayMs();
+        global.window = saved;
+
+        check('19.4 обычный режим -> 818 мс', normal === 818, String(normal));
+        check('19.5 reduced-motion -> длинной задержки нет', reduced === 0, String(reduced));
+        check('19.6 без matchMedia остаётся обычное поведение', noMM === 818, String(noMM));
+        check('19.7 режимы действительно различаются', normal !== reduced);
+    }
+
+    // Все точки вызова обязаны спрашивать функцию, а не константу.
+    check('19.8 все четыре вызова используют функцию, а не константу напрямую',
+        (CLEAN.match(/playSoundForMoveType\([^)]*kingPromotionSoundDelayMs\(\)\)/g) || []).length === 4);
+    check('19.9 константа больше не передаётся в звук напрямую',
+        !/playSoundForMoveType\([^)]*KING_PROMOTION_SOUND_DELAY_MS\)/.test(CLEAN));
+
+    // Отмена и приоритет исхода не задеты этой правкой.
+    check('19.10 cancelKingSound по-прежнему подключена к обеим точкам',
+        /if \(screen !== gameScreen\) cancelKingSound\(\);/.test(CLEAN) &&
+        (function () {
+            const b = funcBody(CLEAN, 'playEndGameOutcomeSound');
+            return !!b && b.indexOf('cancelKingSound()') !== -1;
+        })());
+    check('19.11 для выбора задержки не используется setTimeout',
+        !!fn && !/setTimeout/.test(fn));
+    check('19.12 1500 мс и 540 градусов не тронуты',
+        /const KING_PROMOTION_DURATION_MS = 1500;/.test(CLEAN) && /rotateX\(540deg\)/.test(CSS));
+
+    // Устаревший комментарий про «вдвое медленнее» должен быть исправлен.
+    check('19.13 комментарий о длительности не утверждает неверное',
+        !/вдвое медленнее прежних 340/.test(SRC));
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
