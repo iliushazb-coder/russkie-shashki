@@ -909,14 +909,16 @@ async function runModalCloseAnimationChecks(page, engineName) {
     check(engineName + ' 3B: focus вернулся на trigger ДО конца анимации',
         state.active === 'ext-trigger', state.active);
 
-    await page.waitForFunction(function () {
-        return document.getElementById('resign-confirm-modal').classList.contains('hidden');
-    }, null, { timeout: 1200 });
+    // Не используем waitForFunction(): он по умолчанию поллится через
+    // requestAnimationFrame, который headless WebKit может сильно
+    // притормозить. Ждём дольше production fallback (260ms) и затем
+    // измеряем фактическое DOM-состояние напрямую.
+    await page.waitForTimeout(400);
     state = await page.evaluate(function () {
         const m = document.getElementById('resign-confirm-modal');
         return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
     });
-    check(engineName + ' 3B: после animationend modal реально hidden и closing снят',
+    check(engineName + ' 3B: после animationend/fallback modal реально hidden и closing снят',
         state.hidden && !state.closing, JSON.stringify(state));
 
     // 2) Повторный close не создаёт новый цикл.
@@ -925,9 +927,11 @@ async function runModalCloseAnimationChecks(page, engineName) {
         const m = document.getElementById('resign-confirm-modal');
         openModal(m); closeModal(m); closeModal(m);
     });
-    await page.waitForFunction(function () {
-        return document.getElementById('resign-confirm-modal').classList.contains('hidden');
-    }, null, { timeout: 1200 });
+    // Не используем waitForFunction(): он по умолчанию поллится через
+    // requestAnimationFrame, который headless WebKit может сильно
+    // притормозить. Ждём дольше production fallback (260ms) и затем
+    // измеряем фактическое DOM-состояние напрямую.
+    await page.waitForTimeout(400);
     check(engineName + ' 3B: повторный close безопасен',
         await page.evaluate(function () {
             const m = document.getElementById('resign-confirm-modal');
