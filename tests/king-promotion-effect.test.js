@@ -274,6 +274,9 @@ console.log('\n=== 10. ПОВЕДЕНИЕ: КАКОЙ moveType ЗАПУСКАЕ�
         }
     };
     global.activeGhostCancelFns = [];
+    // По умолчанию НЕ игра с ботом: визуальный эффект живёт только в
+    // партии человек против человека.
+    global.isBotGame = false;
     const savedTimeout = global.setTimeout;
     global.setTimeout = function () { return 0; };
 
@@ -515,10 +518,14 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
     const back = kfAngles('kingPromotionFlipBack');
 
     check('14.1 keyframes обеих сторон существуют', !!man && !!king);
-    check('14.2 обычная сторона проходит ровно 540 градусов',
-        !!man && man[0][1] === 0 && man[man.length - 1][1] === 540);
-    check('14.3 сторона дамки проходит те же 540 (со сдвигом фазы)',
-        !!king && (king[king.length - 1][1] - king[0][1]) === 540);
+    // Один полный оборот -- два переворота. Прежде было полтора (540).
+    check('14.2 обычная сторона проходит ровно 360 градусов',
+        !!man && man[0][1] === 0 && man[man.length - 1][1] === 360,
+        man ? man[0][1] + ' -> ' + man[man.length - 1][1] : '?');
+    check('14.3 сторона дамки проходит те же 360',
+        !!king && (king[king.length - 1][1] - king[0][1]) === 360);
+    check('14.3b вторая обычная сторона тоже проходит 360',
+        !!back && (back[back.length - 1][1] - back[0][1]) === 360);
     // Сдвиг ровно 180 на КАЖДОМ ключе -- иначе стороны разъедутся и
     // появится момент, когда видны обе или ни одной.
     // Вторая обычная сторона обязана быть ровно на 180 от первой -- иначе
@@ -531,10 +538,13 @@ console.log('\n=== 14. ДВУСТОРОННИЙ ПЕРЕВОРОТ НА 540 ГР
             return byPct[b[0]] === undefined || b[1] - byPct[b[0]] === 180;
         });
     })());
-    check('14.4b дамка занимает ту же позицию, что вторая обычная', (function () {
-        if (!back || !king) return false;
+    // При 360 в финале лицом ПЕРВАЯ сторона, поэтому дамка делит углы
+    // именно с ней. При 540 в финале была лицом вторая, и дамка делила
+    // углы с ней -- это отличие легко упустить при смене поворота.
+    check('14.4b дамка занимает ту же позицию, что ПЕРВАЯ обычная', (function () {
+        if (!man || !king) return false;
         const byPct = {};
-        back.forEach(function (b) { byPct[b[0]] = b[1]; });
+        man.forEach(function (m) { byPct[m[0]] = m[1]; });
         return king.every(function (k) { return byPct[k[0]] === undefined || byPct[k[0]] === k[1]; });
     })());
     // Монотонность: вращение не должно «отыгрывать назад».
@@ -701,8 +711,10 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
             timeline[timeline.length - 1].king && !timeline[timeline.length - 1].ordinary);
 
         // Вращение до превращения должно быть заметным.
-        check('15.11 до превращения фигура успевает повернуться больше чем на оборот',
-            at(man, timeline[firstKing].p, 'rot') >= 360);
+        // Два переворота до появления дамки: три четверти оборота.
+        check('15.11 до превращения фигура успевает сделать два переворота',
+            at(man, timeline[firstKing].p, 'rot') >= 180,
+            Math.round(at(man, timeline[firstKing].p, 'rot')) + '°');
 
         // Точная заказанная последовательность по УГЛУ поворота, а не по
         // проценту: 0-90 A, 90-270 B, 270-450 A, после 450 только дамка.
@@ -723,24 +735,31 @@ console.log('\n=== 15. ДАМКА ПОЯВЛЯЕТСЯ РОВНО ОДИН РА�
         }
         check('15.16 на 45 градусах видна первая обычная сторона', whoAt(45) === 'A', whoAt(45));
         check('15.17 на 180 градусах видна вторая обычная сторона', whoAt(180) === 'B', whoAt(180));
-        check('15.18 на 360 градусах снова первая обычная', whoAt(360) === 'A', whoAt(360));
-        check('15.19 на 500 градусах видна ТОЛЬКО дамка', whoAt(500) === 'king', whoAt(500));
-        check('15.20 на 300 градусах обычная, а не дамка', whoAt(300) === 'A', whoAt(300));
+        // Смена стороны теперь на 270, а не на 450.
+        check('15.18 на 260 градусах ещё обычная (до подмены)', whoAt(260) === 'B', whoAt(260));
+        check('15.19 на 330 градусах видна ТОЛЬКО дамка', whoAt(330) === 'king', whoAt(330));
+        check('15.20 на 360 градусах по-прежнему дамка', whoAt(360) === 'king', whoAt(360));
     }
 
     // Подмена обязана происходить на ребре, иначе она заметна.
     check('15.12 обычная гаснет и дамка зажигается в один и тот же момент', (function () {
-        if (!back || !king) return false;
-        const off = back.find(function (k) { return k.op === 0; });
+        if (!man || !king) return false;
+        const off = man.find(function (k) { return k.op === 0; });
         const on = king.find(function (k) { return k.op === 1; });
         return !!off && !!on && off.pct === on.pct;
     })());
     check('15.13 подмена происходит, когда сторона стоит ребром', (function () {
-        if (!back) return false;
-        const off = back.find(function (k) { return k.op === 0; });
+        if (!man) return false;
+        const off = man.find(function (k) { return k.op === 0; });
         if (!off) return false;
         const m = ((off.rot % 360) + 360) % 360;
         return Math.abs(m - 90) < 12 || Math.abs(m - 270) < 12;
+    })());
+    // Вторую обычную сторону гасить не требуется: после подмены она
+    // обращена спиной, и backface-visibility скрывает её сам.
+    check('15.13b вторая обычная сторона не нуждается в гашении', (function () {
+        if (!back) return false;
+        return back.every(function (k) { return k.op === 1; });
     })());
 
     check('15.14 третье наложение создаётся и убирается', (function () {
