@@ -41,6 +41,7 @@ const FILES = [
   ['R5. ПОЯВЛЕНИЕ ЭКРАНОВ', 'screen-enter-animation.test.js'],
   ['R6. ВСПЫШКА НАЖАТИЯ КНОПКИ', 'button-press-flash.test.js'],
   ['R7. АНИМАЦИЯ ПРЕВРАЩЕНИЯ БОТА', 'bot-promotion-animation.test.js'],
+  ['R8. ЦЕНТРИРОВАНИЕ ФИШЕК', 'piece-image-centering.test.js'],
   ['S. BOTH-OFFLINE 60s + ЗАКРЫТИЕ ПУТЕЙ ВОСКРЕШЕНИЯ (v184)', 'both-offline-abandoned.test.js'],
   ['T. CLOCK SAFETY — серверное время вместо часов телефона', 'clock-safety.test.js'],
   ['U. ТАБЛИЦА СТАТИСТИКИ — ВСЕ ИГРОКИ В ОБЕИХ ВКЛАДКАХ', 'leaderboard-all-players.test.js'],

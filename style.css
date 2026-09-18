@@ -1441,9 +1441,21 @@ button.danger-button.button-press-flash::after {
     display: none !important;
 }
 
+/* background-position: center во всех четырёх правилах ниже -- без
+   него браузер выравнивает фон по умолчанию слева сверху (0% 0%), а не по
+   центру элемента. С background-size: contain это почти не заметно, когда
+   пропорции элемента и картинки совпадают тютелька в тютельку, но на
+   Android Telegram и в Desktop-клиенте ширина/высота клетки редко выходят
+   ровно целым числом пикселей -- и тогда contain оставляет асимметричные
+   поля, которые без center уходят в один угол, а не делятся поровну.
+   Сами PNG проверены -- 200x200, содержимое симметрично с точностью до
+   антиалиасинга (поля 1px со всех сторон) -- проблема была только здесь.
+   promotion-overlay (king-promotion-flip-king) уже использовал center;
+   теперь то же правило -- и у статичных фигур. */
 .piece-dark {
     background-image: url('assets/piece_dark.png?v=2') !important;
     background-size: contain !important;
+    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
     /* Выделяем тёмные шашки в отдельный слой видеокарты (как это уже происходит
@@ -1455,6 +1467,7 @@ button.danger-button.button-press-flash::after {
 .piece-light {
     background-image: url('assets/piece_light.png?v=2') !important;
     background-size: contain !important;
+    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
@@ -1462,6 +1475,7 @@ button.danger-button.button-press-flash::after {
 .piece-dark.king {
     background-image: url('assets/king_dark.png?v=2') !important;
     background-size: contain !important;
+    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
@@ -1469,6 +1483,7 @@ button.danger-button.button-press-flash::after {
 .piece-light.king {
     background-image: url('assets/king_light.png?v=2') !important;
     background-size: contain !important;
+    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
