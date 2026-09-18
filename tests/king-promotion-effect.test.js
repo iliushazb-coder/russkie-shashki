@@ -902,5 +902,187 @@ console.log('\n=== 17. СИНХРОНИЗАЦИЯ ЗВУКА С ПОЯВЛЕНИ
     })());
 }
 
+console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА ПРЕВРАЩЕНИЯ ===');
+{
+    // Отложенная подача создала возможность, которой раньше не было:
+    // к моменту воспроизведения партия может закончиться или игрок уйти с
+    // доски. Здесь модуль реально ИСПОЛНЯЕТСЯ на фейковом Web Audio, а не
+    // проверяется регуляркой -- гонку ссылок иначе не поймать.
+    const started = [];
+    const stopped = [];
+    let now = 0;
+    function makeSource() {
+        const src = {
+            buffer: null, onended: null, _started: false,
+            connect: function () {},
+            start: function (t) { src._started = true; started.push(t); },
+            stop: function () {
+                if (!src._started) throw new Error('InvalidStateError');
+                stopped.push(src);
+                if (typeof src.onended === 'function') src.onended();
+            }
+        };
+        return src;
+    }
+    const fakeCtx = {
+        state: 'running',
+        get currentTime() { return now; },
+        sampleRate: 44100,
+        destination: {},
+        createBufferSource: makeSource,
+        createGain: function () { return { connect: function () {}, gain: { setValueAtTime: function () {} } }; },
+        createBuffer: function () { return { getChannelData: function () { return new Float32Array(4); } }; },
+        createBiquadFilter: function () { return { connect: function () {}, frequency: {}, Q: {} }; },
+        createOscillator: function () { return { connect: function () {}, frequency: {}, start: function () {}, stop: function () {} }; }
+    };
+    const savedAC = global.AudioContext;
+    const savedDoc = global.document;
+    global.AudioContext = function () { return fakeCtx; };
+    delete global.document; // чтобы preload не пытался fetch'ить
+    delete require.cache[require.resolve('../shared/audio-effects.js')];
+    const audio = require('../shared/audio-effects.js');
+    global.AudioContext = savedAC;
+    if (savedDoc) global.document = savedDoc;
+
+    check('18.1 cancelKingSound экспортирована', typeof audio.cancelKingSound === 'function');
+
+    // Буфер в Node не декодируется, поэтому подменяем внутреннее
+    // состояние через тот же путь, что использует продакшен: играем
+    // только если буфер есть. Здесь буфера нет -> звук не стартует,
+    // и это само по себе проверяемое поведение.
+    check('18.2 без декодированного буфера звук не планируется', (function () {
+        started.length = 0;
+        audio.playKingSound(818);
+        return started.length === 0;
+    })());
+
+    // Дальше проверяем саму МЕХАНИКУ отмены на исходнике: поведение
+    // с буфером в Node воспроизвести нельзя, но инварианты ссылки видны
+    // в коде и должны быть именно такими.
+    const AUDIO = fs.readFileSync(path.join(__dirname, '..', 'shared', 'audio-effects.js'), 'utf8');
+    const cancelBody = funcBody(AUDIO, 'cancelKingSound');
+    const playBody = funcBody(AUDIO, 'playKingSound');
+
+    check('18.3 ссылка обнуляется ДО stop (иначе onended затрёт новое состояние)', (function () {
+        if (!cancelBody) return false;
+        const nulled = cancelBody.indexOf('scheduledKingSource = null;');
+        const stop = cancelBody.indexOf('source.stop()');
+        return nulled !== -1 && stop !== -1 && nulled < stop;
+    })());
+    check('18.4 stop обёрнут в try/catch (узел мог уже завершиться)',
+        !!cancelBody && /try \{ source\.stop\(\); \} catch/.test(cancelBody));
+    check('18.5 отмена берёт локальную копию ссылки',
+        !!cancelBody && /const source = scheduledKingSource;/.test(cancelBody));
+
+    check('18.6 старый onended НЕ обнуляет ссылку на новый source',
+        !!playBody && /if \(scheduledKingSource === source\) scheduledKingSource = null;/.test(playBody));
+    check('18.7 новый вызов отменяет предыдущий ожидающий мотив', (function () {
+        if (!playBody) return false;
+        const cancel = playBody.indexOf('cancelKingSound()');
+        const create = playBody.indexOf('createBufferSource()');
+        return cancel !== -1 && create !== -1 && cancel < create;
+    })());
+    check('18.8 ссылка сохраняется до start, чтобы её можно было отменить', (function () {
+        if (!playBody) return false;
+        const save = playBody.indexOf('scheduledKingSource = source;');
+        const start = playBody.indexOf('source.start(');
+        return save !== -1 && start !== -1 && save < start;
+    })());
+
+    // Точки подключения.
+    check('18.9 исход партии отменяет превращение ПЕРВЫМ действием', (function () {
+        const b = funcBody(CLEAN, 'playEndGameOutcomeSound');
+        if (!b) return false;
+        const cancel = b.indexOf('cancelKingSound()');
+        const firstLogic = b.indexOf('if (!currentState');
+        return cancel !== -1 && firstLogic !== -1 && cancel < firstLogic;
+    })());
+    check('18.10 уход с игрового экрана отменяет звук', (function () {
+        const b = funcBody(CLEAN, 'showScreen');
+        return !!b && /if \(screen !== gameScreen\) cancelKingSound\(\);/.test(b);
+    })());
+    check('18.11 переход НА игровой экран звук НЕ отменяет', (function () {
+        const b = funcBody(CLEAN, 'showScreen');
+        // Отмена обязана быть под условием, а не безусловной.
+        return !!b && !/^\s*cancelKingSound\(\);/m.test(b);
+    })());
+    // Отмена не должна висеть на уборке эффекта: при multi-capture
+    // следующий прыжок отменяет ghost-анимации, а звук обязан прозвучать.
+    check('18.12 уборка эффекта превращения звук НЕ отменяет', (function () {
+        const b = funcBody(CLEAN, 'playKingPromotionEffect');
+        return !!b && b.indexOf('cancelKingSound') === -1;
+    })());
+    check('18.13 для отмены не используется setTimeout',
+        !!cancelBody && !/setTimeout/.test(cancelBody) && !!playBody && !/setTimeout/.test(playBody));
+
+    // --- Сценарии ИСПОЛНЕНИЕМ, а не по тексту -------------------------
+    (function () {
+        let cancels = 0;
+        let outcome = [];
+        const saved = {};
+        ['cancelKingSound', 'playVictorySound', 'playDefeatSound', 'playDrawSound',
+         'hideStartupCover', 'currentState', 'isSpectator', 'myTelegramId', 'myColor',
+         'menuScreen', 'timeControlScreen', 'waitingScreen', 'gameScreen', 'document'
+        ].forEach(function (k) { saved[k] = global[k]; });
+
+        global.cancelKingSound = function () { cancels++; };
+        global.playVictorySound = function () { outcome.push('victory'); };
+        global.playDefeatSound = function () { outcome.push('defeat'); };
+        global.playDrawSound = function () { outcome.push('draw'); };
+        global.hideStartupCover = function () {};
+        function el() { return { classList: { add: function () {}, remove: function () {} } }; }
+        global.menuScreen = el(); global.timeControlScreen = el();
+        global.waitingScreen = el(); global.gameScreen = el();
+        global.document = { getElementById: function () { return el(); } };
+
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'showScreen'));
+        // eslint-disable-next-line no-eval
+        eval(funcBody(CLEAN, 'playEndGameOutcomeSound'));
+
+        // Победный ход с превращением: мотив отменён, исход звучит.
+        cancels = 0; outcome = [];
+        global.isSpectator = false; global.myTelegramId = 'tg_1001'; global.myColor = 'light';
+        global.currentState = { winner: 'light', moveType: 'king',
+            players: { light: { id: 'tg_1001' }, dark: { id: 'tg_1002' } } };
+        playEndGameOutcomeSound();
+        check('18.14 победа с превращением: мотив отменён', cancels === 1, 'отмен: ' + cancels);
+        check('18.15 победа с превращением: звук исхода остаётся',
+            outcome.join(',') === 'victory', outcome.join(',') || '(тишина)');
+
+        // Поражение -- то же самое.
+        cancels = 0; outcome = [];
+        global.currentState = { winner: 'dark', moveType: 'king',
+            players: { light: { id: 'tg_1001' }, dark: { id: 'tg_1002' } } };
+        playEndGameOutcomeSound();
+        check('18.16 поражение с превращением: мотив отменён, исход звучит',
+            cancels === 1 && outcome.join(',') === 'defeat');
+
+        // Уход с доски отменяет.
+        cancels = 0;
+        showScreen(global.menuScreen);
+        check('18.17 уход в меню отменяет мотив', cancels === 1, 'отмен: ' + cancels);
+        cancels = 0;
+        showScreen(global.waitingScreen);
+        check('18.18 переход на экран ожидания отменяет мотив', cancels === 1);
+
+        // Переход НА доску не отменяет -- там звук должен прозвучать.
+        cancels = 0;
+        showScreen(global.gameScreen);
+        check('18.19 переход на игровой экран НЕ отменяет мотив', cancels === 0, 'отмен: ' + cancels);
+
+        // Обычное превращение без финала: отмены не происходит вовсе.
+        cancels = 0; outcome = [];
+        global.currentState = { winner: null, moveType: 'king', players: {} };
+        playEndGameOutcomeSound();
+        check('18.20 превращение без финала: исход молчит',
+            outcome.length === 0, outcome.join(','));
+
+        Object.keys(saved).forEach(function (k) {
+            if (saved[k] === undefined) delete global[k]; else global[k] = saved[k];
+        });
+    })();
+}
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);

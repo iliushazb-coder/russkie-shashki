@@ -112,6 +112,26 @@
         return kingSoundPending;
     }
 
+    // Запланированный, но ещё не прозвучавший мотив превращения.
+    // Отложенная подача (звук стартует почти через секунду после хода)
+    // создала возможность, которой раньше не было: к моменту
+    // воспроизведения партия может уже закончиться или игрок может уйти с
+    // доски. Такой звук надо уметь отменять.
+    let scheduledKingSource = null;
+
+    // stop() на узле, который запланирован, но ещё не начался, по
+    // спецификации отменяет воспроизведение -- это штатная идиома Web
+    // Audio, без таймеров. Если звук уже отзвучал, вызов безвреден.
+    //
+    // Ссылка обнуляется ДО stop(): иначе синхронный onended успел бы
+    // выполниться раньше и затереть состояние, выставленное позже.
+    function cancelKingSound() {
+        const source = scheduledKingSource;
+        if (!source) return;
+        scheduledKingSource = null;
+        try { source.stop(); } catch (e) { /* узел уже завершён -- не страшно */ }
+    }
+
     // delayMs -- ОТЛОЖЕННЫЙ старт через планировщик Web Audio, не через
     // setTimeout. source.start(время) ставит воспроизведение на точку
     // аудио-часов: она не зависит от загруженности главного потока, тогда
@@ -131,6 +151,10 @@
             preloadKingSound();
             return;
         }
+        // Новый мотив отменяет предыдущий, ещё не прозвучавший: двух
+        // запланированных превращений одновременно быть не должно.
+        cancelKingSound();
+
         const source = audioContext.createBufferSource();
         const gainNode = audioContext.createGain();
         source.buffer = kingSoundBuffer;
@@ -138,6 +162,15 @@
         source.connect(gainNode);
         gainNode.connect(audioContext.destination);
         const startDelaySec = (typeof delayMs === "number" && delayMs > 0) ? delayMs / 1000 : 0;
+
+        scheduledKingSource = source;
+        // Сверка с source обязательна. Без неё onended СТАРОГО узла, придя
+        // с опозданием, обнулил бы ссылку на уже запланированный НОВЫЙ --
+        // и тот стало бы невозможно отменить.
+        source.onended = function () {
+            if (scheduledKingSource === source) scheduledKingSource = null;
+        };
+
         source.start(audioContext.currentTime + startDelaySec);
     }
 
@@ -213,6 +246,7 @@
         playMoveSound,
         playCaptureSound,
         playKingSound,
+        cancelKingSound,
         preloadKingSound,
         playKingCaptureSound,
         playWinSound,

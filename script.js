@@ -1127,6 +1127,16 @@ function closeModal(modal) {
 
 function showScreen(screen) {
     hideStartupCover();
+    // Уходим с доски -- снимаем ещё не прозвучавший мотив превращения.
+    // Звук стартует почти через секунду после хода, поэтому игрок успевает
+    // выйти в меню или из партии зрителем раньше, чем мотив зазвучит, и
+    // тот догнал бы его уже на другом экране.
+    //
+    // Переход НА игровой экран ничего не отменяет: там звук как раз и
+    // должен прозвучать. И это ниже hideStartupCover() намеренно: тот
+    // обязан оставаться первой строкой функции, что закреплено отдельным
+    // тестом в startup-cover.
+    if (screen !== gameScreen) cancelKingSound();
     menuScreen.classList.add("hidden");
     timeControlScreen.classList.add("hidden");
     waitingScreen.classList.add("hidden");
@@ -1182,6 +1192,7 @@ const {
     playMoveSound,
     playCaptureSound,
     playKingSound,
+    cancelKingSound,
     playKingCaptureSound,
     playWinSound,
     playVictorySound,
@@ -3067,6 +3078,13 @@ function buildDrawResultText(winReason) {
 // ни победы, ни поражения. Ничья -- исход самой партии, а не игрока,
 // поэтому её зритель слышит наравне со всеми.
 function playEndGameOutcomeSound() {
+    // Исход партии важнее превращения. Ход может быть одновременно
+    // превращением и победным (движок считает moveType и winner
+    // независимо), а мотив дамки к этому моменту уже запланирован на
+    // KING_PROMOTION_SOUND_DELAY_MS вперёд -- без отмены он догнал бы
+    // экран результата почти через секунду после фанфары.
+    cancelKingSound();
+
     if (!currentState || !currentState.winner) return;
 
     if (currentState.winner === "draw") {
