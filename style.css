@@ -641,6 +641,16 @@ h1 {
     animation: none !important;
 }
 
+/* Настоящая дамка прячется на время превращения. Отдельный класс, а не
+   piece-hidden-for-ghost: тот снимается по окончании полёта (150 мс), а
+   эффект живёт дольше. Без этого в моменты, когда обе обычные стороны
+   стоят ребром (90 и 270 градусов), сквозь них проглядывала бы уже
+   готовая дамка -- то есть превращение было бы видно раньше времени. */
+.piece-hidden-for-promotion {
+    opacity: 0 !important;
+    animation: none !important;
+}
+
 @keyframes pieceAppear {
     0% { transform: scale(0.5); opacity: 0.3; }
     100% { transform: scale(1); opacity: 1; }
@@ -1585,7 +1595,27 @@ h1 {
    Текстура меняется «в середине» без единой строчки JS: под наложением
    уже лежит готовая дамка, а наложение показывает обычную шашку и к
    середине эффекта растворяется, открывая её. */
-.king-promotion-flip {
+/* ТРИ НАЛОЖЕНИЯ, ОДНА ФИГУРА.
+   Две ОБЫЧНЫЕ стороны разнесены на 180 градусов: вместе с
+   backface-visibility: hidden они покрывают весь оборот непрерывно, и
+   обычная шашка видна всё время вращения без провалов в невидимость.
+   Одним элементом так не выйдет: при 540 градусах он пропадал бы дважды
+   (90-270 и 450-540).
+
+   Третье наложение -- дамка. Оно включается РОВНО ОДИН РАЗ, на последней
+   четверти оборота, и обратно уже не выключается. Переключение
+   происходит на 450 градусах, когда обе стороны стоят ребром к зрителю,
+   поэтому самой подмены не видно.
+
+   Раньше сторон было две (обычная и дамка, сдвиг 180), и это давало
+   чередование обычная -> дамка -> обычная -> дамка: дамка появлялась уже
+   на 90 градусах и потом пропадала. Семантика превращения требует
+   обратного -- дамка возникает один раз и остаётся.
+   perspective задаётся прямо в keyframes, а не на клетке: так объёмность
+   остаётся локальной для эффекта и не влияет на раскладку доски. */
+.king-promotion-flip,
+.king-promotion-flip-back,
+.king-promotion-flip-king {
     position: absolute;
     inset: 0;
     margin: auto;
@@ -1612,7 +1642,37 @@ h1 {
        проиграется -- а наложение останется невидимым из-за opacity: 0 выше
        и будет снято обычной уборкой. То есть деградация тихая и
        безопасная, без рассинхронизованной анимации. */
-    animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.34,1.12,.52,1) var(--king-promotion-delay, 0ms) forwards !important;
+    animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Вторая ОБЫЧНАЯ сторона: тот же тайминг, угол смещён на 180. */
+.king-promotion-flip-back {
+    animation: kingPromotionFlipBack var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Сторона дамки: та же позиция, что у второй обычной, но появляется
+   только на финальной четверти. */
+.king-promotion-flip-king {
+    animation: kingPromotionFlipKing var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Текстура дамки БЕЗ класса .king -- он несёт transform: scale(1.1)
+   !important, который подавил бы анимацию. Специфичность (0,2,0) выше,
+   чем у .piece-dark / .piece-light, поэтому !important не нужен. */
+.king-promotion-flip-king.piece-dark {
+    background-image: url('assets/king_dark.png?v=2');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-color: transparent;
+}
+
+.king-promotion-flip-king.piece-light {
+    background-image: url('assets/king_light.png?v=2');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-color: transparent;
 }
 
 /* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
@@ -1635,20 +1695,59 @@ h1 {
     animation: kingPromotionGlow var(--king-promotion-duration) ease-out var(--king-promotion-delay, 0ms) forwards;
 }
 
+/* Полтора оборота за один проход. Ключ на 72% ставит фигуру ровно на
+   450 градусов -- это ребро, и именно там обычная сторона уступает место
+   дамке. Все три наложения идут по ОДНОЙ траектории подъёма и масштаба,
+   различаются только углом и моментом включения.
+   Финальный scale(1.1) совпадает с размером настоящей дамки (.king имеет
+   scale(1.1)), поэтому снятия наложений не видно. */
 @keyframes kingPromotionFlip {
-    /* Подъём и разгон поворота -- ещё обычная шашка */
-    0%   { transform: translateY(0) rotateX(0deg) scale(1);      opacity: 1; }
-    30%  { transform: translateY(-18%) rotateX(70deg) scale(1.1); opacity: 1; }
-    /* Середина: ребро повёрнуто к зрителю, наложение исчезает и открывает
-       уже отрисованную дамку -- это и есть «смена текстуры» */
-    52%  { transform: translateY(-20%) rotateX(90deg) scale(1.12); opacity: 0; }
-    100% { transform: translateY(0) rotateX(180deg) scale(1);     opacity: 0; }
+    /* opacity: 1 нужен ЯВНО на каждом кадре. В общем селекторе стоит
+       базовое opacity: 0 (чтобы до старта анимации ничего не мелькало
+       поверх летящей шашки), а свойство, не упомянутое в keyframes,
+       сохраняет базовое значение -- без этих строк первая обычная сторона
+       была бы невидимой всю анимацию. */
+    0%   { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 1; }
+    12%  { transform: perspective(620px) translateY(-11%) rotateX(52deg)  scale(1.06); opacity: 1; }
+    38%  { transform: perspective(620px) translateY(-28%) rotateX(258deg) scale(1.17); opacity: 1; }
+    72%  { transform: perspective(620px) translateY(-16%) rotateX(450deg) scale(1.13); opacity: 1; }
+    88%  { transform: perspective(620px) translateY(-2%)  rotateX(522deg) scale(1.16); opacity: 1; }
+    100% { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  opacity: 1; }
+}
+
+/* Вторая ОБЫЧНАЯ сторона: угол +180, гаснет на 450 градусах (72%), когда
+   стоит ребром -- потому подмена невидима. После этого обычная текстура
+   не возвращается. */
+@keyframes kingPromotionFlipBack {
+    0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 1; }
+    12%   { transform: perspective(620px) translateY(-11%) rotateX(232deg) scale(1.06); opacity: 1; }
+    38%   { transform: perspective(620px) translateY(-28%) rotateX(438deg) scale(1.17); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(630deg) scale(1.13); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(632deg) scale(1.13); opacity: 0; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(702deg) scale(1.16); opacity: 0; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(720deg) scale(1.1);  opacity: 0; }
+}
+
+/* Дамка: та же позиция, что у второй обычной стороны, но зажигается
+   ровно там, где та гаснет -- на ребре. Один раз и навсегда. */
+@keyframes kingPromotionFlipKing {
+    0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 0; }
+    12%   { transform: perspective(620px) translateY(-11%) rotateX(232deg) scale(1.06); opacity: 0; }
+    38%   { transform: perspective(620px) translateY(-28%) rotateX(438deg) scale(1.17); opacity: 0; }
+    72%   { transform: perspective(620px) translateY(-16%) rotateX(630deg) scale(1.13); opacity: 0; }
+    72.5% { transform: perspective(620px) translateY(-16%) rotateX(632deg) scale(1.13); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-2%)  rotateX(702deg) scale(1.16); opacity: 1; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(720deg) scale(1.1);  opacity: 1; }
 }
 
 @keyframes kingPromotionGlow {
-    0%   { opacity: 0;    transform: scale(0.75); }
-    35%  { opacity: 0.95; transform: scale(1.12); }
-    100% { opacity: 0;    transform: scale(1.35); }
+    /* Пик сразу после появления дамки (72%), дальше спокойный уход --
+       короткий и мягкий, без вспышки. До этого свечение почти незаметно:
+       оно подчёркивает момент превращения, а не весь спин. */
+    0%   { opacity: 0;    transform: scale(0.80); }
+    55%  { opacity: 0.30; transform: scale(1.02); }
+    76%  { opacity: 0.88; transform: scale(1.18); }
+    100% { opacity: 0;    transform: scale(1.34); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1659,9 +1758,26 @@ h1 {
     /* Ни подъёма, ни поворота: наложение просто не показывается, и дамка
        появляется мгновенно. Звук при этом остаётся -- он не является
        движением. */
-    .king-promotion-flip {
+    .king-promotion-flip,
+    .king-promotion-flip-back,
+    .king-promotion-flip-king {
         animation: none !important;
         opacity: 0 !important;
+    }
+    /* Наложения выключены -- значит animationend не придёт, и уборка
+       случится только по страховочному таймауту (150 + 680 + 120 мс).
+       Без этого правила настоящая дамка почти секунду оставалась бы
+       скрытой классом piece-hidden-for-promotion, и игрок видел бы пустую
+       клетку -- при том что требование обратное: дамка появляется сразу.
+
+       :not(.piece-hidden-for-ghost) здесь обязателен. Оба класса висят на
+       фигуре одновременно первые MOVE_GHOST_DURATION_MS, пока шашка летит.
+       Без этой защиты правило (одинаковая специфичность, но позже по
+       файлу) перебило бы сокрытие на время полёта, и на доске оказались бы
+       две шашки разом. С ней оно просто не совпадает, пока идёт полёт, и
+       включается ровно тогда, когда полёт закончился. */
+    .piece-hidden-for-promotion:not(.piece-hidden-for-ghost) {
+        opacity: 1 !important;
     }
     .king-promotion-glow {
         animation: none;
