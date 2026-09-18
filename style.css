@@ -663,6 +663,21 @@ button.danger-button.button-press-flash::after {
         0 0 30px rgba(255, 150, 70, 0.08);
 }
 
+/* outline вместо border -- НЕ косметика, это геометрический фикс.
+   border участвует в box-модели: при box-sizing: border-box (глобально)
+   1px рамки с каждой стороны отъедал 2px от content/padding-box, куда
+   красится background (background-origin по умолчанию -- padding-box).
+   Но 8 grid-tracks ниже -- repeat(8, var(--cell-size)) -- фиксированной
+   (не fr) ширины, и браузер их НЕ сжимает под уменьшившийся box: клетки
+   как самостоятельно занимали 8*cell-size, так и продолжали, просто
+   на 2px шире, чем область фона. Отсюда линейно растущее к дальнему
+   краю расхождение между нарисованной клеткой и DOM-клеткой.
+   outline в box-модели не участвует вообще: border-box/padding-box
+   становятся друг другу равны, 8 треков и область фона совпадают
+   пиксель в пиксель. Проверено изолирующим тестом (A/B/C в аудите) --
+   outline даёт тот же визуальный результат, что и прежний border.
+   outline-offset: -1px рисует линию там же, где раньше была рамка
+   (внутри прежней border-box), а не поверх соседних элементов доски. */
 #board {
     grid-column: 2 / span 8;
     grid-row: 2 / span 8;
@@ -671,7 +686,8 @@ button.danger-button.button-press-flash::after {
     grid-template-rows: repeat(8, var(--cell-size));
     border-radius: 3px;
     overflow: hidden;
-    border: 1px solid #d4a94f;
+    outline: 1px solid #d4a94f;
+    outline-offset: -1px;
     position: relative;
     box-shadow:
         0 8px 30px rgba(0,0,0,0.65),
@@ -1425,7 +1441,7 @@ button.danger-button.button-press-flash::after {
    ========================================================= */
 
 #board {
-    background-image: url('assets/board.png');
+    background-image: url('assets/board.png?v=1');
     background-size: 100% 100%;
     background-repeat: no-repeat;
 }
@@ -1441,21 +1457,21 @@ button.danger-button.button-press-flash::after {
     display: none !important;
 }
 
-/* background-position: center во всех четырёх правилах ниже -- без
-   него браузер выравнивает фон по умолчанию слева сверху (0% 0%), а не по
-   центру элемента. С background-size: contain это почти не заметно, когда
-   пропорции элемента и картинки совпадают тютелька в тютельку, но на
-   Android Telegram и в Desktop-клиенте ширина/высота клетки редко выходят
-   ровно целым числом пикселей -- и тогда contain оставляет асимметричные
-   поля, которые без center уходят в один угол, а не делятся поровну.
-   Сами PNG проверены -- 200x200, содержимое симметрично с точностью до
-   антиалиасинга (поля 1px со всех сторон) -- проблема была только здесь.
-   promotion-overlay (king-promotion-flip-king) уже использовал center;
-   теперь то же правило -- и у статичных фигур. */
+/* .piece -- квадратный box (82% от одной и той же переменной по обеим
+   осям), PNG тоже 200x200: при background-size: contain изображение
+   заполняет box без остатка, background-position физически нечего
+   двигать. Проверено и математикой, и прямым замером DOM (piece/square
+   center delta = 0.000px в headless-рендере) -- добавление
+   background-position: center сюда было бы no-op, поэтому его здесь нет.
+
+   Реальная причина видимого смещения фишек была в другом месте --
+   #board красил assets/board.png в область на 2px меньше, чем занимали
+   его собственные 8 grid-tracks (см. #board ниже, border -> outline),
+   и во внутренней сетке самого board.png, которая теперь геометрически
+   выправлена. См. tests/board-geometry.test.js. */
 .piece-dark {
     background-image: url('assets/piece_dark.png?v=2') !important;
     background-size: contain !important;
-    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
     /* Выделяем тёмные шашки в отдельный слой видеокарты (как это уже происходит
@@ -1467,7 +1483,6 @@ button.danger-button.button-press-flash::after {
 .piece-light {
     background-image: url('assets/piece_light.png?v=2') !important;
     background-size: contain !important;
-    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
@@ -1475,7 +1490,6 @@ button.danger-button.button-press-flash::after {
 .piece-dark.king {
     background-image: url('assets/king_dark.png?v=2') !important;
     background-size: contain !important;
-    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
@@ -1483,7 +1497,6 @@ button.danger-button.button-press-flash::after {
 .piece-light.king {
     background-image: url('assets/king_light.png?v=2') !important;
     background-size: contain !important;
-    background-position: center !important;
     background-repeat: no-repeat !important;
     background-color: transparent !important;
 }
