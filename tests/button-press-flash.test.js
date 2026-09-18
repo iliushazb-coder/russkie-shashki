@@ -188,8 +188,25 @@ console.log('\n=== 5. CSS: ВСПЫШКА НА САМОЙ КНОПКЕ ===');
 
     const kf = /@keyframes buttonPressFlash \{[\s\S]*?\n\}/.exec(CSS_CLEAN);
     check('5.10 keyframes объявлены', !!kf);
-    check('5.11 резкий приход и спокойный уход',
-        !!kf && /0%\s*\{\s*opacity: 0/.test(kf[0]) && /100%\s*\{\s*opacity: 0/.test(kf[0]));
+    // ПЕРВЫЙ КАДР обязан быть ярким. Нарастание даже в 12% при 300 мс --
+    // это около 36 мс разгорания, и нажатие перестаёт читаться как
+    // мгновенное.
+    check('5.11 вспышка яркая уже в первом кадре',
+        !!kf && /0%\s*\{\s*opacity: 1/.test(kf[0]));
+    check('5.11b нарастания (fade-in) нет ни на одном кадре', (function () {
+        if (!kf) return false;
+        const frames = [...kf[0].matchAll(/([\d.]+)%\s*\{[^}]*opacity:\s*([\d.]+)/g)]
+            .map(function (m) { return [parseFloat(m[1]), parseFloat(m[2])]; })
+            .sort(function (a, b) { return a[0] - b[0]; });
+        if (frames.length < 2) return false;
+        // Яркость не должна расти ни на одном участке.
+        for (let i = 1; i < frames.length; i++) {
+            if (frames[i][1] > frames[i - 1][1]) return false;
+        }
+        return frames[0][1] === 1;
+    })());
+    check('5.11c к концу вспышка гаснет',
+        !!kf && /100%\s*\{\s*opacity: 0/.test(kf[0]));
     // Ни масштаба, ни сдвига, ни размытия -- только свет.
     check('5.12 без движения и тяжёлых эффектов',
         !!kf && !/scale\(|translate|blur\(|filter/.test(kf[0]));
@@ -221,13 +238,28 @@ console.log('\n=== 7. REDUCED-MOTION ===');
     const blocks = CSS_CLEAN.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
     const rm = blocks.find(function (b) { return /button-press-flash/.test(b); });
     check('7.1 блок упоминает вспышку', !!rm);
-    check('7.2 у вспышки нет движения', !!rm && /button\.button-press-flash::after \{\s*transform: none;/.test(rm));
-    // Световой отклик сохраняется: без него быстрый тап снова перестанет читаться.
-    check('7.3 сама вспышка не гасится', (function () {
+    check('7.2 у вспышки нет движения', (function () {
         if (!rm) return false;
         const r = /button\.button-press-flash::after \{([^}]*)\}/.exec(rm);
-        return !!r && !/display:\s*none/.test(r[1]) && !/opacity:\s*0/.test(r[1]);
+        return !!r && /transform:\s*none/.test(r[1]);
     })());
+    // Световой отклик сохраняется: без него быстрый тап снова перестанет читаться.
+    // При reduced-motion отклик обязан быть СТАТИЧЕСКИМ: анимации нет,
+    // но сам стеклянный слой виден, пока класс висит на кнопке. Снимает
+    // его тот же JS-таймер через 300 мс.
+    check('7.3 анимация вспышки отключена', (function () {
+        if (!rm) return false;
+        const r = /button\.button-press-flash::after \{([^}]*)\}/.exec(rm);
+        return !!r && /animation:\s*none/.test(r[1]);
+    })());
+    check('7.3b но сам glass-feedback ОСТАЁТСЯ видимым', (function () {
+        if (!rm) return false;
+        const r = /button\.button-press-flash::after \{([^}]*)\}/.exec(rm);
+        return !!r && /opacity:\s*1/.test(r[1])
+            && !/display:\s*none/.test(r[1]) && !/content:\s*none/.test(r[1]);
+    })());
+    check('7.3c длительность по-прежнему задаётся JS-таймером, а не CSS',
+        /BUTTON_PRESS_FLASH_MS = 300/.test(CLEAN));
     check('7.4 движение кнопки по-прежнему отключено',
         !!rm && /\.menu-button:active \{\s*transform: none;/.test(rm));
 }
