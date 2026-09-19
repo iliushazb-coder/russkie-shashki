@@ -911,13 +911,13 @@ async function runModalCloseAnimationChecks(page, engineName) {
         state.ariaHidden === 'true' && state.inert, JSON.stringify(state));
     check(engineName + ' 3B: focus вернулся на trigger ДО конца анимации',
         state.active === 'ext-trigger', state.active);
-    check(engineName + ' 3B: generic modal close = 200ms',
-        state.overlayDuration === '0.2s' && state.boxDuration === '0.2s',
+    check(engineName + ' 3B: generic modal close = 180ms',
+        state.overlayDuration === '0.18s' && state.boxDuration === '0.18s',
         JSON.stringify(state));
 
     // Не используем waitForFunction(): он по умолчанию поллится через
     // requestAnimationFrame, который headless WebKit может сильно
-    // притормозить. Ждём дольше production fallback (300ms) и затем
+    // притормозить. Ждём дольше production fallback (280ms) и затем
     // измеряем фактическое DOM-состояние напрямую.
     await page.waitForTimeout(650);
     state = await page.evaluate(function () {
@@ -928,7 +928,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
         state.hidden && !state.closing, JSON.stringify(state));
 
     // 1b) Единый визуальный контракт: stats и обычные модалки закрываются
-    // одинаково за 200ms; stats больше не special-case.
+    // одинаково за 180ms; stats больше не special-case.
     await reset();
     state = await page.evaluate(function () {
         const m = document.getElementById('stats-modal');
@@ -944,14 +944,14 @@ async function runModalCloseAnimationChecks(page, engineName) {
             closeBoxDuration: getComputedStyle(m.querySelector('.modal-box')).animationDuration
         };
     });
-    check(engineName + ' 3B: stats open/close = 200ms',
+    check(engineName + ' 3B: stats open/close = 180ms',
         state.closing &&
-        state.openOverlayDuration === '0.2s' && state.openBoxDuration === '0.2s' &&
-        state.closeOverlayDuration === '0.2s' && state.closeBoxDuration === '0.2s',
+        state.openOverlayDuration === '0.18s' && state.openBoxDuration === '0.18s' &&
+        state.closeOverlayDuration === '0.18s' && state.closeBoxDuration === '0.18s',
         JSON.stringify(state));
     // Headless WebKit может доставлять animationend заметно позже CSS
     // duration. Сам визуальный контракт уже проверен выше через computed
-    // 0.2s; здесь проверяем только eventual cleanup после общего fallback.
+    // 0.18s; здесь проверяем только eventual cleanup после общего fallback.
     await page.waitForTimeout(650);
     state = await page.evaluate(function () {
         const m = document.getElementById('stats-modal');
@@ -1160,13 +1160,13 @@ async function runScreenTransitionChecks(page, engineName) {
         Math.abs(state.rect.left-before.left)<1 && Math.abs(state.rect.top-before.top)<1 &&
         Math.abs(state.rect.width-before.width)<1 && Math.abs(state.rect.height-before.height)<1,
         JSON.stringify({before:before,after:state.rect}));
-    check(engineName + ' screen: target enter = 200ms',
+    check(engineName + ' screen: target enter = 180ms',
         state.targetAnim.split(',').map(x=>x.trim()).includes('screenEnter') &&
-        state.targetDuration.split(',').map(x=>x.trim()).includes('0.2s'),
+        state.targetDuration.split(',').map(x=>x.trim()).includes('0.18s'),
         JSON.stringify({name:state.targetAnim,duration:state.targetDuration}));
 
-    // На середине ухода нового меню ещё НЕ должно быть видно.
-    await page.waitForTimeout(90);
+    // Старый экран должен исчезнуть до первого заметного кадра нового.
+    await page.waitForTimeout(20);
     state = await page.evaluate(function(){
         const old=menuScreen, target=document.getElementById('group-lobby-screen');
         return {
@@ -1176,11 +1176,9 @@ async function runScreenTransitionChecks(page, engineName) {
             targetPointer:getComputedStyle(target).pointerEvents
         };
     });
-    check(engineName + ' screen: через 90ms нет двух одновременно читаемых меню',
-        !state.oldHidden && state.oldOpacity > 0.05 && state.targetOpacity < 0.02,
+    check(engineName + ' screen: старый уже не виден, новый один проявляется',
+        state.oldHidden && state.oldOpacity < 0.02 && state.targetOpacity > 0.02,
         JSON.stringify(state));
-    check(engineName + ' screen: невидимый target не принимает случайный tap',
-        state.targetPointer === 'none', state.targetPointer);
 
     await page.waitForTimeout(650);
     state = await page.evaluate(function(){
@@ -1189,7 +1187,7 @@ async function runScreenTransitionChecks(page, engineName) {
     check(engineName + ' screen: после animation/fallback outgoing реально hidden',
         state.hidden && !state.leaving, JSON.stringify(state));
 
-    // Reviewer regression: incoming screen ещё opacity:0 (<70% enter), но
+    // Reviewer regression: incoming screen ещё не закончил 180ms enter, но
     // следующий navigation уже отправляет его в leave. Он не должен вспыхнуть.
     await reset();
     await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
@@ -1207,11 +1205,10 @@ async function runScreenTransitionChecks(page, engineName) {
             saved:lobby.style.getPropertyValue('--screen-leave-opacity')
         };
     });
-    check(engineName + ' screen: rapid navigation не вспыхивает hidden incoming',
-        hiddenIncomingBefore < 0.02 &&
-        hiddenIncomingAfter.leaving &&
+    check(engineName + ' screen: rapid navigation не вспыхивает incoming',
+        hiddenIncomingBefore > 0 && hiddenIncomingBefore < 1 &&
         hiddenIncomingAfter.opacity < 0.02 &&
-        parseFloat(hiddenIncomingAfter.saved || '1') < 0.02,
+        parseFloat(hiddenIncomingAfter.saved || String(hiddenIncomingBefore)) <= hiddenIncomingBefore + 0.05,
         JSON.stringify({before:hiddenIncomingBefore,after:hiddenIncomingAfter}));
 
     // Generation должен быть load-bearing: старый callback не завершает новый leave-cycle.

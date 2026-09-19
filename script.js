@@ -1015,7 +1015,7 @@ const modalFocusState = new WeakMap();
 // цикла безопасным no-op после повторного открытия.
 const modalCloseState = new WeakMap();
 let modalCloseGeneration = 0;
-const MODAL_CLOSE_FALLBACK_MS = 300; // CSS close = 200ms + запас на animationend
+const MODAL_CLOSE_FALLBACK_MS = 280; // CSS close = 180ms + запас на animationend
 
 function clearModalCloseState(modal, state) {
     if (!state) return;
@@ -1200,7 +1200,7 @@ function closeModal(modal) {
     }
 
     // Логически закрытый диалог сразу исчезает из accessibility/focus tree,
-    // даже пока его последние 200ms ещё видны визуально.
+    // даже пока его последние 180ms ещё видны визуально.
     modal.setAttribute("aria-hidden", "true");
     modal.setAttribute("inert", "");
 
@@ -1248,16 +1248,16 @@ function closeModal(modal) {
 // ===== ПЛАВНЫЕ ПЕРЕХОДЫ МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
 //
 // Логика переключается СИНХРОННО: target становится текущим экраном в том
-// же вызове showScreen(). Старый экран остаётся визуальным "слепком"
-// только на первые 140ms; весь переход заканчивается за 200ms. Он не
-// принимает ввод и не участвует в логике.
+// же вызове showScreen(). Старый экран технически гасится за 1ms, то есть
+// не даёт видимого кадра с двумя меню; новый один входит за 180ms.
+// Уходящий экран не принимает ввод и не участвует в логике.
 //
 // WeakMap + generation нужны отдельно для КАЖДОГО screen: быстрый маршрут
 // A -> B -> A -> B не должен позволить старому fallback/animationend
 // спрятать уже повторно открытый экран.
 const screenLeaveState = new WeakMap();
 let screenLeaveGeneration = 0;
-const SCREEN_TRANSITION_FALLBACK_MS = 300; // CSS leave = 140ms + запас
+const SCREEN_TRANSITION_FALLBACK_MS = 300; // CSS leave = 1ms; большой запас для headless/WebKit
 
 function getAppScreens() {
     return [
@@ -1469,9 +1469,9 @@ document.addEventListener("click", unlockAudioContext, { once: true });
 // останавливает всплытие, и на всплытии вспышка до нас бы не дошла.
 //
 // Эффект принадлежит САМОЙ кнопке -- никаких overlay поверх интерфейса.
-// Старый экран виден только первые 140ms перехода. Поэтому начало
-// 300ms-вспышки читается вместе с его уходом, а затем старый экран уже
-// скрыт. Логика нового экрана при этом активна сразу.
+// Старый экран гасится практически мгновенно; 300ms-вспышка остаётся
+// привязана к самой кнопке и исчезает вместе со старым экраном. Логика
+// нового экрана при этом активна сразу.
 const BUTTON_PRESS_FLASH_MS = 300;
 const BUTTON_PRESS_FLASH_CLASS = "button-press-flash";
 // WeakMap, а не Map: кнопку могут удалить из DOM (список комнат

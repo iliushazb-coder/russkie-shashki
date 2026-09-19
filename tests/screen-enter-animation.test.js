@@ -1,6 +1,6 @@
 // ==========================================================================
 // КОРОТКИЙ ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ.
-// Логика синхронна; весь visual handoff = 200ms, old уходит за первые 140ms.
+// Логика синхронна; old технически гасится за 1ms, target входит за 180ms.
 // ==========================================================================
 const fs = require('fs');
 const path = require('path');
@@ -34,10 +34,10 @@ const CSS_CLEAN = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 const SCREENS = ['menu-screen','time-control-screen','group-lobby-screen','waiting-screen','game-screen'];
 
 console.log('=== 1. ENTER + LEAVE: ВСЕ 5 ЭКРАНОВ ===');
-const enterRule = /((?:#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\),\s*\n)*#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\))\s*\{[^}]*animation:\s*screenEnter 200ms/.exec(CSS_CLEAN);
-const leaveRule = /((?:#[a-z-]+\.screen-leaving,\s*\n)*#[a-z-]+\.screen-leaving)\s*\{[\s\S]*?animation:\s*screenLeave 140ms[^}]*\}/.exec(CSS_CLEAN);
-check('1.1 enter-rule найден и = 200ms', !!enterRule);
-check('1.2 leave-rule найден и = 140ms', !!leaveRule);
+const enterRule = /((?:#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\),\s*\n)*#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\))\s*\{[^}]*animation:\s*screenEnter 180ms/.exec(CSS_CLEAN);
+const leaveRule = /((?:#[a-z-]+\.screen-leaving,\s*\n)*#[a-z-]+\.screen-leaving)\s*\{[\s\S]*?animation:\s*screenLeave 1ms[^}]*\}/.exec(CSS_CLEAN);
+check('1.1 enter-rule найден и = 180ms', !!enterRule);
+check('1.2 leave-rule найден и = 1ms', !!leaveRule);
 SCREENS.forEach(function(id, i) {
     check('1.' + (i + 3) + ' enter #' + id,
         !!enterRule && enterRule[1].includes('#' + id + ':not(.hidden):not(.screen-leaving)'));
@@ -46,11 +46,10 @@ SCREENS.forEach(function(id, i) {
 });
 check('1.13 оба keyframes существуют', /@keyframes screenEnter\s*\{/.test(CSS_CLEAN) && /@keyframes screenLeave\s*\{/.test(CSS_CLEAN));
 check('1.14 экраны существуют в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
-check('1.15 target не проявляется до 70% enter-animation',
-    /@keyframes screenEnter\s*\{[\s\S]*?0%,\s*70%\s*\{[^}]*opacity:\s*0/.test(CSS_CLEAN));
-check('1.16 невидимый target до 70% не принимает pointer-events',
-    /0%,\s*70%\s*\{[^}]*pointer-events:\s*none/.test(CSS_CLEAN) &&
-    /70\.01%,\s*100%\s*\{[^}]*pointer-events:\s*auto/.test(CSS_CLEAN));
+check('1.15 target появляется сразу из opacity 0',
+    /@keyframes screenEnter\s*\{[\s\S]*?from\s*\{[^}]*opacity:\s*0/.test(CSS_CLEAN));
+check('1.16 target доходит до opacity 1',
+    /@keyframes screenEnter\s*\{[\s\S]*?to\s*\{[^}]*opacity:\s*1/.test(CSS_CLEAN));
 
 console.log('\n=== 2. PER-SCREEN LIFECYCLE + STALE GUARD ===');
 check('2.1 WeakMap per-screen state', /const screenLeaveState = new WeakMap\(\)/.test(CLEAN));
@@ -136,8 +135,8 @@ console.log('\n=== 7. ХАРАКТЕР АНИМАЦИИ + CACHE ===');
     check('7.2 leave opacity + 8px', !!leave && /opacity:\s*0/.test(leave[0]) && /translateY\(8px\)/.test(leave[0]));
     check('7.3 без scale/blur/filter в screen keyframes',
         !!enter && !!leave && !/scale\(|blur\(|filter:/.test(enter[0] + leave[0]));
-    check('7.4 style cache >= 44', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 44);
-    check('7.5 script cache >= 230', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 230);
+    check('7.4 style cache >= 45', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 45);
+    check('7.5 script cache >= 231', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 231);
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
