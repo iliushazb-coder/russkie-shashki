@@ -1348,11 +1348,11 @@ console.log('\n=== 22. CAPTURE EFFECT (#4) ===');
         /animation:\s*capturedGhostImpact var\(--capture-effect-duration, 180ms\)/.test(CSS) &&
         /@keyframes capturedGhostImpact\s*\{/.test(CSS));
 
-    check('22.7 есть мягкий impact перед исчезновением',
-        /18%\s*\{[^}]*transform:\s*scale\(1\.04\) rotate\(0deg\)/.test(CSS));
+    check('22.7 impact теперь заметнее и попадает в момент пересечения',
+        /28%\s*\{[^}]*opacity:\s*1;[^}]*transform:\s*scale\(1\.12\) rotate\(-1\.5deg\)/.test(CSS));
 
     check('22.8 финал = fade + shrink + micro-rotation',
-        /100%\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.58\) rotate\(4deg\)/.test(CSS));
+        /100%\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.48\) rotate\(5deg\)/.test(CSS));
 
     check('22.9 king-safe: transform живёт на wrapper, king-текстура на inner .piece',
         /capturedGhost\.className\s*=\s*"move-ghost-captured"/.test(moveGhost) &&
@@ -1372,8 +1372,17 @@ console.log('\n=== 22. CAPTURE EFFECT (#4) ===');
     check('22.13 reduced-motion CSS скрывает capture ghost защитно',
         /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.move-ghost-captured\s*\{[^}]*display:\s*none\s*!important/.test(CSS));
 
-    check('22.14 cache-bust обновлён',
-        Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 50 &&
+    check('22.14 captured ghost выше летящей шашки только визуальным z-index',
+        /\.move-ghost-piece\s*\{[\s\S]*?z-index:\s*5;/.test(CSS) &&
+        /\.move-ghost-captured\s*\{[\s\S]*?z-index:\s*6;/.test(CSS));
+
+    check('22.15 есть отдельное impact-ring без нового DOM',
+        /\.move-ghost-captured::after\s*\{/.test(CSS) &&
+        /animation:\s*capturedGhostImpactRing/.test(CSS) &&
+        /@keyframes capturedGhostImpactRing\s*\{/.test(CSS));
+
+    check('22.16 cache-bust обновлён',
+        Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 51 &&
         Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 235);
 }
 

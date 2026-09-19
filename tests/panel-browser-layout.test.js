@@ -1370,18 +1370,24 @@ async function runEngine(engine) {
         const capturePage = await browser.newPage({ viewport: { width: 390, height: 700 } });
         await capturePage.setContent('<!doctype html><html><head><style>' + CSS + '</style></head><body>'
             + '<div id="cap-square" style="position:relative;width:80px;height:80px">'
+            + '<div id="mover" class="piece piece-light move-ghost-piece"></div>'
             + '<div id="cap" class="move-ghost-captured" style="--capture-effect-duration:180ms">'
             + '<div class="piece piece-dark king move-ghost-captured-piece"></div>'
             + '</div></div></body></html>');
         const start = await capturePage.evaluate(function () {
             const el=document.getElementById('cap'), inner=el.firstElementChild, cs=getComputedStyle(el);
+            const mover=getComputedStyle(document.getElementById('mover'));
+            const ring=getComputedStyle(el,'::after');
             return { name:cs.animationName, duration:cs.animationDuration, opacity:parseFloat(cs.opacity),
-                transform:cs.transform, innerBg:getComputedStyle(inner).backgroundImage };
+                transform:cs.transform, zIndex:parseInt(cs.zIndex,10), moverZ:parseInt(mover.zIndex,10),
+                ringName:ring.animationName, ringOpacity:parseFloat(ring.opacity), ringTransform:ring.transform,
+                innerBg:getComputedStyle(inner).backgroundImage };
         });
         await capturePage.waitForTimeout(55);
         const mid = await capturePage.evaluate(function () {
-            const cs=getComputedStyle(document.getElementById('cap'));
-            return { opacity:parseFloat(cs.opacity), transform:cs.transform };
+            const el=document.getElementById('cap'), cs=getComputedStyle(el), ring=getComputedStyle(el,'::after');
+            return { opacity:parseFloat(cs.opacity), transform:cs.transform,
+                ringOpacity:parseFloat(ring.opacity), ringTransform:ring.transform };
         });
         await capturePage.waitForTimeout(150);
         const end = await capturePage.evaluate(function () {
@@ -1391,8 +1397,13 @@ async function runEngine(engine) {
         check(engine.name + ' capture: animation реально запущена',
             start.name.split(',').map(x=>x.trim()).includes('capturedGhostImpact') &&
             start.duration.split(',').map(x=>x.trim()).includes('0.18s'), JSON.stringify(start));
-        check(engine.name + ' capture: transform/opacity реально меняются в runtime',
-            mid.opacity < start.opacity && mid.transform !== start.transform,
+        check(engine.name + ' capture: transform реально меняется в runtime',
+            mid.transform !== start.transform, JSON.stringify({start:start,mid:mid}));
+        check(engine.name + ' capture: captured слой выше летящей шашки',
+            start.zIndex > start.moverZ, JSON.stringify({captured:start.zIndex,mover:start.moverZ}));
+        check(engine.name + ' capture: impact-ring реально анимируется',
+            start.ringName.split(',').map(x=>x.trim()).includes('capturedGhostImpactRing') &&
+            mid.ringOpacity > 0.05 && mid.ringTransform !== start.ringTransform,
             JSON.stringify({start:start,mid:mid}));
         check(engine.name + ' capture: к концу ghost прозрачен',
             end.opacity <= 0.05, JSON.stringify(end));
