@@ -972,7 +972,37 @@ async function runModalCloseAnimationChecks(page, engineName) {
     check(engineName + ' 3B: reopen снова дал initial focus',
         state.active === 'btn-resign-no', state.active);
 
-    // 4) Позднее закрытие старого modal не крадёт focus у нового.
+    // 4) Generation guard реально защищает НОВЫЙ close-cycle от stale callback
+    // предыдущего цикла. Здесь старый callback вызывается напрямую: физическая
+    // отмена timer/listener намеренно обходится, чтобы проверить именно token.
+    await reset();
+    state = await page.evaluate(function () {
+        const m = document.getElementById('resign-confirm-modal');
+        openModal(m);
+        closeModal(m);
+        const oldGeneration = modalCloseState.get(m).generation;
+
+        openModal(m);   // отменяет первый cycle
+        closeModal(m);  // создаёт новый generation
+        const newGeneration = modalCloseState.get(m).generation;
+
+        finishModalClose(m, oldGeneration); // stale callback первого cycle
+
+        return {
+            oldGeneration: oldGeneration,
+            newGeneration: newGeneration,
+            hidden: m.classList.contains('hidden'),
+            closing: m.classList.contains('modal-closing'),
+            currentGeneration: modalCloseState.get(m) && modalCloseState.get(m).generation
+        };
+    });
+    check(engineName + ' 3B: stale generation НЕ может завершить новый close-cycle',
+        state.oldGeneration !== state.newGeneration &&
+        !state.hidden && state.closing &&
+        state.currentGeneration === state.newGeneration,
+        JSON.stringify(state));
+
+    // 5) Позднее закрытие старого modal не крадёт focus у нового.
     await reset();
     await page.evaluate(function () {
         const a = document.getElementById('resign-confirm-modal');
@@ -992,7 +1022,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
         state.active === 'btn-back-bot-no' && state.bOpen && state.aClosing,
         JSON.stringify(state));
 
-    // 5) prefers-reduced-motion: никакого визуального ожидания.
+    // 6) prefers-reduced-motion: никакого визуального ожидания.
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await reset();
     await page.evaluate(function () {
