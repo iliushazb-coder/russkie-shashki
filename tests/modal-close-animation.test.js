@@ -67,6 +67,10 @@ check('.modal-closing выключает pointer events',
   /\.modal-overlay\.modal-closing\s*\{[^}]*pointer-events:\s*none/.test(CSS));
 check('overlay close = 440ms', /modalCloseOverlay 440ms/.test(CSS));
 check('box close = 440ms', /modalCloseBox 440ms/.test(CSS));
+check('stats overlay close = 180ms',
+  /#stats-modal\.modal-closing\s*\{[^}]*animation-duration:\s*180ms/.test(CSS));
+check('stats box close = 180ms',
+  /#stats-modal\.modal-closing \.modal-box\s*\{[^}]*animation-duration:\s*180ms/.test(CSS));
 check('box мягко уходит вниз и чуть уменьшается',
   /translateY\(10px\) scale\(0\.94\)/.test(CSS));
 check('reduced-motion выключает close-анимацию',

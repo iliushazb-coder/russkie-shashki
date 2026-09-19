@@ -1073,6 +1073,16 @@ button.danger-button.button-press-flash::after {
     animation: modalCloseBox 440ms cubic-bezier(.4, 0, 1, 1) forwards;
 }
 
+/* Stats visually behaves like the accepted main-screen Back transition:
+   only this screen-like modal closes fast. Other dialogs keep 440ms. */
+#stats-modal.modal-closing {
+    animation-duration: 180ms;
+}
+
+#stats-modal.modal-closing .modal-box {
+    animation-duration: 180ms;
+}
+
 @keyframes modalCloseOverlay {
     from { opacity: 1; }
     to   { opacity: 0; }
