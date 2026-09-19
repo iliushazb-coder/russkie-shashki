@@ -774,7 +774,18 @@ button.danger-button.button-press-flash::after {
     pointer-events: none;
     z-index: 4;
     will-change: transform, opacity;
-    animation: none !important;
+    transform-origin: center;
+    animation: capturedGhostImpact var(--capture-effect-duration, 150ms) cubic-bezier(.22,.7,.28,1) forwards !important;
+}
+
+/* №4 Capture effect: короткий impact + fade/shrink + micro-rotation.
+   Используем individual scale/rotate, а НЕ transform: у .king есть
+   transform: scale(1.1) !important, и обычная transform-анимация не смогла
+   бы одинаково работать для сбитой дамки и обычной шашки. */
+@keyframes capturedGhostImpact {
+    0%   { opacity: 1;    scale: 1;    rotate: 0deg; }
+    18%  { opacity: 0.96; scale: 1.04; rotate: 0deg; }
+    100% { opacity: 0;    scale: 0.58; rotate: 4deg; }
 }
 
 /* Реальная фигура на клетке-назначении, пока над ней летит ghost. */
@@ -1981,6 +1992,12 @@ button.danger-button.button-press-flash::after {
     }
     .menu-button::after {
         transition: none;
+    }
+    /* №4: capture ghost — полностью декоративный motion-слой. JS не создаёт
+       его при reduced-motion; CSS дублирует это как защитный fallback. */
+    .move-ghost-captured {
+        display: none !important;
+        animation: none !important;
     }
     /* Вспышка остаётся: она только световая, движением не является, и без
        неё быстрый тап снова перестал бы читаться. Убеждаемся лишь, что в
