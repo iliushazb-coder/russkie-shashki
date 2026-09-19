@@ -1043,7 +1043,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
 }
 
 
-/* Screen cross-fade: реальный production CSS + извлечённый production helper. */
+/* Screen transition: production CSS + production helper. */
 function buildScreenTransitionFixture() {
     const start = SRC.indexOf('const screenLeaveState = new WeakMap();');
     const showStart = SRC.indexOf('function showScreen(screen) {', start);
@@ -1076,7 +1076,7 @@ function buildScreenTransitionFixture() {
 }
 
 async function runScreenTransitionChecks(page, engineName) {
-    console.log('\n=== SCREEN CROSS-FADE: lifecycle + race safety ===');
+    console.log('\n=== SCREEN TRANSITION: lifecycle + race safety ===');
     const reset = async function () {
         await page.evaluate(function(){ __resetScreens(); });
         await page.waitForTimeout(500);
@@ -1121,10 +1121,27 @@ async function runScreenTransitionChecks(page, engineName) {
         Math.abs(state.rect.left-before.left)<1 && Math.abs(state.rect.top-before.top)<1 &&
         Math.abs(state.rect.width-before.width)<1 && Math.abs(state.rect.height-before.height)<1,
         JSON.stringify({before:before,after:state.rect}));
-    check(engineName + ' screen: target enter = 440ms',
+    check(engineName + ' screen: target enter = 260ms',
         state.targetAnim.split(',').map(x=>x.trim()).includes('screenEnter') &&
-        state.targetDuration.split(',').map(x=>x.trim()).includes('0.44s'),
+        state.targetDuration.split(',').map(x=>x.trim()).includes('0.26s'),
         JSON.stringify({name:state.targetAnim,duration:state.targetDuration}));
+
+    // На середине ухода нового меню ещё НЕ должно быть видно.
+    await page.waitForTimeout(90);
+    state = await page.evaluate(function(){
+        const old=menuScreen, target=document.getElementById('group-lobby-screen');
+        return {
+            oldHidden:old.classList.contains('hidden'),
+            oldOpacity:parseFloat(getComputedStyle(old).opacity),
+            targetOpacity:parseFloat(getComputedStyle(target).opacity),
+            targetPointer:getComputedStyle(target).pointerEvents
+        };
+    });
+    check(engineName + ' screen: через 90ms нет двух одновременно читаемых меню',
+        !state.oldHidden && state.oldOpacity > 0.05 && state.targetOpacity < 0.02,
+        JSON.stringify(state));
+    check(engineName + ' screen: невидимый target не принимает случайный tap',
+        state.targetPointer === 'none', state.targetPointer);
 
     await page.waitForTimeout(650);
     state = await page.evaluate(function(){
@@ -1132,6 +1149,31 @@ async function runScreenTransitionChecks(page, engineName) {
     });
     check(engineName + ' screen: после animation/fallback outgoing реально hidden',
         state.hidden && !state.leaving, JSON.stringify(state));
+
+    // Reviewer regression: incoming screen ещё opacity:0 (<70% enter), но
+    // следующий navigation уже отправляет его в leave. Он не должен вспыхнуть.
+    await reset();
+    await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
+    await page.waitForTimeout(45);
+    const hiddenIncomingBefore = await page.evaluate(function(){
+        return parseFloat(getComputedStyle(document.getElementById('group-lobby-screen')).opacity);
+    });
+    await page.evaluate(function(){ showScreen(document.getElementById('waiting-screen')); });
+    await page.waitForTimeout(20);
+    const hiddenIncomingAfter = await page.evaluate(function(){
+        const lobby=document.getElementById('group-lobby-screen');
+        return {
+            opacity:parseFloat(getComputedStyle(lobby).opacity),
+            leaving:lobby.classList.contains('screen-leaving'),
+            saved:lobby.style.getPropertyValue('--screen-leave-opacity')
+        };
+    });
+    check(engineName + ' screen: rapid navigation не вспыхивает hidden incoming',
+        hiddenIncomingBefore < 0.02 &&
+        hiddenIncomingAfter.leaving &&
+        hiddenIncomingAfter.opacity < 0.02 &&
+        parseFloat(hiddenIncomingAfter.saved || '1') < 0.02,
+        JSON.stringify({before:hiddenIncomingBefore,after:hiddenIncomingAfter}));
 
     // Generation должен быть load-bearing: старый callback не завершает новый leave-cycle.
     await reset();
@@ -1332,7 +1374,7 @@ async function runEngine(engine) {
         diagLines.forEach(l => console.log(l));
     }
 
-    console.log('\n=== SCREEN CROSS-FADE: 5 основных экранов ===');
+    console.log('\n=== SCREEN TRANSITION: 5 основных экранов ===');
     {
         const screenPage = await browser.newPage({ viewport: { width: 390, height: 700 } });
         await screenPage.setContent(buildScreenTransitionFixture());

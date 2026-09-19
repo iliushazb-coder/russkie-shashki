@@ -1248,15 +1248,16 @@ function closeModal(modal) {
 // ===== ПЛАВНЫЕ ПЕРЕХОДЫ МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
 //
 // Логика переключается СИНХРОННО: target становится текущим экраном в том
-// же вызове showScreen(). Старый экран лишь остаётся визуальным "слепком"
-// на 440ms, не принимает ввод и не участвует в логике.
+// же вызове showScreen(). Старый экран остаётся визуальным "слепком"
+// только на 180ms; весь переход заканчивается за 260ms. Он не принимает
+// ввод и не участвует в логике.
 //
 // WeakMap + generation нужны отдельно для КАЖДОГО screen: быстрый маршрут
 // A -> B -> A -> B не должен позволить старому fallback/animationend
 // спрятать уже повторно открытый экран.
 const screenLeaveState = new WeakMap();
 let screenLeaveGeneration = 0;
-const SCREEN_TRANSITION_FALLBACK_MS = 540; // CSS leave = 440ms + запас
+const SCREEN_TRANSITION_FALLBACK_MS = 300; // CSS leave = 180ms + запас
 
 function getAppScreens() {
     return [
@@ -1283,6 +1284,7 @@ function clearScreenLeaveGeometry(screen) {
     screen.style.removeProperty("--screen-leave-top");
     screen.style.removeProperty("--screen-leave-width");
     screen.style.removeProperty("--screen-leave-height");
+    screen.style.removeProperty("--screen-leave-opacity");
 }
 
 function clearScreenLeaveState(screen, state) {
@@ -1329,10 +1331,16 @@ function startScreenLeave(screen) {
     // Вынимаем старый экран из document flow, иначе два одновременно
     // видимых полноэкранных блока раздвинут body и дадут скачок/скролл.
     const rect = screen.getBoundingClientRect();
+    const currentOpacity = window.getComputedStyle
+        ? window.getComputedStyle(screen).opacity
+        : "1";
     screen.style.setProperty("--screen-leave-left", rect.left + "px");
     screen.style.setProperty("--screen-leave-top", rect.top + "px");
     screen.style.setProperty("--screen-leave-width", rect.width + "px");
     screen.style.setProperty("--screen-leave-height", rect.height + "px");
+    // Если screen ещё только входил (например opacity:0), leave начинается
+    // с этого же значения и не может внезапно вспыхнуть до opacity:1.
+    screen.style.setProperty("--screen-leave-opacity", currentOpacity || "1");
     screen.classList.add("screen-leaving");
 
     const generation = ++screenLeaveGeneration;
@@ -1461,9 +1469,9 @@ document.addEventListener("click", unlockAudioContext, { once: true });
 // останавливает всплытие, и на всплытии вспышка до нас бы не дошла.
 //
 // Эффект принадлежит САМОЙ кнопке -- никаких overlay поверх интерфейса.
-// При screen cross-fade старый экран ещё виден до 440ms, поэтому 300ms
-// вспышка успевает дочитаться во время ухода. Ввод уже выключен через
-// inert/pointer-events, а новый экран логически активен.
+// Старый экран виден только первые 180ms перехода. Поэтому начало
+// 300ms-вспышки читается вместе с его уходом, а затем старый экран уже
+// скрыт. Логика нового экрана при этом активна сразу.
 const BUTTON_PRESS_FLASH_MS = 300;
 const BUTTON_PRESS_FLASH_CLASS = "button-press-flash";
 // WeakMap, а не Map: кнопку могут удалить из DOM (список комнат
