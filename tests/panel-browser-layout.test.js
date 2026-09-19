@@ -898,7 +898,9 @@ async function runModalCloseAnimationChecks(page, engineName) {
             pointerEvents: getComputedStyle(m).pointerEvents,
             ariaHidden: m.getAttribute('aria-hidden'),
             inert: m.hasAttribute('inert'),
-            active: document.activeElement.id
+            active: document.activeElement.id,
+            overlayDuration: getComputedStyle(m).animationDuration,
+            boxDuration: getComputedStyle(m.querySelector('.modal-box')).animationDuration
         };
     });
     check(engineName + ' 3B: close логически мгновенный, но визуально ещё идёт',
@@ -909,6 +911,9 @@ async function runModalCloseAnimationChecks(page, engineName) {
         state.ariaHidden === 'true' && state.inert, JSON.stringify(state));
     check(engineName + ' 3B: focus вернулся на trigger ДО конца анимации',
         state.active === 'ext-trigger', state.active);
+    check(engineName + ' 3B: generic modal close = 200ms',
+        state.overlayDuration === '0.2s' && state.boxDuration === '0.2s',
+        JSON.stringify(state));
 
     // Не используем waitForFunction(): он по умолчанию поллится через
     // requestAnimationFrame, который headless WebKit может сильно
@@ -922,21 +927,27 @@ async function runModalCloseAnimationChecks(page, engineName) {
     check(engineName + ' 3B: после animationend/fallback modal реально hidden и closing снят',
         state.hidden && !state.closing, JSON.stringify(state));
 
-    // 1b) Statistics is intentionally the fast exception: 180ms, while
-    // generic modals above stay 440ms.
+    // 1b) Единый визуальный контракт: stats и обычные модалки закрываются
+    // одинаково за 200ms; stats больше не special-case.
     await reset();
     state = await page.evaluate(function () {
         const m = document.getElementById('stats-modal');
         openModal(m);
+        const openOverlayDuration = getComputedStyle(m).animationDuration;
+        const openBoxDuration = getComputedStyle(m.querySelector('.modal-box')).animationDuration;
         closeModal(m);
         return {
             closing: m.classList.contains('modal-closing'),
-            overlayDuration: getComputedStyle(m).animationDuration,
-            boxDuration: getComputedStyle(m.querySelector('.modal-box')).animationDuration
+            openOverlayDuration: openOverlayDuration,
+            openBoxDuration: openBoxDuration,
+            closeOverlayDuration: getComputedStyle(m).animationDuration,
+            closeBoxDuration: getComputedStyle(m.querySelector('.modal-box')).animationDuration
         };
     });
-    check(engineName + ' 3B: stats close = 180ms',
-        state.closing && state.overlayDuration === '0.18s' && state.boxDuration === '0.18s',
+    check(engineName + ' 3B: stats open/close = 200ms',
+        state.closing &&
+        state.openOverlayDuration === '0.2s' && state.openBoxDuration === '0.2s' &&
+        state.closeOverlayDuration === '0.2s' && state.closeBoxDuration === '0.2s',
         JSON.stringify(state));
     // Headless WebKit может доставлять animationend заметно позже CSS
     // duration. Сам визуальный контракт уже проверен выше через computed
@@ -946,7 +957,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
         const m = document.getElementById('stats-modal');
         return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
     });
-    check(engineName + ' 3B: stats после animationend/fallback полностью закрыта',
+    check(engineName + ' 3B: stats после 200ms animationend/fallback полностью закрыта',
         state.hidden && !state.closing, JSON.stringify(state));
 
     // 2) Повторный close не создаёт новый цикл.
@@ -1149,9 +1160,9 @@ async function runScreenTransitionChecks(page, engineName) {
         Math.abs(state.rect.left-before.left)<1 && Math.abs(state.rect.top-before.top)<1 &&
         Math.abs(state.rect.width-before.width)<1 && Math.abs(state.rect.height-before.height)<1,
         JSON.stringify({before:before,after:state.rect}));
-    check(engineName + ' screen: target enter = 260ms',
+    check(engineName + ' screen: target enter = 200ms',
         state.targetAnim.split(',').map(x=>x.trim()).includes('screenEnter') &&
-        state.targetDuration.split(',').map(x=>x.trim()).includes('0.26s'),
+        state.targetDuration.split(',').map(x=>x.trim()).includes('0.2s'),
         JSON.stringify({name:state.targetAnim,duration:state.targetDuration}));
 
     // На середине ухода нового меню ещё НЕ должно быть видно.
