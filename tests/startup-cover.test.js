@@ -197,10 +197,13 @@ console.log('=== 6. showScreen() безусловно скрывает cover п�
 {
   const src = extractFunc('showScreen');
   check('6.1 hideStartupCover() вызывается', /hideStartupCover\(\)/.test(src));
-  check('6.2 вызов идёт РАНЬШЕ первого screen.classList.add("hidden")', (function () {
+  check('6.2 вызов идёт РАНЬШЕ screen-transition lifecycle', (function () {
     const hideCoverPos = src.indexOf('hideStartupCover()');
-    const firstScreenHide = src.indexOf('.classList.add("hidden")');
-    return hideCoverPos !== -1 && firstScreenHide !== -1 && hideCoverPos < firstScreenHide;
+    const cancelPos = src.indexOf('cancelPendingScreenLeave(screen)');
+    const leavePos = src.indexOf('startScreenLeave(candidate)');
+    return hideCoverPos !== -1 &&
+      cancelPos !== -1 && leavePos !== -1 &&
+      hideCoverPos < cancelPos && hideCoverPos < leavePos;
   })());
   check('6.3 вызов БЕЗУСЛОВНЫЙ — не внутри if/условия своей же строки',
     /function showScreen\(screen\) \{\s*\n\s*hideStartupCover\(\);/.test(src));
