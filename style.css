@@ -47,10 +47,11 @@
     display: none !important;
 }
 
-/* ===== CROSS-FADE МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
-   Target показывается синхронно; старый screen только визуально остаётся
-   ещё 440ms. Enter и leave идут ОДНОВРЕМЕННО, поэтому переход не занимает
-   440+440ms и не задерживает game/Firebase.
+/* ===== КОРОТКИЙ ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
+   Логика по-прежнему переключается синхронно, но визуально два меню
+   больше не читаются одновременно: old уходит за 180ms, а target держится
+   невидимым до ~182ms и затем мягко появляется. Весь visual transition
+   заканчивается за 260ms, без задержки game/Firebase.
 
    .screen-leaving исключён из enter-rule: старый экран не может повторно
    запустить появление, пока доигрывает уход. */
@@ -59,12 +60,12 @@
 #group-lobby-screen:not(.hidden):not(.screen-leaving),
 #waiting-screen:not(.hidden):not(.screen-leaving),
 #game-screen:not(.hidden):not(.screen-leaving) {
-    animation: screenEnter 440ms cubic-bezier(.22, .61, .36, 1) both;
+    animation: screenEnter 260ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes screenEnter {
-    from { opacity: 0; transform: translateY(10px); }
-    to   { opacity: 1; transform: translateY(0); }
+    0%, 70% { opacity: 0; transform: translateY(10px); }
+    100%    { opacity: 1; transform: translateY(0); }
 }
 
 /* Старый экран фиксируется в своём измеренном viewport-прямоугольнике:
@@ -85,12 +86,12 @@
     box-sizing: border-box;
     z-index: 20;
     pointer-events: none !important;
-    animation: screenLeave 440ms cubic-bezier(.4, 0, 1, 1) forwards !important;
+    animation: screenLeave 180ms cubic-bezier(.4, 0, 1, 1) forwards !important;
 }
 
 @keyframes screenLeave {
     from { opacity: 1; transform: translateY(0); }
-    to   { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 0; transform: translateY(8px); }
 }
 body {
     display: flex;

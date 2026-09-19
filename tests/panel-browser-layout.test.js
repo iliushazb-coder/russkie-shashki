@@ -1043,7 +1043,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
 }
 
 
-/* Screen cross-fade: реальный production CSS + извлечённый production helper. */
+/* Screen transition: production CSS + production helper. */
 function buildScreenTransitionFixture() {
     const start = SRC.indexOf('const screenLeaveState = new WeakMap();');
     const showStart = SRC.indexOf('function showScreen(screen) {', start);
@@ -1076,7 +1076,7 @@ function buildScreenTransitionFixture() {
 }
 
 async function runScreenTransitionChecks(page, engineName) {
-    console.log('\n=== SCREEN CROSS-FADE: lifecycle + race safety ===');
+    console.log('\n=== SCREEN TRANSITION: lifecycle + race safety ===');
     const reset = async function () {
         await page.evaluate(function(){ __resetScreens(); });
         await page.waitForTimeout(500);
@@ -1121,10 +1121,24 @@ async function runScreenTransitionChecks(page, engineName) {
         Math.abs(state.rect.left-before.left)<1 && Math.abs(state.rect.top-before.top)<1 &&
         Math.abs(state.rect.width-before.width)<1 && Math.abs(state.rect.height-before.height)<1,
         JSON.stringify({before:before,after:state.rect}));
-    check(engineName + ' screen: target enter = 440ms',
+    check(engineName + ' screen: target enter = 260ms',
         state.targetAnim.split(',').map(x=>x.trim()).includes('screenEnter') &&
-        state.targetDuration.split(',').map(x=>x.trim()).includes('0.44s'),
+        state.targetDuration.split(',').map(x=>x.trim()).includes('0.26s'),
         JSON.stringify({name:state.targetAnim,duration:state.targetDuration}));
+
+    // На середине ухода нового меню ещё НЕ должно быть видно.
+    await page.waitForTimeout(90);
+    state = await page.evaluate(function(){
+        const old=menuScreen, target=document.getElementById('group-lobby-screen');
+        return {
+            oldHidden:old.classList.contains('hidden'),
+            oldOpacity:parseFloat(getComputedStyle(old).opacity),
+            targetOpacity:parseFloat(getComputedStyle(target).opacity)
+        };
+    });
+    check(engineName + ' screen: через 90ms нет двух одновременно читаемых меню',
+        !state.oldHidden && state.oldOpacity > 0.05 && state.targetOpacity < 0.02,
+        JSON.stringify(state));
 
     await page.waitForTimeout(650);
     state = await page.evaluate(function(){
@@ -1332,7 +1346,7 @@ async function runEngine(engine) {
         diagLines.forEach(l => console.log(l));
     }
 
-    console.log('\n=== SCREEN CROSS-FADE: 5 основных экранов ===');
+    console.log('\n=== SCREEN TRANSITION: 5 основных экранов ===');
     {
         const screenPage = await browser.newPage({ viewport: { width: 390, height: 700 } });
         await screenPage.setContent(buildScreenTransitionFixture());

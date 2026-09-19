@@ -1,6 +1,6 @@
 // ==========================================================================
-// CROSS-FADE МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ.
-// Логика обязана переключаться синхронно; 440ms — только visual tail.
+// КОРОТКИЙ ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ.
+// Логика синхронна; old уходит за 180ms, target полностью входит за 260ms.
 // ==========================================================================
 const fs = require('fs');
 const path = require('path');
@@ -34,10 +34,10 @@ const CSS_CLEAN = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 const SCREENS = ['menu-screen','time-control-screen','group-lobby-screen','waiting-screen','game-screen'];
 
 console.log('=== 1. ENTER + LEAVE: ВСЕ 5 ЭКРАНОВ ===');
-const enterRule = /((?:#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\),\s*\n)*#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\))\s*\{[^}]*animation:\s*screenEnter 440ms/.exec(CSS_CLEAN);
-const leaveRule = /((?:#[a-z-]+\.screen-leaving,\s*\n)*#[a-z-]+\.screen-leaving)\s*\{[\s\S]*?animation:\s*screenLeave 440ms[^}]*\}/.exec(CSS_CLEAN);
-check('1.1 enter-rule найден и = 440ms', !!enterRule);
-check('1.2 leave-rule найден и = 440ms', !!leaveRule);
+const enterRule = /((?:#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\),\s*\n)*#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\))\s*\{[^}]*animation:\s*screenEnter 260ms/.exec(CSS_CLEAN);
+const leaveRule = /((?:#[a-z-]+\.screen-leaving,\s*\n)*#[a-z-]+\.screen-leaving)\s*\{[\s\S]*?animation:\s*screenLeave 180ms[^}]*\}/.exec(CSS_CLEAN);
+check('1.1 enter-rule найден и = 260ms', !!enterRule);
+check('1.2 leave-rule найден и = 180ms', !!leaveRule);
 SCREENS.forEach(function(id, i) {
     check('1.' + (i + 3) + ' enter #' + id,
         !!enterRule && enterRule[1].includes('#' + id + ':not(.hidden):not(.screen-leaving)'));
@@ -46,11 +46,13 @@ SCREENS.forEach(function(id, i) {
 });
 check('1.13 оба keyframes существуют', /@keyframes screenEnter\s*\{/.test(CSS_CLEAN) && /@keyframes screenLeave\s*\{/.test(CSS_CLEAN));
 check('1.14 экраны существуют в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
+check('1.15 target не проявляется до 70% enter-animation',
+    /@keyframes screenEnter\s*\{[\s\S]*?0%,\s*70%\s*\{\s*opacity:\s*0/.test(CSS_CLEAN));
 
 console.log('\n=== 2. PER-SCREEN LIFECYCLE + STALE GUARD ===');
 check('2.1 WeakMap per-screen state', /const screenLeaveState = new WeakMap\(\)/.test(CLEAN));
 check('2.2 generation существует', /let screenLeaveGeneration = 0/.test(CLEAN));
-check('2.3 fallback = 540ms', /const SCREEN_TRANSITION_FALLBACK_MS = 540/.test(CLEAN));
+check('2.3 fallback = 300ms', /const SCREEN_TRANSITION_FALLBACK_MS = 300/.test(CLEAN));
 {
     const finish = funcBody(CLEAN, 'finishScreenLeave') || '';
     const cancel = funcBody(CLEAN, 'cancelPendingScreenLeave') || '';
@@ -123,11 +125,11 @@ console.log('\n=== 7. ХАРАКТЕР АНИМАЦИИ + CACHE ===');
     const enter = /@keyframes screenEnter\s*\{[\s\S]*?\n\}/.exec(CSS_CLEAN);
     const leave = /@keyframes screenLeave\s*\{[\s\S]*?\n\}/.exec(CSS_CLEAN);
     check('7.1 enter opacity + 10px', !!enter && /opacity:\s*0/.test(enter[0]) && /translateY\(10px\)/.test(enter[0]));
-    check('7.2 leave opacity + 10px', !!leave && /opacity:\s*0/.test(leave[0]) && /translateY\(10px\)/.test(leave[0]));
+    check('7.2 leave opacity + 8px', !!leave && /opacity:\s*0/.test(leave[0]) && /translateY\(8px\)/.test(leave[0]));
     check('7.3 без scale/blur/filter в screen keyframes',
         !!enter && !!leave && !/scale\(|blur\(|filter:/.test(enter[0] + leave[0]));
-    check('7.4 style cache >= 40', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 40);
-    check('7.5 script cache >= 226', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 226);
+    check('7.4 style cache >= 41', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 41);
+    check('7.5 script cache >= 228', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 228);
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

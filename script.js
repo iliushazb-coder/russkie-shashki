@@ -1256,7 +1256,7 @@ function closeModal(modal) {
 // спрятать уже повторно открытый экран.
 const screenLeaveState = new WeakMap();
 let screenLeaveGeneration = 0;
-const SCREEN_TRANSITION_FALLBACK_MS = 540; // CSS leave = 440ms + запас
+const SCREEN_TRANSITION_FALLBACK_MS = 300; // CSS leave = 180ms + запас
 
 function getAppScreens() {
     return [
