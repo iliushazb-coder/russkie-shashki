@@ -1314,5 +1314,61 @@ console.log('\n=== 21. ОПТИЧЕСКАЯ ЦЕНТРОВКА ФИШЕК ===');
         /piece\.classList\.add\("piece",/.test(SRC));
 }
 
+console.log('\n=== 22. CAPTURE EFFECT (#4) ===');
+{
+    const durationMatch = /const CAPTURE_EFFECT_DURATION_MS = (\d+);/.exec(CLEAN);
+    const duration = durationMatch ? Number(durationMatch[1]) : 0;
+    const moveGhost = funcBody(CLEAN, 'playMoveGhostAnimation') || '';
+    const snapshots = funcBody(CLEAN, 'captureCapturedPieceSnapshotsBeforeUpdate') || '';
+
+    check('22.1 длительность эффекта в диапазоне 100–180 мс',
+        duration >= 100 && duration <= 180, 'duration=' + duration);
+
+    check('22.2 старый 90ms fade-констант удалён',
+        !/CAPTURE_FADE_DURATION_MS/.test(CLEAN));
+
+    check('22.3 captured ghost по-прежнему строится только из snapshot',
+        /capturedGhost\.className\s*=\s*"piece "/.test(moveGhost) &&
+        /capturedSnapshots/.test(moveGhost));
+
+    check('22.4 snapshot по-прежнему только для capture + lastCapturedSquares',
+        /moveType !== "capture"/.test(snapshots) &&
+        /lastCapturedSquares/.test(snapshots));
+
+    check('22.5 reduced-motion не создаёт новый capture motion',
+        /!prefersReducedScreenMotion\(\)\s*&&\s*Array\.isArray\(capturedSnapshots\)/.test(moveGhost));
+
+    check('22.6 CSS использует отдельный capturedGhostImpact',
+        /animation:\s*capturedGhostImpact var\(--capture-effect-duration, 150ms\)/.test(CSS) &&
+        /@keyframes capturedGhostImpact\s*\{/.test(CSS));
+
+    check('22.7 есть мягкий impact перед исчезновением',
+        /18%\s*\{[^}]*scale:\s*1\.04/.test(CSS));
+
+    check('22.8 финал = fade + shrink + micro-rotation',
+        /100%\s*\{[^}]*opacity:\s*0;[^}]*scale:\s*0\.58;[^}]*rotate:\s*4deg/.test(CSS));
+
+    check('22.9 king-safe: effect анимирует individual scale/rotate, не transform',
+        /@keyframes capturedGhostImpact[\s\S]*scale:\s*1\.04[\s\S]*rotate:\s*4deg/.test(CSS) &&
+        !/@keyframes capturedGhostImpact\s*\{[^@]*transform:/.test(CSS));
+
+    check('22.10 animationend фильтруется по target + имени',
+        /event\.target !== capturedGhost/.test(moveGhost) &&
+        /event\.animationName !== "capturedGhostImpact"/.test(moveGhost));
+
+    check('22.11 fallback cleanup привязан к той же duration-константе',
+        /setTimeout\(cleanupCapturedGhost, CAPTURE_EFFECT_DURATION_MS \+ 60\)/.test(moveGhost));
+
+    check('22.12 декоративный ghost aria-hidden',
+        /capturedGhost\.setAttribute\("aria-hidden", "true"\)/.test(moveGhost));
+
+    check('22.13 reduced-motion CSS скрывает capture ghost защитно',
+        /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.move-ghost-captured\s*\{[^}]*display:\s*none\s*!important/.test(CSS));
+
+    check('22.14 cache-bust обновлён',
+        Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 49 &&
+        Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 234);
+}
+
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
 process.exit(failed === 0 ? 0 : 1);

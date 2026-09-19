@@ -1565,7 +1565,7 @@ let lastAnimatedMoveCount = null;
 // видимость спрятанной реальной фигуры перед удалением ghost'а.
 let activeGhostCancelFns = [];
 const MOVE_GHOST_DURATION_MS = 150;
-const CAPTURE_FADE_DURATION_MS = 90;
+const CAPTURE_EFFECT_DURATION_MS = 150;
 
 function getLabels() {
     if (!flipped) {
@@ -2734,7 +2734,7 @@ function cancelActiveGhostAnimations() {
 // --- Точечное чтение существующего DOM ДО того, как updateBoardPieces()
 // удалит сбитые фигуры. Единственная цель — сохранить UI-метаданные
 // (color, king) для captured-ghost эффекта, чтобы сбитая дамка визуально
-// не показалась на 90мс обычной шашкой. НЕ пишет и не читает
+// сохранила правильный king-вид до конца короткого эффекта. НЕ пишет и не читает
 // currentState/game logic, никаких новых игровых полей — чисто временный
 // локальный снимок для рендера, живущий один вызов renderBoard(). ---
 function captureCapturedPieceSnapshotsBeforeUpdate() {
@@ -2878,7 +2878,7 @@ function playMoveGhostAnimation(capturedSnapshots) {
     // заранее снятым (до updateBoardPieces()) UI-метаданным color/king.
     // pendingRemovals сознательно не используется — это чисто rules-логика,
     // к визуалу отношения не имеет. ---
-    if (Array.isArray(capturedSnapshots)) {
+    if (!prefersReducedScreenMotion() && Array.isArray(capturedSnapshots)) {
         capturedSnapshots.forEach(function (snap) {
             const capturedSquareEl = squareElements[snap.key];
             if (!capturedSquareEl) return;
@@ -2886,25 +2886,25 @@ function playMoveGhostAnimation(capturedSnapshots) {
             const capturedColorClass = snap.color === "light" ? "piece-light" : "piece-dark";
             const capturedGhost = document.createElement("div");
             capturedGhost.className = "piece " + capturedColorClass + " move-ghost-captured" + (snap.king ? " king" : "");
+            capturedGhost.setAttribute("aria-hidden", "true");
+            capturedGhost.style.setProperty("--capture-effect-duration", CAPTURE_EFFECT_DURATION_MS + "ms");
             capturedSquareEl.appendChild(capturedGhost);
 
             let capCancelled = false;
             function cleanupCapturedGhost() {
                 if (capCancelled) return;
                 capCancelled = true;
+                capturedGhost.removeEventListener("animationend", onCapturedGhostAnimationEnd);
                 if (capturedGhost.parentNode) capturedGhost.remove();
                 activeGhostCancelFns = activeGhostCancelFns.filter(function (fn) { return fn !== cleanupCapturedGhost; });
             }
+            function onCapturedGhostAnimationEnd(event) {
+                if (event.target !== capturedGhost || event.animationName !== "capturedGhostImpact") return;
+                cleanupCapturedGhost();
+            }
             activeGhostCancelFns.push(cleanupCapturedGhost);
-
-            requestAnimationFrame(function () {
-                if (capCancelled) return;
-                capturedGhost.style.transition = "opacity " + CAPTURE_FADE_DURATION_MS + "ms ease-out, transform " + CAPTURE_FADE_DURATION_MS + "ms ease-out";
-                capturedGhost.style.opacity = "0";
-                capturedGhost.style.transform = "scale(0.4)";
-            });
-            capturedGhost.addEventListener("transitionend", cleanupCapturedGhost);
-            setTimeout(cleanupCapturedGhost, CAPTURE_FADE_DURATION_MS + 60);
+            capturedGhost.addEventListener("animationend", onCapturedGhostAnimationEnd);
+            setTimeout(cleanupCapturedGhost, CAPTURE_EFFECT_DURATION_MS + 60);
         });
     }
 }
