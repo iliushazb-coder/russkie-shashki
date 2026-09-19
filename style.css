@@ -64,8 +64,11 @@
 }
 
 @keyframes screenEnter {
-    0%, 70% { opacity: 0; transform: translateY(10px); }
-    100%    { opacity: 1; transform: translateY(0); }
+    /* Пока old screen уходит, target не только невидим, но и не принимает
+       повторный/случайный тап по ещё не показанным кнопкам. */
+    0%, 70% { opacity: 0; transform: translateY(10px); pointer-events: none; }
+    70.01%, 100% { pointer-events: auto; }
+    100% { opacity: 1; transform: translateY(0); }
 }
 
 /* Старый экран фиксируется в своём измеренном viewport-прямоугольнике:
@@ -1983,7 +1986,7 @@ button.danger-button.button-press-flash::after {
         animation: none;
         opacity: 0.7;
     }
-    /* Экранный cross-fade полностью отключён. JS при reduce сразу
+    /* Экранный переход полностью отключён. JS при reduce сразу
        прячет old screen; CSS дополнительно гасит enter/leave. */
     #menu-screen:not(.hidden):not(.screen-leaving),
     #time-control-screen:not(.hidden):not(.screen-leaving),

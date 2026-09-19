@@ -1133,12 +1133,15 @@ async function runScreenTransitionChecks(page, engineName) {
         return {
             oldHidden:old.classList.contains('hidden'),
             oldOpacity:parseFloat(getComputedStyle(old).opacity),
-            targetOpacity:parseFloat(getComputedStyle(target).opacity)
+            targetOpacity:parseFloat(getComputedStyle(target).opacity),
+            targetPointer:getComputedStyle(target).pointerEvents
         };
     });
     check(engineName + ' screen: через 90ms нет двух одновременно читаемых меню',
         !state.oldHidden && state.oldOpacity > 0.05 && state.targetOpacity < 0.02,
         JSON.stringify(state));
+    check(engineName + ' screen: невидимый target не принимает случайный tap',
+        state.targetPointer === 'none', state.targetPointer);
 
     await page.waitForTimeout(650);
     state = await page.evaluate(function(){

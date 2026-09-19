@@ -47,7 +47,10 @@ SCREENS.forEach(function(id, i) {
 check('1.13 оба keyframes существуют', /@keyframes screenEnter\s*\{/.test(CSS_CLEAN) && /@keyframes screenLeave\s*\{/.test(CSS_CLEAN));
 check('1.14 экраны существуют в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
 check('1.15 target не проявляется до 70% enter-animation',
-    /@keyframes screenEnter\s*\{[\s\S]*?0%,\s*70%\s*\{\s*opacity:\s*0/.test(CSS_CLEAN));
+    /@keyframes screenEnter\s*\{[\s\S]*?0%,\s*70%\s*\{[^}]*opacity:\s*0/.test(CSS_CLEAN));
+check('1.16 невидимый target до 70% не принимает pointer-events',
+    /0%,\s*70%\s*\{[^}]*pointer-events:\s*none/.test(CSS_CLEAN) &&
+    /70\.01%,\s*100%\s*\{[^}]*pointer-events:\s*auto/.test(CSS_CLEAN));
 
 console.log('\n=== 2. PER-SCREEN LIFECYCLE + STALE GUARD ===');
 check('2.1 WeakMap per-screen state', /const screenLeaveState = new WeakMap\(\)/.test(CLEAN));
