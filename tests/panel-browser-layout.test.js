@@ -839,7 +839,7 @@ async function runAsyncModalFocusChecks(page, engineName) {
 
 /* №3B: реальная close-анимация в Chromium/WebKit.
    В отличие от старых focus fixtures, здесь подключён ПОЛНЫЙ production CSS,
-   поэтому closeModal() действительно остаётся в .modal-closing ~180ms. */
+   поэтому closeModal() действительно остаётся в .modal-closing до конца production-анимации. */
 function buildModalCloseAnimationFixture() {
     const helperStart = SRC.indexOf('const modalFocusState = new WeakMap();');
     const heMarker = 'function closeModal(modal) {';
@@ -860,6 +860,7 @@ function buildModalCloseAnimationFixture() {
     return '<!doctype html><html><head><style>' + CSS + '</style></head><body>'
         + '<button id="ext-trigger">внешний триггер</button>'
         + modalHtml('resign-confirm-modal') + modalHtml('back-confirm-modal')
+        + '<div id="stats-modal" class="hidden modal-overlay" role="dialog"><div class="modal-box stats-modal-box"><button data-modal-initial-focus>Назад</button></div></div>'
         + '<script>' + helperSrc + '\n'
         + 'function __resetModalCloseFixture(){'
         + ' document.querySelectorAll(".modal-overlay").forEach(function(m){'
@@ -919,6 +920,33 @@ async function runModalCloseAnimationChecks(page, engineName) {
         return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
     });
     check(engineName + ' 3B: после animationend/fallback modal реально hidden и closing снят',
+        state.hidden && !state.closing, JSON.stringify(state));
+
+    // 1b) Statistics is intentionally the fast exception: 180ms, while
+    // generic modals above stay 440ms.
+    await reset();
+    state = await page.evaluate(function () {
+        const m = document.getElementById('stats-modal');
+        openModal(m);
+        closeModal(m);
+        return {
+            closing: m.classList.contains('modal-closing'),
+            overlayDuration: getComputedStyle(m).animationDuration,
+            boxDuration: getComputedStyle(m.querySelector('.modal-box')).animationDuration
+        };
+    });
+    check(engineName + ' 3B: stats close = 180ms',
+        state.closing && state.overlayDuration === '0.18s' && state.boxDuration === '0.18s',
+        JSON.stringify(state));
+    // Headless WebKit может доставлять animationend заметно позже CSS
+    // duration. Сам визуальный контракт уже проверен выше через computed
+    // 0.18s; здесь проверяем только eventual cleanup после общего fallback.
+    await page.waitForTimeout(650);
+    state = await page.evaluate(function () {
+        const m = document.getElementById('stats-modal');
+        return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
+    });
+    check(engineName + ' 3B: stats после animationend/fallback полностью закрыта',
         state.hidden && !state.closing, JSON.stringify(state));
 
     // 2) Повторный close не создаёт новый цикл.
