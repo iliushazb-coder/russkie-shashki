@@ -86,7 +86,7 @@ console.log('\n=== 5. REDUCED MOTION + CACHE ===');
     const blocks = CSS_CLEAN.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
     const rm = blocks.find(b => /#menu-screen:not\(\.hidden\)/.test(b));
     check('5.1 reduced-motion выключает incoming animation', !!rm && /animation:\s*none\s*!important/.test(rm));
-    check('5.2 style cache >= 46', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 46);
+    check('5.2 style cache >= 47', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 47);
     check('5.3 script cache >= 232', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 232);
 }
 
