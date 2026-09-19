@@ -1144,8 +1144,8 @@ async function runScreenTransitionChecks(page, engineName) {
     check(engineName + ' screen: outgoing hidden синхронно',
         state.oldHidden && state.oldAria === 'true' && state.oldInert && !state.oldLogical,
         JSON.stringify(state));
-    check(engineName + ' screen: target открыт в том же тике',
-        !state.targetHidden && state.targetAria !== 'true' && !state.targetInert &&
+    check(engineName + ' screen: target логически открыт в том же тике',
+        !state.targetHidden && state.targetAria !== 'true' && state.targetInert &&
         state.targetLogical && state.visibleCount === 1,
         JSON.stringify(state));
     check(engineName + ' screen: target enter = 180ms',
@@ -1162,6 +1162,7 @@ async function runScreenTransitionChecks(page, engineName) {
         return {
             oldHidden:menuScreen.classList.contains('hidden'),
             targetHidden:target.classList.contains('hidden'),
+            targetInert:target.hasAttribute('inert'),
             targetPointer:getComputedStyle(target).pointerEvents,
             visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
@@ -1170,15 +1171,18 @@ async function runScreenTransitionChecks(page, engineName) {
         state.oldHidden && !state.targetHidden && state.visibleCount === 1,
         JSON.stringify(state));
     check(engineName + ' screen: первый paint ещё не принимает input',
-        state.targetPointer === 'none', JSON.stringify(state));
+        state.targetPointer === 'none' && state.targetInert, JSON.stringify(state));
 
     await page.waitForTimeout(190);
     state = await page.evaluate(function(){
         const target=document.getElementById('group-lobby-screen');
-        return { targetPointer:getComputedStyle(target).pointerEvents };
+        return {
+            targetInert:target.hasAttribute('inert'),
+            targetPointer:getComputedStyle(target).pointerEvents
+        };
     });
-    check(engineName + ' screen: input возвращается после enter',
-        state.targetPointer === 'auto', JSON.stringify(state));
+    check(engineName + ' screen: input возвращается после guard',
+        state.targetPointer === 'auto' && !state.targetInert, JSON.stringify(state));
 
     // Быстрый A->B->C->A не имеет stale callbacks: outgoing всегда hidden
     // сразу, поэтому финальный target не может быть спрятан позже.
@@ -1209,11 +1213,14 @@ async function runScreenTransitionChecks(page, engineName) {
     state = await page.evaluate(function(){
         return {
             menuOpen:isScreenLogicallyActive(menuScreen),
+            menuInert:menuScreen.hasAttribute('inert'),
+            menuPointer:getComputedStyle(menuScreen).pointerEvents,
             visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
     });
-    check(engineName + ' screen: позже ничего stale не прячет target',
-        state.menuOpen && state.visibleCount === 1, JSON.stringify(state));
+    check(engineName + ' screen: позже stale callback не ломает target/input',
+        state.menuOpen && !state.menuInert && state.menuPointer === 'auto' &&
+        state.visibleCount === 1, JSON.stringify(state));
 
     await page.emulateMedia({ reducedMotion:'reduce' });
     await reset();
@@ -1223,12 +1230,16 @@ async function runScreenTransitionChecks(page, engineName) {
         return {
             oldHidden:menuScreen.classList.contains('hidden'),
             targetOpen:isScreenLogicallyActive(lobby),
+            targetInert:lobby.hasAttribute('inert'),
             targetAnim:getComputedStyle(lobby).animationName,
+            targetPointer:getComputedStyle(lobby).pointerEvents,
             visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
     });
     check(engineName + ' screen: reduced-motion переключает мгновенно',
-        state.oldHidden && state.targetOpen && state.targetAnim === 'none' && state.visibleCount === 1,
+        state.oldHidden && state.targetOpen && !state.targetInert &&
+        state.targetAnim === 'none' && state.targetPointer === 'auto' &&
+        state.visibleCount === 1,
         JSON.stringify(state));
     await page.emulateMedia({ reducedMotion:'no-preference' });
 }

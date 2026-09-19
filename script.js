@@ -1269,8 +1269,56 @@ function isScreenLogicallyActive(screen) {
     return !!screen && !screen.classList.contains("hidden");
 }
 
+// Input guard живёт отдельно от visual screen transition. Он НЕ задерживает
+// showScreen/game/Firebase: только временно блокирует пользовательский ввод,
+// пока новый экран ещё почти прозрачный. WeakMap-state делает rapid reopen
+// безопасным: старый timer не может снять guard с нового enter-cycle.
+const screenInputGuardState = new WeakMap();
+const SCREEN_INPUT_GUARD_MS = 130;
+const SCREEN_INPUT_GUARD_CLASS = "screen-enter-input-guard";
+
+function cancelScreenInputGuard(screen) {
+    if (!screen) return;
+    const state = screenInputGuardState.get(screen);
+    if (state && state.timerId) clearTimeout(state.timerId);
+    if (state) screenInputGuardState.delete(screen);
+    screen.classList.remove(SCREEN_INPUT_GUARD_CLASS);
+}
+
+function finishScreenInputGuard(screen, state) {
+    if (!screen || screenInputGuardState.get(screen) !== state) return;
+
+    screenInputGuardState.delete(screen);
+    screen.classList.remove(SCREEN_INPUT_GUARD_CLASS);
+
+    // hidden screen должен остаться inert. Снимаем inert только с текущего
+    // видимого target этого enter-cycle.
+    if (!screen.classList.contains("hidden")) screen.removeAttribute("inert");
+}
+
+function startScreenInputGuard(screen) {
+    if (!screen) return;
+    cancelScreenInputGuard(screen);
+
+    if (prefersReducedScreenMotion()) {
+        screen.removeAttribute("inert");
+        return;
+    }
+
+    screen.classList.add(SCREEN_INPUT_GUARD_CLASS);
+    screen.setAttribute("inert", "");
+
+    const state = { timerId: null };
+    screenInputGuardState.set(screen, state);
+    state.timerId = setTimeout(function () {
+        finishScreenInputGuard(screen, state);
+    }, SCREEN_INPUT_GUARD_MS);
+}
+
 function hideScreenImmediately(screen) {
-    if (!screen || screen.classList.contains("hidden")) return;
+    if (!screen) return;
+    cancelScreenInputGuard(screen);
+    if (screen.classList.contains("hidden")) return;
 
     const active = document.activeElement;
     if (active && screen.contains(active) && typeof active.blur === "function") active.blur();
@@ -1298,7 +1346,7 @@ function showScreen(screen) {
     // Target становится текущим экраном сразу. Его 180ms enter -- только
     // визуальный эффект; game/Firebase не ждут.
     screen.removeAttribute("aria-hidden");
-    screen.removeAttribute("inert");
+    startScreenInputGuard(screen);
     screen.classList.remove("hidden");
 }
 

@@ -43,8 +43,10 @@ check('1.7 keyframes screenEnter существует', /@keyframes screenEnter\
 check('1.8 screenLeave CSS отсутствует', !/screenLeave/.test(CSS_CLEAN));
 check('1.9 .screen-leaving CSS отсутствует', !/\.screen-leaving/.test(CSS_CLEAN));
 check('1.10 все 5 экранов есть в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
-check('1.11 early incoming input заблокирован до 70%', /70%\s*\{[^}]*pointer-events:\s*none/.test(CSS_CLEAN));
-check('1.12 input включается после guard', /70\.01%\s*\{[^}]*pointer-events:\s*auto/.test(CSS_CLEAN));
+check('1.11 input guard class блокирует pointer events',
+    /\.screen-enter-input-guard\s*\{[^}]*pointer-events:\s*none\s*!important/.test(CSS_CLEAN));
+check('1.12 screenEnter не анимирует pointer-events',
+    !/@keyframes screenEnter\s*\{[\s\S]*?pointer-events/.test(CSS_CLEAN));
 
 console.log('\n=== 2. OUTGOING HIDE СИНХРОННЫЙ ===');
 {
@@ -57,10 +59,11 @@ console.log('\n=== 2. OUTGOING HIDE СИНХРОННЫЙ ===');
     check('2.5 showScreen скрывает каждый non-target через helper',
         /candidate !== screen[\s\S]*hideScreenImmediately\(candidate\)/.test(show));
     check('2.6 target .hidden снимается синхронно', /screen\.classList\.remove\("hidden"\)/.test(show));
-    check('2.7 target снимает aria-hidden/inert',
+    check('2.7 target снимает aria-hidden и запускает input guard',
         /screen\.removeAttribute\("aria-hidden"\)/.test(show) &&
-        /screen\.removeAttribute\("inert"\)/.test(show));
-    check('2.8 нет async/await/Promise/timer', !/async |await |Promise|\.then\(|setTimeout/.test(show));
+        /startScreenInputGuard\(screen\)/.test(show));
+    check('2.8 showScreen сам остаётся sync без await/Promise/timer',
+        !/async |await |Promise|\.then\(|setTimeout/.test(show));
 }
 
 console.log('\n=== 3. НЕТ STALE VISUAL TAIL ===');
@@ -71,6 +74,14 @@ check('3.4 cancelPendingScreenLeave удалён', !/cancelPendingScreenLeave/.t
 check('3.5 logical-active зависит только от hidden',
     /function isScreenLogicallyActive[\s\S]*!screen\.classList\.contains\("hidden"\)/.test(CLEAN) &&
     !/function isScreenLogicallyActive[\s\S]{0,200}screen-leaving/.test(CLEAN));
+{
+    const cancelGuard = funcBody(CLEAN, 'cancelScreenInputGuard') || '';
+    const finishGuard = funcBody(CLEAN, 'finishScreenInputGuard') || '';
+    check('3.6 input guard хранит per-screen WeakMap state', /const screenInputGuardState = new WeakMap\(\)/.test(CLEAN));
+    check('3.7 rapid reopen отменяет старый input timer', /clearTimeout\(state\.timerId\)/.test(cancelGuard));
+    check('3.8 stale input callback проверяет identity state',
+        /screenInputGuardState\.get\(screen\) !== state/.test(finishGuard));
+}
 
 console.log('\n=== 4. GAME/FIREBASE ЛОГИКА НЕ ЖДЁТ ===');
 {
@@ -86,8 +97,8 @@ console.log('\n=== 5. REDUCED MOTION + CACHE ===');
     const blocks = CSS_CLEAN.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
     const rm = blocks.find(b => /#menu-screen:not\(\.hidden\)/.test(b));
     check('5.1 reduced-motion выключает incoming animation', !!rm && /animation:\s*none\s*!important/.test(rm));
-    check('5.2 style cache >= 47', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 47);
-    check('5.3 script cache >= 232', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 232);
+    check('5.2 style cache >= 48', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 48);
+    check('5.3 script cache >= 233', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 233);
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
