@@ -43,6 +43,8 @@ check('1.7 keyframes screenEnter существует', /@keyframes screenEnter\
 check('1.8 screenLeave CSS отсутствует', !/screenLeave/.test(CSS_CLEAN));
 check('1.9 .screen-leaving CSS отсутствует', !/\.screen-leaving/.test(CSS_CLEAN));
 check('1.10 все 5 экранов есть в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
+check('1.11 early incoming input заблокирован до 70%', /70%\\s*\\{[^}]*pointer-events:\\s*none/.test(CSS_CLEAN));
+check('1.12 input включается после guard', /70\\.01%\\s*\\{[^}]*pointer-events:\\s*auto/.test(CSS_CLEAN));
 
 console.log('\n=== 2. OUTGOING HIDE СИНХРОННЫЙ ===');
 {

@@ -1135,6 +1135,7 @@ async function runScreenTransitionChecks(page, engineName) {
             targetInert:target.hasAttribute('inert'),
             targetAnim:ts.animationName,
             targetDuration:ts.animationDuration,
+            targetPointer:ts.pointerEvents,
             oldLogical:isScreenLogicallyActive(old),
             targetLogical:isScreenLogicallyActive(target),
             visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
@@ -1151,6 +1152,8 @@ async function runScreenTransitionChecks(page, engineName) {
         state.targetAnim.split(',').map(x=>x.trim()).includes('screenEnter') &&
         state.targetDuration.split(',').map(x=>x.trim()).includes('0.18s'),
         JSON.stringify({name:state.targetAnim,duration:state.targetDuration}));
+    check(engineName + ' screen: early incoming input заблокирован',
+        state.targetPointer === 'none', JSON.stringify(state));
 
     // Даже на первом следующем paint старого меню уже нет в render tree.
     await page.waitForTimeout(20);
@@ -1159,12 +1162,23 @@ async function runScreenTransitionChecks(page, engineName) {
         return {
             oldHidden:menuScreen.classList.contains('hidden'),
             targetHidden:target.classList.contains('hidden'),
+            targetPointer:getComputedStyle(target).pointerEvents,
             visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
     });
     check(engineName + ' screen: нет кадра с двумя меню',
         state.oldHidden && !state.targetHidden && state.visibleCount === 1,
         JSON.stringify(state));
+    check(engineName + ' screen: первый paint ещё не принимает input',
+        state.targetPointer === 'none', JSON.stringify(state));
+
+    await page.waitForTimeout(190);
+    state = await page.evaluate(function(){
+        const target=document.getElementById('group-lobby-screen');
+        return { targetPointer:getComputedStyle(target).pointerEvents };
+    });
+    check(engineName + ' screen: input возвращается после enter',
+        state.targetPointer === 'auto', JSON.stringify(state));
 
     // Быстрый A->B->C->A не имеет stale callbacks: outgoing всегда hidden
     // сразу, поэтому финальный target не может быть спрятан позже.
