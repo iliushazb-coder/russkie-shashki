@@ -49,9 +49,9 @@
 
 /* ===== КОРОТКИЙ ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
    Логика по-прежнему переключается синхронно, но визуально два меню
-   больше не читаются одновременно: old уходит за 180ms, а target держится
-   невидимым до ~182ms и затем мягко появляется. Весь visual transition
-   заканчивается за 260ms, без задержки game/Firebase.
+   больше не читаются одновременно: old уходит за первые 140ms, target
+   держится невидимым эти же 70% и затем мягко появляется. Весь visual
+   transition занимает ровно 200ms, без задержки game/Firebase.
 
    .screen-leaving исключён из enter-rule: старый экран не может повторно
    запустить появление, пока доигрывает уход. */
@@ -60,7 +60,7 @@
 #group-lobby-screen:not(.hidden):not(.screen-leaving),
 #waiting-screen:not(.hidden):not(.screen-leaving),
 #game-screen:not(.hidden):not(.screen-leaving) {
-    animation: screenEnter 260ms cubic-bezier(.22, .61, .36, 1) both;
+    animation: screenEnter 200ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes screenEnter {
@@ -89,7 +89,7 @@
     box-sizing: border-box;
     z-index: 20;
     pointer-events: none !important;
-    animation: screenLeave 180ms cubic-bezier(.4, 0, 1, 1) forwards !important;
+    animation: screenLeave 140ms cubic-bezier(.4, 0, 1, 1) forwards !important;
 }
 
 @keyframes screenLeave {
@@ -1061,26 +1061,17 @@ button.danger-button.button-press-flash::after {
     to { opacity: 1; }
 }
 
-/* №3B: логика закрывается в JS сразу, а эти 440ms — только визуальный хвост.
+/* №3B: логика закрывается в JS сразу; 200ms — единый визуальный ритм
+   для ВСЕХ модалок, такой же как у их открытия и у screen navigation.
    pointer-events:none обязателен: закрывающаяся модалка уже не интерактивна.
    backdrop-filter НЕ анимируем — двигаются только opacity/transform. */
 .modal-overlay.modal-closing {
     pointer-events: none;
-    animation: modalCloseOverlay 440ms cubic-bezier(.4, 0, 1, 1) forwards;
+    animation: modalCloseOverlay 200ms cubic-bezier(.4, 0, 1, 1) forwards;
 }
 
 .modal-overlay.modal-closing .modal-box {
-    animation: modalCloseBox 440ms cubic-bezier(.4, 0, 1, 1) forwards;
-}
-
-/* Stats visually behaves like the accepted main-screen Back transition:
-   only this screen-like modal closes fast. Other dialogs keep 440ms. */
-#stats-modal.modal-closing {
-    animation-duration: 180ms;
-}
-
-#stats-modal.modal-closing .modal-box {
-    animation-duration: 180ms;
+    animation: modalCloseBox 200ms cubic-bezier(.4, 0, 1, 1) forwards;
 }
 
 @keyframes modalCloseOverlay {
@@ -1106,7 +1097,7 @@ button.danger-button.button-press-flash::after {
     text-align: center;
     max-width: 85vw;
     box-shadow: 0 24px 60px rgba(0,0,0,0.7), inset 0 1.5px 0 rgba(255,225,170,0.3);
-    animation: modalPop 0.25s cubic-bezier(.34,1.56,.64,1);
+    animation: modalPop 0.2s cubic-bezier(.34,1.56,.64,1);
     overflow: hidden;
 }
 
