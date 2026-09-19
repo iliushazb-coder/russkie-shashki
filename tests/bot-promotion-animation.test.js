@@ -91,7 +91,7 @@ function runGhost(state, lastAnimated) {
     const saved = {};
     ['cancelActiveGhostAnimations', 'playKingPromotionEffect', 'squareElements',
      'pieceElements', 'currentState', 'lastAnimatedMoveCount', 'activeGhostCancelFns',
-     'document', 'setTimeout', 'requestAnimationFrame',
+     'document', 'setTimeout', 'requestAnimationFrame', 'prefersReducedScreenMotion',
      'MOVE_GHOST_DURATION_MS'].forEach(function (k) {
         saved[k] = global[k];
     });
@@ -103,6 +103,7 @@ function runGhost(state, lastAnimated) {
     // Ghost стартует внутри rAF. Не исполняем колбэк: нас интересуют
     // ветвления до него, а реальный полёт в Node всё равно не измерить.
     global.requestAnimationFrame = function () { return 0; };
+    global.prefersReducedScreenMotion = function () { return false; };
     global.MOVE_GHOST_DURATION_MS = constOf('MOVE_GHOST_DURATION_MS') || 150;
 
     global.squareElements = {};

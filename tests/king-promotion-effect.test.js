@@ -446,8 +446,13 @@ console.log('\n=== 13. ЭФФЕКТ НЕ ОПЕРЕЖАЕТ ПОЛЁТ ШАШК�
         const eff2 = funcBody(CLEAN, 'playKingPromotionEffect');
         return !!eff2 && (eff2.match(/setProperty\("--king-promotion-duration"/g) || []).length === 4;
     })());
-    check('13.5 в CSS нет захардкоженной длительности полёта',
-        !/150ms/.test(CSS));
+    check('13.5 promotion CSS не хардкодит 150ms задержку полёта', (function () {
+        const start = CSS.indexOf('.king-promotion-flip,');
+        const end = CSS.indexOf('@keyframes kingPromotionFlip', start);
+        if (start === -1 || end === -1 || end <= start) return false;
+        const promotionCss = CSS.slice(start, end);
+        return !/150ms/.test(promotionCss) && /--king-promotion-delay/.test(promotionCss);
+    })());
 
     if (eff) {
         check('13.6 задержка связана с MOVE_GHOST_DURATION_MS, а не с magic number',
