@@ -1284,6 +1284,7 @@ function clearScreenLeaveGeometry(screen) {
     screen.style.removeProperty("--screen-leave-top");
     screen.style.removeProperty("--screen-leave-width");
     screen.style.removeProperty("--screen-leave-height");
+    screen.style.removeProperty("--screen-leave-opacity");
 }
 
 function clearScreenLeaveState(screen, state) {
@@ -1330,10 +1331,16 @@ function startScreenLeave(screen) {
     // Вынимаем старый экран из document flow, иначе два одновременно
     // видимых полноэкранных блока раздвинут body и дадут скачок/скролл.
     const rect = screen.getBoundingClientRect();
+    const currentOpacity = window.getComputedStyle
+        ? window.getComputedStyle(screen).opacity
+        : "1";
     screen.style.setProperty("--screen-leave-left", rect.left + "px");
     screen.style.setProperty("--screen-leave-top", rect.top + "px");
     screen.style.setProperty("--screen-leave-width", rect.width + "px");
     screen.style.setProperty("--screen-leave-height", rect.height + "px");
+    // Если screen ещё только входил (например opacity:0), leave начинается
+    // с этого же значения и не может внезапно вспыхнуть до opacity:1.
+    screen.style.setProperty("--screen-leave-opacity", currentOpacity || "1");
     screen.classList.add("screen-leaving");
 
     const generation = ++screenLeaveGeneration;

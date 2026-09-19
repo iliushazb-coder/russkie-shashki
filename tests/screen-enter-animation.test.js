@@ -100,7 +100,12 @@ check('4.4 уходящий экран не принимает pointer events',
     check('4.5 geometry берётся до screen-leaving', /getBoundingClientRect\(\)[\s\S]*classList\.add\("screen-leaving"\)/.test(start));
     check('4.6 outgoing сразу aria-hidden + inert',
         /setAttribute\("aria-hidden", "true"\)/.test(start) && /setAttribute\("inert", ""\)/.test(start));
+    check('4.7 leave сохраняет текущую opacity до смены animation',
+        /getComputedStyle\(screen\)\.opacity/.test(start) &&
+        /--screen-leave-opacity/.test(start));
 }
+check('4.8 screenLeave стартует с сохранённой opacity',
+    /from\s*\{[^}]*opacity:\s*var\(--screen-leave-opacity,\s*1\)/.test(CSS_CLEAN));
 
 console.log('\n=== 5. ЛОГИЧЕСКАЯ ВИДИМОСТЬ НЕ ЗАВЯЗАНА НА VISUAL TAIL ===');
 {
@@ -131,8 +136,8 @@ console.log('\n=== 7. ХАРАКТЕР АНИМАЦИИ + CACHE ===');
     check('7.2 leave opacity + 8px', !!leave && /opacity:\s*0/.test(leave[0]) && /translateY\(8px\)/.test(leave[0]));
     check('7.3 без scale/blur/filter в screen keyframes',
         !!enter && !!leave && !/scale\(|blur\(|filter:/.test(enter[0] + leave[0]));
-    check('7.4 style cache >= 41', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 41);
-    check('7.5 script cache >= 228', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 228);
+    check('7.4 style cache >= 42', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 42);
+    check('7.5 script cache >= 229', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 229);
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

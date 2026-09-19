@@ -1150,6 +1150,31 @@ async function runScreenTransitionChecks(page, engineName) {
     check(engineName + ' screen: после animation/fallback outgoing реально hidden',
         state.hidden && !state.leaving, JSON.stringify(state));
 
+    // Reviewer regression: incoming screen ещё opacity:0 (<70% enter), но
+    // следующий navigation уже отправляет его в leave. Он не должен вспыхнуть.
+    await reset();
+    await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
+    await page.waitForTimeout(45);
+    const hiddenIncomingBefore = await page.evaluate(function(){
+        return parseFloat(getComputedStyle(document.getElementById('group-lobby-screen')).opacity);
+    });
+    await page.evaluate(function(){ showScreen(document.getElementById('waiting-screen')); });
+    await page.waitForTimeout(20);
+    const hiddenIncomingAfter = await page.evaluate(function(){
+        const lobby=document.getElementById('group-lobby-screen');
+        return {
+            opacity:parseFloat(getComputedStyle(lobby).opacity),
+            leaving:lobby.classList.contains('screen-leaving'),
+            saved:lobby.style.getPropertyValue('--screen-leave-opacity')
+        };
+    });
+    check(engineName + ' screen: rapid navigation не вспыхивает hidden incoming',
+        hiddenIncomingBefore < 0.02 &&
+        hiddenIncomingAfter.leaving &&
+        hiddenIncomingAfter.opacity < 0.02 &&
+        parseFloat(hiddenIncomingAfter.saved || '1') < 0.02,
+        JSON.stringify({before:hiddenIncomingBefore,after:hiddenIncomingAfter}));
+
     // Generation должен быть load-bearing: старый callback не завершает новый leave-cycle.
     await reset();
     state = await page.evaluate(function(){

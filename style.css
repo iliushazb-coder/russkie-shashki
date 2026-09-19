@@ -93,7 +93,9 @@
 }
 
 @keyframes screenLeave {
-    from { opacity: 1; transform: translateY(0); }
+    /* Rapid navigation может закрыть target, пока его enter ещё opacity:0.
+       Стартуем с ФАКТИЧЕСКОЙ текущей прозрачности, чтобы не было flash до 1. */
+    from { opacity: var(--screen-leave-opacity, 1); transform: translateY(0); }
     to   { opacity: 0; transform: translateY(8px); }
 }
 body {
