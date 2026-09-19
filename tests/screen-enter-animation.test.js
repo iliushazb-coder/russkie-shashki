@@ -45,8 +45,10 @@ check('1.9 .screen-leaving CSS отсутствует', !/\.screen-leaving/.test
 check('1.10 все 5 экранов есть в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
 check('1.11 input guard class блокирует pointer events',
     /\.screen-enter-input-guard\s*\{[^}]*pointer-events:\s*none\s*!important/.test(CSS_CLEAN));
-check('1.12 screenEnter не анимирует pointer-events',
-    !/@keyframes screenEnter\s*\{[\s\S]*?pointer-events/.test(CSS_CLEAN));
+check('1.12 screenEnter не анимирует pointer-events', (function () {
+    const keyframes = /@keyframes screenEnter\s*\{([\s\S]*?)\n\}/.exec(CSS_CLEAN);
+    return !!keyframes && !/pointer-events/.test(keyframes[1]);
+})());
 
 console.log('\n=== 2. OUTGOING HIDE СИНХРОННЫЙ ===');
 {

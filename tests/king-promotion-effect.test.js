@@ -1058,7 +1058,7 @@ console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА 
         let outcome = [];
         const saved = {};
         ['cancelKingSound', 'playVictorySound', 'playDefeatSound', 'playDrawSound',
-         'hideStartupCover', 'hideScreenImmediately', 'getAppScreens',
+         'hideStartupCover', 'hideScreenImmediately', 'startScreenInputGuard', 'getAppScreens',
          'currentState', 'isSpectator', 'myTelegramId', 'myColor',
          'menuScreen', 'timeControlScreen', 'waitingScreen', 'gameScreen', 'document'
         ].forEach(function (k) { saved[k] = global[k]; });
@@ -1068,6 +1068,7 @@ console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА 
         global.playDefeatSound = function () { outcome.push('defeat'); };
         global.playDrawSound = function () { outcome.push('draw'); };
         global.hideStartupCover = function () {};
+        global.startScreenInputGuard = function () {};
         function el() {
             return {
                 classList: { add: function () {}, remove: function () {} },
