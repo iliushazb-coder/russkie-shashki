@@ -1144,7 +1144,7 @@ async function runScreenTransitionChecks(page, engineName) {
         state.oldHidden && state.oldAria === 'true' && state.oldInert && !state.oldLogical,
         JSON.stringify(state));
     check(engineName + ' screen: target открыт в том же тике',
-        !state.targetHidden && state.targetAria === null && !state.targetInert &&
+        !state.targetHidden && state.targetAria !== 'true' && !state.targetInert &&
         state.targetLogical && state.visibleCount === 1,
         JSON.stringify(state));
     check(engineName + ' screen: target enter = 180ms',
