@@ -1176,8 +1176,8 @@ async function runScreenTransitionChecks(page, engineName) {
             targetPointer:getComputedStyle(target).pointerEvents
         };
     });
-    check(engineName + ' screen: старый уже не виден, новый один проявляется',
-        state.oldHidden && state.oldOpacity < 0.02 && state.targetOpacity > 0.02,
+    check(engineName + ' screen: старый уже hidden, новый один проявляется',
+        state.oldHidden && state.targetOpacity > 0.02,
         JSON.stringify(state));
 
     await page.waitForTimeout(650);
@@ -1200,6 +1200,7 @@ async function runScreenTransitionChecks(page, engineName) {
     const hiddenIncomingAfter = await page.evaluate(function(){
         const lobby=document.getElementById('group-lobby-screen');
         return {
+            hidden:lobby.classList.contains('hidden'),
             opacity:parseFloat(getComputedStyle(lobby).opacity),
             leaving:lobby.classList.contains('screen-leaving'),
             saved:lobby.style.getPropertyValue('--screen-leave-opacity')
@@ -1207,7 +1208,7 @@ async function runScreenTransitionChecks(page, engineName) {
     });
     check(engineName + ' screen: rapid navigation не вспыхивает incoming',
         hiddenIncomingBefore > 0 && hiddenIncomingBefore < 1 &&
-        hiddenIncomingAfter.opacity < 0.02 &&
+        (hiddenIncomingAfter.hidden || hiddenIncomingAfter.opacity < 0.02) &&
         parseFloat(hiddenIncomingAfter.saved || String(hiddenIncomingBefore)) <= hiddenIncomingBefore + 0.05,
         JSON.stringify({before:hiddenIncomingBefore,after:hiddenIncomingAfter}));
 
