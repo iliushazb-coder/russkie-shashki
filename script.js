@@ -1015,7 +1015,7 @@ const modalFocusState = new WeakMap();
 // цикла безопасным no-op после повторного открытия.
 const modalCloseState = new WeakMap();
 let modalCloseGeneration = 0;
-const MODAL_CLOSE_FALLBACK_MS = 360; // CSS close = 260ms + запас на animationend
+const MODAL_CLOSE_FALLBACK_MS = 540; // CSS close = 440ms + запас на animationend
 
 function clearModalCloseState(modal, state) {
     if (!state) return;
