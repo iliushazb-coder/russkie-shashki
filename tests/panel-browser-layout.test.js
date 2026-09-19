@@ -1182,14 +1182,27 @@ async function runScreenTransitionChecks(page, engineName) {
     check(engineName + ' screen: невидимый target не принимает случайный tap',
         state.targetPointer === 'none', state.targetPointer);
 
-    await page.waitForTimeout(650);
+    // К 130ms old уже гарантированно завершил 110ms fade-out. Target может
+    // уже начинать свои последние 60ms, но читаемого overlap быть не может.
+    await page.waitForTimeout(40);
+    state = await page.evaluate(function(){
+        const old=menuScreen, target=document.getElementById('group-lobby-screen');
+        return {
+            oldOpacity:parseFloat(getComputedStyle(old).opacity),
+            targetOpacity:parseFloat(getComputedStyle(target).opacity)
+        };
+    });
+    check(engineName + ' screen: к 130ms outgoing уже полностью прозрачен',
+        state.oldOpacity < 0.02, JSON.stringify(state));
+
+    await page.waitForTimeout(610);
     state = await page.evaluate(function(){
         return {hidden:menuScreen.classList.contains('hidden'),leaving:menuScreen.classList.contains('screen-leaving')};
     });
     check(engineName + ' screen: после animation/fallback outgoing реально hidden',
         state.hidden && !state.leaving, JSON.stringify(state));
 
-    // Reviewer regression: incoming screen ещё opacity:0 (<70% enter), но
+    // Reviewer regression: incoming screen ещё opacity:0 (<66.67% enter), но
     // следующий navigation уже отправляет его в leave. Он не должен вспыхнуть.
     await reset();
     await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
