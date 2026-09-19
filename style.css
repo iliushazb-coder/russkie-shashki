@@ -772,10 +772,31 @@ button.danger-button.button-press-flash::after {
     height: 82%;
     border-radius: 50%;
     pointer-events: none;
-    z-index: 4;
+    /* На реальном видео летящая шашка (z=5) полностью закрывала captured
+       ghost (раньше z=4) ровно в момент пересечения. Capture — это impact,
+       поэтому на эти 180мс он сознательно находится поверх move-ghost. */
+    z-index: 6;
+    overflow: visible;
     will-change: transform, opacity;
     transform-origin: center;
     animation: capturedGhostImpact var(--capture-effect-duration, 180ms) cubic-bezier(.22,.7,.28,1) forwards !important;
+}
+
+/* Тонкое расходящееся кольцо делает сам момент удара читаемым даже когда
+   летящая шашка проходит через ту же клетку. Только transform/opacity:
+   никаких layout-пересчётов, canvas или частиц. */
+.move-ghost-captured::after {
+    content: "";
+    position: absolute;
+    inset: -7%;
+    border: 2px solid rgba(255, 236, 196, 0.82);
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.82);
+    transform-origin: center;
+    will-change: transform, opacity;
+    animation: capturedGhostImpactRing var(--capture-effect-duration, 180ms) ease-out forwards;
 }
 
 /* Внутренняя фигура сохраняет ровно ту же PNG-текстуру, что была на доске.
@@ -788,13 +809,20 @@ button.danger-button.button-press-flash::after {
     animation: none !important;
 }
 
-/* №4 Capture effect: короткий impact + fade/shrink + micro-rotation.
-   Только transform + opacity — максимально совместимый GPU-path для
-   Telegram WebView, без individual transform properties scale/rotate. */
+/* №4 Capture effect: заметный, но короткий impact именно в момент взятия,
+   затем быстрый fade/shrink + micro-rotation. */
 @keyframes capturedGhostImpact {
     0%   { opacity: 1;    transform: scale(1) rotate(0deg); }
-    18%  { opacity: 0.96; transform: scale(1.04) rotate(0deg); }
-    100% { opacity: 0;    transform: scale(0.58) rotate(4deg); }
+    28%  { opacity: 1;    transform: scale(1.12) rotate(-1.5deg); }
+    58%  { opacity: 0.72; transform: scale(0.86) rotate(2deg); }
+    100% { opacity: 0;    transform: scale(0.48) rotate(5deg); }
+}
+
+@keyframes capturedGhostImpactRing {
+    0%   { opacity: 0;    transform: scale(0.82); }
+    22%  { opacity: 0.95; transform: scale(1); }
+    60%  { opacity: 0.42; transform: scale(1.17); }
+    100% { opacity: 0;    transform: scale(1.32); }
 }
 
 /* Реальная фигура на клетке-назначении, пока над ней летит ghost. */
