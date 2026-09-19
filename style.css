@@ -47,19 +47,15 @@
     display: none !important;
 }
 
-/* ===== КОРОТКИЙ ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
-   Логика переключается синхронно. Старый экран гасится практически
-   мгновенно (1ms, без видимого кадра наложения), а новый один мягко
-   появляется за 180ms. Поэтому глаз не читает два меню подряд.
-   Game/Firebase не ждут анимацию.
-
-   .screen-leaving исключён из enter-rule: старый экран не может повторно
-   запустить появление, пока завершается его технический hide. */
-#menu-screen:not(.hidden):not(.screen-leaving),
-#time-control-screen:not(.hidden):not(.screen-leaving),
-#group-lobby-screen:not(.hidden):not(.screen-leaving),
-#waiting-screen:not(.hidden):not(.screen-leaving),
-#game-screen:not(.hidden):not(.screen-leaving) {
+/* ===== ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
+   Старый экран скрывается синхронно в showScreen(): никакого visual tail,
+   overlay или второго читаемого меню. Анимация принадлежит ТОЛЬКО новому
+   экрану и занимает 180ms. Game/Firebase не ждут анимацию. */
+#menu-screen:not(.hidden),
+#time-control-screen:not(.hidden),
+#group-lobby-screen:not(.hidden),
+#waiting-screen:not(.hidden),
+#game-screen:not(.hidden) {
     animation: screenEnter 180ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
@@ -68,33 +64,6 @@
     to   { opacity: 1; transform: translateY(0); }
 }
 
-/* Старый экран фиксируется в своём измеренном viewport-прямоугольнике:
-   новый сразу занимает flow, а старый не меняет высоту body/scroll. */
-#menu-screen.screen-leaving,
-#time-control-screen.screen-leaving,
-#group-lobby-screen.screen-leaving,
-#waiting-screen.screen-leaving,
-#game-screen.screen-leaving {
-    position: fixed !important;
-    left: var(--screen-leave-left) !important;
-    top: var(--screen-leave-top) !important;
-    width: var(--screen-leave-width) !important;
-    height: var(--screen-leave-height) !important;
-    margin: 0 !important;
-    right: auto !important;
-    bottom: auto !important;
-    box-sizing: border-box;
-    z-index: 20;
-    pointer-events: none !important;
-    animation: screenLeave 1ms linear forwards !important;
-}
-
-@keyframes screenLeave {
-    /* Rapid navigation может закрыть target, пока его enter ещё opacity:0.
-       Стартуем с ФАКТИЧЕСКОЙ текущей прозрачности, чтобы не было flash до 1. */
-    from { opacity: var(--screen-leave-opacity, 1); transform: translateY(0); }
-    to   { opacity: 0; transform: translateY(8px); }
-}
 body {
     display: flex;
     justify-content: center;
@@ -1987,17 +1956,12 @@ button.danger-button.button-press-flash::after {
         opacity: 0.7;
     }
     /* Экранный переход полностью отключён. JS при reduce сразу
-       прячет old screen; CSS дополнительно гасит enter/leave. */
-    #menu-screen:not(.hidden):not(.screen-leaving),
-    #time-control-screen:not(.hidden):not(.screen-leaving),
-    #group-lobby-screen:not(.hidden):not(.screen-leaving),
-    #waiting-screen:not(.hidden):not(.screen-leaving),
-    #game-screen:not(.hidden):not(.screen-leaving),
-    #menu-screen.screen-leaving,
-    #time-control-screen.screen-leaving,
-    #group-lobby-screen.screen-leaving,
-    #waiting-screen.screen-leaving,
-    #game-screen.screen-leaving {
+       прячет old screen; CSS дополнительно гасит enter. */
+    #menu-screen:not(.hidden),
+    #time-control-screen:not(.hidden),
+    #group-lobby-screen:not(.hidden),
+    #waiting-screen:not(.hidden),
+    #game-screen:not(.hidden) {
         animation: none !important;
     }
     /* Кнопка не движется: ни утопления, ни плавных переходов. Световой

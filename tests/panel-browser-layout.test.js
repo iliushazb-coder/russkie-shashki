@@ -1084,7 +1084,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
 
 /* Screen transition: production CSS + production helper. */
 function buildScreenTransitionFixture() {
-    const start = SRC.indexOf('const screenLeaveState = new WeakMap();');
+    const start = SRC.indexOf('function getAppScreens() {');
     const showStart = SRC.indexOf('function showScreen(screen) {', start);
     let depth = 0, i = SRC.indexOf('{', showStart), end = -1;
     for (; i < SRC.length; i++) {
@@ -1108,163 +1108,72 @@ function buildScreenTransitionFixture() {
         + 'const gameScreen=document.getElementById("game-screen");'
         + helperSrc
         + 'function __resetScreens(){'
-        + ' getAppScreens().forEach(function(s){cancelPendingScreenLeave(s);s.classList.add("hidden");s.removeAttribute("aria-hidden");s.removeAttribute("inert");});'
+        + ' getAppScreens().forEach(function(s){s.classList.add("hidden");s.removeAttribute("aria-hidden");s.removeAttribute("inert");});'
         + ' menuScreen.classList.remove("hidden");'
         + '}'
         + '</script></body></html>';
 }
 
 async function runScreenTransitionChecks(page, engineName) {
-    console.log('\n=== SCREEN TRANSITION: lifecycle + race safety ===');
+    console.log('\n=== SCREEN TRANSITION: incoming-only 180ms, no overlap ===');
     const reset = async function () {
         await page.evaluate(function(){ __resetScreens(); });
-        await page.waitForTimeout(500);
+        await page.waitForTimeout(250);
     };
 
     await reset();
-    const before = await page.evaluate(function(){
-        const r=menuScreen.getBoundingClientRect();
-        return {left:r.left,top:r.top,width:r.width,height:r.height};
-    });
     await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
     let state = await page.evaluate(function(){
         const old=menuScreen, target=document.getElementById('group-lobby-screen');
-        const r=old.getBoundingClientRect(), cs=getComputedStyle(old), ts=getComputedStyle(target);
+        const ts=getComputedStyle(target);
         return {
             oldHidden:old.classList.contains('hidden'),
-            oldLeaving:old.classList.contains('screen-leaving'),
             oldAria:old.getAttribute('aria-hidden'),
             oldInert:old.hasAttribute('inert'),
-            oldPointer:cs.pointerEvents,
-            oldPosition:cs.position,
-            rect:{left:r.left,top:r.top,width:r.width,height:r.height},
             targetHidden:target.classList.contains('hidden'),
-            targetLeaving:target.classList.contains('screen-leaving'),
             targetAria:target.hasAttribute('aria-hidden'),
             targetInert:target.hasAttribute('inert'),
             targetAnim:ts.animationName,
             targetDuration:ts.animationDuration,
             oldLogical:isScreenLogicallyActive(old),
-            targetLogical:isScreenLogicallyActive(target)
+            targetLogical:isScreenLogicallyActive(target),
+            visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
     });
-    check(engineName + ' screen: old логически закрыт, но визуально уходит',
-        !state.oldHidden && state.oldLeaving && !state.oldLogical, JSON.stringify(state));
-    check(engineName + ' screen: target логически открыт в том же тике',
-        !state.targetHidden && !state.targetLeaving && state.targetLogical, JSON.stringify(state));
-    check(engineName + ' screen: outgoing inert + aria-hidden + pointer-events none',
-        state.oldAria === 'true' && state.oldInert && state.oldPointer === 'none', JSON.stringify(state));
-    check(engineName + ' screen: outgoing вынут из flow через fixed',
-        state.oldPosition === 'fixed', state.oldPosition);
-    check(engineName + ' screen: snapshot geometry не прыгает',
-        Math.abs(state.rect.left-before.left)<1 && Math.abs(state.rect.top-before.top)<1 &&
-        Math.abs(state.rect.width-before.width)<1 && Math.abs(state.rect.height-before.height)<1,
-        JSON.stringify({before:before,after:state.rect}));
+    check(engineName + ' screen: outgoing hidden синхронно',
+        state.oldHidden && state.oldAria === 'true' && state.oldInert && !state.oldLogical,
+        JSON.stringify(state));
+    check(engineName + ' screen: target открыт в том же тике',
+        !state.targetHidden && state.targetAria === null && !state.targetInert &&
+        state.targetLogical && state.visibleCount === 1,
+        JSON.stringify(state));
     check(engineName + ' screen: target enter = 180ms',
         state.targetAnim.split(',').map(x=>x.trim()).includes('screenEnter') &&
         state.targetDuration.split(',').map(x=>x.trim()).includes('0.18s'),
         JSON.stringify({name:state.targetAnim,duration:state.targetDuration}));
 
-    // Старый экран должен исчезнуть до первого заметного кадра нового.
+    // Даже на первом следующем paint старого меню уже нет в render tree.
     await page.waitForTimeout(20);
     state = await page.evaluate(function(){
-        const old=menuScreen, target=document.getElementById('group-lobby-screen');
+        const target=document.getElementById('group-lobby-screen');
         return {
-            oldHidden:old.classList.contains('hidden'),
-            oldOpacity:parseFloat(getComputedStyle(old).opacity),
-            targetOpacity:parseFloat(getComputedStyle(target).opacity),
-            targetPointer:getComputedStyle(target).pointerEvents
+            oldHidden:menuScreen.classList.contains('hidden'),
+            targetHidden:target.classList.contains('hidden'),
+            visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
     });
-    check(engineName + ' screen: старый уже hidden, новый один проявляется',
-        state.oldHidden && state.targetOpacity > 0.02,
+    check(engineName + ' screen: нет кадра с двумя меню',
+        state.oldHidden && !state.targetHidden && state.visibleCount === 1,
         JSON.stringify(state));
 
-    await page.waitForTimeout(650);
-    state = await page.evaluate(function(){
-        return {hidden:menuScreen.classList.contains('hidden'),leaving:menuScreen.classList.contains('screen-leaving')};
-    });
-    check(engineName + ' screen: после animation/fallback outgoing реально hidden',
-        state.hidden && !state.leaving, JSON.stringify(state));
-
-    // Reviewer regression: incoming screen ещё не закончил 180ms enter, но
-    // следующий navigation уже отправляет его в leave. Он не должен вспыхнуть.
+    // Быстрый A->B->C->A не имеет stale callbacks: outgoing всегда hidden
+    // сразу, поэтому финальный target не может быть спрятан позже.
     await reset();
-    await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
-    await page.waitForTimeout(45);
-    const hiddenIncomingBefore = await page.evaluate(function(){
-        return parseFloat(getComputedStyle(document.getElementById('group-lobby-screen')).opacity);
-    });
-    await page.evaluate(function(){ showScreen(document.getElementById('waiting-screen')); });
-    await page.waitForTimeout(20);
-    const hiddenIncomingAfter = await page.evaluate(function(){
-        const lobby=document.getElementById('group-lobby-screen');
-        return {
-            hidden:lobby.classList.contains('hidden'),
-            opacity:parseFloat(getComputedStyle(lobby).opacity),
-            leaving:lobby.classList.contains('screen-leaving'),
-            saved:lobby.style.getPropertyValue('--screen-leave-opacity')
-        };
-    });
-    check(engineName + ' screen: rapid navigation не вспыхивает incoming',
-        hiddenIncomingBefore > 0 && hiddenIncomingBefore < 1 &&
-        (hiddenIncomingAfter.hidden || hiddenIncomingAfter.opacity < 0.02) &&
-        parseFloat(hiddenIncomingAfter.saved || String(hiddenIncomingBefore)) <= hiddenIncomingBefore + 0.05,
-        JSON.stringify({before:hiddenIncomingBefore,after:hiddenIncomingAfter}));
-
-    // Generation должен быть load-bearing: старый callback не завершает новый leave-cycle.
-    await reset();
-    state = await page.evaluate(function(){
-        const lobby=document.getElementById('group-lobby-screen');
-        showScreen(lobby);
-        const oldGen=screenLeaveState.get(menuScreen).generation;
+    await page.evaluate(function(){
+        showScreen(document.getElementById('group-lobby-screen'));
+        showScreen(document.getElementById('waiting-screen'));
         showScreen(menuScreen);
-        showScreen(lobby);
-        const newGen=screenLeaveState.get(menuScreen).generation;
-        finishScreenLeave(menuScreen, oldGen);
-        return {
-            oldGen:oldGen,newGen:newGen,
-            hidden:menuScreen.classList.contains('hidden'),
-            leaving:menuScreen.classList.contains('screen-leaving'),
-            current:screenLeaveState.get(menuScreen) && screenLeaveState.get(menuScreen).generation
-        };
     });
-    check(engineName + ' screen: stale generation НЕ прячет новый leave-cycle',
-        state.oldGen !== state.newGen && !state.hidden && state.leaving && state.current === state.newGen,
-        JSON.stringify(state));
-
-    // Быстрый A->B->C->A: stale callbacks не прячут reopened A, а C
-    // фиксируется РОВНО там, где стоял до reopen A. Это регрессия из review:
-    // если сначала вернуть A из fixed во flow, он временно сдвинет C до
-    // getBoundingClientRect(), и visual leave начнётся уже из чужой позиции.
-    await reset();
-    await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
-    await page.waitForTimeout(45);
-    await page.evaluate(function(){ showScreen(document.getElementById('waiting-screen')); });
-    await page.waitForTimeout(45);
-    const beforeRapidReopen = await page.evaluate(function(){
-        const r=document.getElementById('waiting-screen').getBoundingClientRect();
-        return {left:r.left,top:r.top,width:r.width,height:r.height};
-    });
-    await page.evaluate(function(){ showScreen(menuScreen); });
-    const afterRapidReopen = await page.evaluate(function(){
-        const waiting=document.getElementById('waiting-screen');
-        const r=waiting.getBoundingClientRect();
-        return {
-            left:r.left,top:r.top,width:r.width,height:r.height,
-            leaving:waiting.classList.contains('screen-leaving'),
-            position:getComputedStyle(waiting).position
-        };
-    });
-    check(engineName + ' screen: rapid reopen не сдвигает outgoing snapshot',
-        afterRapidReopen.leaving && afterRapidReopen.position === 'fixed' &&
-        Math.abs(afterRapidReopen.left-beforeRapidReopen.left)<1 &&
-        Math.abs(afterRapidReopen.top-beforeRapidReopen.top)<1 &&
-        Math.abs(afterRapidReopen.width-beforeRapidReopen.width)<1 &&
-        Math.abs(afterRapidReopen.height-beforeRapidReopen.height)<1,
-        JSON.stringify({before:beforeRapidReopen,after:afterRapidReopen}));
-
-    await page.waitForTimeout(650);
     state = await page.evaluate(function(){
         const lobby=document.getElementById('group-lobby-screen');
         const waiting=document.getElementById('waiting-screen');
@@ -1273,12 +1182,24 @@ async function runScreenTransitionChecks(page, engineName) {
             menuHidden:menuScreen.classList.contains('hidden'),
             lobbyHidden:lobby.classList.contains('hidden'),
             waitingHidden:waiting.classList.contains('hidden'),
-            leftovers:document.querySelectorAll('.screen-leaving').length
+            visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length,
+            leaveClasses:document.querySelectorAll('.screen-leaving').length
         };
     });
-    check(engineName + ' screen: rapid navigation не скрывает reopened target',
-        state.menuOpen && !state.menuHidden && state.lobbyHidden && state.waitingHidden && state.leftovers === 0,
+    check(engineName + ' screen: rapid navigation оставляет ровно один экран',
+        state.menuOpen && !state.menuHidden && state.lobbyHidden &&
+        state.waitingHidden && state.visibleCount === 1 && state.leaveClasses === 0,
         JSON.stringify(state));
+
+    await page.waitForTimeout(350);
+    state = await page.evaluate(function(){
+        return {
+            menuOpen:isScreenLogicallyActive(menuScreen),
+            visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
+        };
+    });
+    check(engineName + ' screen: позже ничего stale не прячет target',
+        state.menuOpen && state.visibleCount === 1, JSON.stringify(state));
 
     await page.emulateMedia({ reducedMotion:'reduce' });
     await reset();
@@ -1287,13 +1208,13 @@ async function runScreenTransitionChecks(page, engineName) {
         const lobby=document.getElementById('group-lobby-screen');
         return {
             oldHidden:menuScreen.classList.contains('hidden'),
-            oldLeaving:menuScreen.classList.contains('screen-leaving'),
             targetOpen:isScreenLogicallyActive(lobby),
-            targetAnim:getComputedStyle(lobby).animationName
+            targetAnim:getComputedStyle(lobby).animationName,
+            visibleCount:getAppScreens().filter(function(s){return !s.classList.contains('hidden');}).length
         };
     });
     check(engineName + ' screen: reduced-motion переключает мгновенно',
-        state.oldHidden && !state.oldLeaving && state.targetOpen && state.targetAnim === 'none',
+        state.oldHidden && state.targetOpen && state.targetAnim === 'none' && state.visibleCount === 1,
         JSON.stringify(state));
     await page.emulateMedia({ reducedMotion:'no-preference' });
 }
