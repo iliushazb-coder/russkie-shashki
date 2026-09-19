@@ -56,7 +56,7 @@ console.log('=== 3. animationend + fallback, но без stale-hide ===');
 check('animationend фильтруется по overlay и имени close-анимации',
   /event\.target !== modal/.test(CLOSE) && /event\.animationName !== "modalCloseOverlay"/.test(CLOSE));
 check('есть fallback timer', /setTimeout\(function \(\) \{[\s\S]*finishModalClose\(modal, generation\)/.test(CLOSE));
-check('fallback = 300ms для 200ms close', /const MODAL_CLOSE_FALLBACK_MS = 300/.test(SRC));
+check('fallback = 280ms для 180ms close', /const MODAL_CLOSE_FALLBACK_MS = 280/.test(SRC));
 check('fixture/animation:none закрывается сразу, не ждёт fallback',
   /animationName === "none"/.test(CLOSE) && /finishModalClose\(modal, generation\)/.test(CLOSE));
 check('reduced-motion закрывается сразу',
@@ -66,10 +66,10 @@ check('reduced-motion закрывается сразу',
 console.log('=== 4. CSS close contract ===');
 check('.modal-closing выключает pointer events',
   /\.modal-overlay\.modal-closing\s*\{[^}]*pointer-events:\s*none/.test(CSS));
-check('overlay close = 200ms', /modalCloseOverlay 200ms/.test(CSS));
-check('box close = 200ms', /modalCloseBox 200ms/.test(CSS));
-check('overlay open = 200ms', /animation:\s*fadeInOverlay 0\.2s ease/.test(CSS));
-check('box open = 200ms', /animation:\s*modalPop 0\.2s/.test(CSS));
+check('overlay close = 180ms', /modalCloseOverlay 180ms/.test(CSS));
+check('box close = 180ms', /modalCloseBox 180ms/.test(CSS));
+check('overlay open = 180ms', /animation:\s*fadeInOverlay 0\.18s ease/.test(CSS));
+check('box open = 180ms', /animation:\s*modalPop 0\.18s/.test(CSS));
 check('stats больше не имеет отдельного close-duration',
   !/#stats-modal\.modal-closing\s*\{[^}]*animation-duration/.test(CSS));
 check('box мягко уходит вниз и чуть уменьшается',
