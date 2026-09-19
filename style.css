@@ -1044,16 +1044,16 @@ button.danger-button.button-press-flash::after {
     to { opacity: 1; }
 }
 
-/* №3B: логика закрывается в JS сразу, а эти 260ms — только визуальный хвост.
+/* №3B: логика закрывается в JS сразу, а эти 440ms — только визуальный хвост.
    pointer-events:none обязателен: закрывающаяся модалка уже не интерактивна.
    backdrop-filter НЕ анимируем — двигаются только opacity/transform. */
 .modal-overlay.modal-closing {
     pointer-events: none;
-    animation: modalCloseOverlay 260ms cubic-bezier(.4, 0, 1, 1) forwards;
+    animation: modalCloseOverlay 440ms cubic-bezier(.4, 0, 1, 1) forwards;
 }
 
 .modal-overlay.modal-closing .modal-box {
-    animation: modalCloseBox 260ms cubic-bezier(.4, 0, 1, 1) forwards;
+    animation: modalCloseBox 440ms cubic-bezier(.4, 0, 1, 1) forwards;
 }
 
 @keyframes modalCloseOverlay {

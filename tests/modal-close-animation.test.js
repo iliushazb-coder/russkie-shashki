@@ -65,8 +65,8 @@ check('reduced-motion закрывается сразу',
 console.log('=== 4. CSS close contract ===');
 check('.modal-closing выключает pointer events',
   /\.modal-overlay\.modal-closing\s*\{[^}]*pointer-events:\s*none/.test(CSS));
-check('overlay close = 260ms', /modalCloseOverlay 260ms/.test(CSS));
-check('box close = 260ms', /modalCloseBox 260ms/.test(CSS));
+check('overlay close = 440ms', /modalCloseOverlay 440ms/.test(CSS));
+check('box close = 440ms', /modalCloseBox 440ms/.test(CSS));
 check('box мягко уходит вниз и чуть уменьшается',
   /translateY\(10px\) scale\(0\.94\)/.test(CSS));
 check('reduced-motion выключает close-анимацию',

@@ -911,9 +911,9 @@ async function runModalCloseAnimationChecks(page, engineName) {
 
     // Не используем waitForFunction(): он по умолчанию поллится через
     // requestAnimationFrame, который headless WebKit может сильно
-    // притормозить. Ждём дольше production fallback (360ms) и затем
+    // притормозить. Ждём дольше production fallback (540ms) и затем
     // измеряем фактическое DOM-состояние напрямую.
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(650);
     state = await page.evaluate(function () {
         const m = document.getElementById('resign-confirm-modal');
         return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
@@ -929,9 +929,9 @@ async function runModalCloseAnimationChecks(page, engineName) {
     });
     // Не используем waitForFunction(): он по умолчанию поллится через
     // requestAnimationFrame, который headless WebKit может сильно
-    // притормозить. Ждём дольше production fallback (360ms) и затем
+    // притормозить. Ждём дольше production fallback (540ms) и затем
     // измеряем фактическое DOM-состояние напрямую.
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(650);
     check(engineName + ' 3B: повторный close безопасен',
         await page.evaluate(function () {
             const m = document.getElementById('resign-confirm-modal');
@@ -955,7 +955,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
             animationName: 'modalCloseOverlay', bubbles: true
         }));
     });
-    await page.waitForTimeout(430); // дольше fallback 360ms старого цикла
+    await page.waitForTimeout(610); // дольше fallback 540ms старого цикла
     state = await page.evaluate(function () {
         const m = document.getElementById('resign-confirm-modal');
         return {
