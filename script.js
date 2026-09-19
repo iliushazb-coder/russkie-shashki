@@ -1245,26 +1245,135 @@ function closeModal(modal) {
     }, MODAL_CLOSE_FALLBACK_MS);
 }
 
+// ===== ПЛАВНЫЕ ПЕРЕХОДЫ МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
+//
+// Логика переключается СИНХРОННО: target становится текущим экраном в том
+// же вызове showScreen(). Старый экран лишь остаётся визуальным "слепком"
+// на 440ms, не принимает ввод и не участвует в логике.
+//
+// WeakMap + generation нужны отдельно для КАЖДОГО screen: быстрый маршрут
+// A -> B -> A -> B не должен позволить старому fallback/animationend
+// спрятать уже повторно открытый экран.
+const screenLeaveState = new WeakMap();
+let screenLeaveGeneration = 0;
+const SCREEN_TRANSITION_FALLBACK_MS = 540; // CSS leave = 440ms + запас
+
+function getAppScreens() {
+    return [
+        menuScreen,
+        timeControlScreen,
+        document.getElementById("group-lobby-screen"),
+        waitingScreen,
+        gameScreen
+    ].filter(Boolean);
+}
+
+function prefersReducedScreenMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function isScreenLogicallyActive(screen) {
+    return !!screen
+        && !screen.classList.contains("hidden")
+        && !screen.classList.contains("screen-leaving");
+}
+
+function clearScreenLeaveGeometry(screen) {
+    screen.style.removeProperty("--screen-leave-left");
+    screen.style.removeProperty("--screen-leave-top");
+    screen.style.removeProperty("--screen-leave-width");
+    screen.style.removeProperty("--screen-leave-height");
+}
+
+function clearScreenLeaveState(screen, state) {
+    if (!state) return;
+    if (state.timerId) clearTimeout(state.timerId);
+    if (state.onAnimationEnd) screen.removeEventListener("animationend", state.onAnimationEnd);
+    if (screenLeaveState.get(screen) === state) screenLeaveState.delete(screen);
+}
+
+function cancelPendingScreenLeave(screen) {
+    if (!screen) return;
+    const state = screenLeaveState.get(screen);
+    if (state) clearScreenLeaveState(screen, state);
+    screen.classList.remove("screen-leaving");
+    clearScreenLeaveGeometry(screen);
+    screen.removeAttribute("aria-hidden");
+    screen.removeAttribute("inert");
+}
+
+function finishScreenLeave(screen, generation) {
+    const state = screenLeaveState.get(screen);
+    if (!state || state.generation !== generation) return;
+
+    clearScreenLeaveState(screen, state);
+    screen.classList.remove("screen-leaving");
+    clearScreenLeaveGeometry(screen);
+    screen.classList.add("hidden");
+}
+
+function startScreenLeave(screen) {
+    if (!screen || screen.classList.contains("hidden")) return;
+    if (screen.classList.contains("screen-leaving") || screenLeaveState.has(screen)) return;
+
+    const active = document.activeElement;
+    if (active && screen.contains(active) && typeof active.blur === "function") active.blur();
+    screen.setAttribute("aria-hidden", "true");
+    screen.setAttribute("inert", "");
+
+    if (prefersReducedScreenMotion()) {
+        screen.classList.add("hidden");
+        return;
+    }
+
+    // Вынимаем старый экран из document flow, иначе два одновременно
+    // видимых полноэкранных блока раздвинут body и дадут скачок/скролл.
+    const rect = screen.getBoundingClientRect();
+    screen.style.setProperty("--screen-leave-left", rect.left + "px");
+    screen.style.setProperty("--screen-leave-top", rect.top + "px");
+    screen.style.setProperty("--screen-leave-width", rect.width + "px");
+    screen.style.setProperty("--screen-leave-height", rect.height + "px");
+    screen.classList.add("screen-leaving");
+
+    const generation = ++screenLeaveGeneration;
+    const state = { generation: generation, timerId: null, onAnimationEnd: null };
+
+    state.onAnimationEnd = function (event) {
+        if (event.target !== screen || event.animationName !== "screenLeave") return;
+        finishScreenLeave(screen, generation);
+    };
+
+    screenLeaveState.set(screen, state);
+    screen.addEventListener("animationend", state.onAnimationEnd);
+
+    const animationName = window.getComputedStyle ? window.getComputedStyle(screen).animationName : "";
+    if (!animationName || animationName === "none" ||
+        !animationName.split(",").map(function (n) { return n.trim(); }).includes("screenLeave")) {
+        finishScreenLeave(screen, generation);
+        return;
+    }
+
+    state.timerId = setTimeout(function () {
+        finishScreenLeave(screen, generation);
+    }, SCREEN_TRANSITION_FALLBACK_MS);
+}
+
 function showScreen(screen) {
     hideStartupCover();
     // Уходим с доски -- снимаем ещё не прозвучавший мотив превращения.
-    // Звук стартует почти через секунду после хода, поэтому игрок успевает
-    // выйти в меню или из партии зрителем раньше, чем мотив зазвучит, и
-    // тот догнал бы его уже на другом экране.
-    //
-    // Переход НА игровой экран ничего не отменяет: там звук как раз и
-    // должен прозвучать. И это ниже снятия стартовой заглушки намеренно:
-    // тот вызов обязан оставаться первой строкой функции, что закреплено
-    // отдельным тестом в startup-cover.
+    // Переход НА игровой экран ничего не отменяет.
     if (screen !== gameScreen) cancelKingSound();
-    menuScreen.classList.add("hidden");
-    timeControlScreen.classList.add("hidden");
-    waitingScreen.classList.add("hidden");
-    gameScreen.classList.add("hidden");
-    
-    const groupLobbyScreen = document.getElementById("group-lobby-screen");
-    if (groupLobbyScreen) groupLobbyScreen.classList.add("hidden");
-    
+
+    // Reopen отменяет старый visual tail ДО показа target.
+    cancelPendingScreenLeave(screen);
+
+    getAppScreens().forEach(function (candidate) {
+        if (candidate !== screen) startScreenLeave(candidate);
+    });
+
+    // Target становится видимым/интерактивным СРАЗУ. Game/Firebase не ждут.
+    screen.removeAttribute("aria-hidden");
+    screen.removeAttribute("inert");
     screen.classList.remove("hidden");
 }
 
@@ -1346,8 +1455,9 @@ document.addEventListener("click", unlockAudioContext, { once: true });
 // останавливает всплытие, и на всплытии вспышка до нас бы не дошла.
 //
 // Эффект принадлежит САМОЙ кнопке -- никаких overlay поверх интерфейса.
-// Если экран сменился, кнопка уезжает в display: none вместе со своим
-// экраном, и вспышка исчезает сама. В новом экране следа не остаётся.
+// При screen cross-fade старый экран ещё виден до 440ms, поэтому 300ms
+// вспышка успевает дочитаться во время ухода. Ввод уже выключен через
+// inert/pointer-events, а новый экран логически активен.
 const BUTTON_PRESS_FLASH_MS = 300;
 const BUTTON_PRESS_FLASH_CLASS = "button-press-flash";
 // WeakMap, а не Map: кнопку могут удалить из DOM (список комнат
@@ -7399,7 +7509,7 @@ function runSyncRecovery(isManual) {
 // ===== ТАЙМЕР ХОДА =====
 
 setInterval(function () {
-    if (!gameScreen.classList.contains("hidden")) {
+    if (isScreenLogicallyActive(gameScreen)) {
         updateTimerDisplay();
         checkTimeout();
         updatePresenceOnly();

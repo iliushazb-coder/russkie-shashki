@@ -47,40 +47,51 @@
     display: none !important;
 }
 
-/* ===== ПОЯВЛЕНИЕ ЭКРАНОВ =====
-   Чисто CSS, без единой строки в JS. Работает за счёт того, что .hidden --
-   это display: none: скрытый элемент не отрисован и анимаций не имеет, а
-   в момент снятия класса он появляется и анимация запускается сама.
-   showScreen() при этом не меняется вообще: он как и раньше синхронно
-   снимает класс, ничего не ждёт и ничего не откладывает. Логика игры,
-   Firebase и подключение к комнате анимации не касаются.
+/* ===== CROSS-FADE МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
+   Target показывается синхронно; старый screen только визуально остаётся
+   ещё 440ms. Enter и leave идут ОДНОВРЕМЕННО, поэтому переход не занимает
+   440+440ms и не задерживает game/Firebase.
 
-   Повторный showScreen() на уже видимый экран (бывает при reconnect)
-   ничего не перезапускает: класс не менялся, значит и анимации нет.
-   Это именно то, что нужно -- лишнего мигания не будет.
-
-   Старый экран по-прежнему исчезает мгновенно: у него появляется .hidden,
-   то есть display: none, и анимировать там нечего.
-
-   Эффект намеренно очень спокойный: только прозрачность и подъём на 10px.
-   Ни масштаба, ни размытия -- доска и панели не должны «прыгать». */
-#menu-screen:not(.hidden),
-#time-control-screen:not(.hidden),
-#group-lobby-screen:not(.hidden),
-#waiting-screen:not(.hidden),
-#game-screen:not(.hidden) {
-    animation: screenEnter 280ms cubic-bezier(.22, .61, .36, 1) both;
+   .screen-leaving исключён из enter-rule: старый экран не может повторно
+   запустить появление, пока доигрывает уход. */
+#menu-screen:not(.hidden):not(.screen-leaving),
+#time-control-screen:not(.hidden):not(.screen-leaving),
+#group-lobby-screen:not(.hidden):not(.screen-leaving),
+#waiting-screen:not(.hidden):not(.screen-leaving),
+#game-screen:not(.hidden):not(.screen-leaving) {
+    animation: screenEnter 440ms cubic-bezier(.22, .61, .36, 1) both;
 }
 
 @keyframes screenEnter {
-    /* 10px вместо прежних 6: при 6px движение почти не читалось.
-       Только сдвиг и прозрачность -- ни масштаба, ни фильтров: доска
-       перерисовывается чаще всего, и тащить её через тяжёлые свойства
-       ради украшения нельзя. */
     from { opacity: 0; transform: translateY(10px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Старый экран фиксируется в своём измеренном viewport-прямоугольнике:
+   новый сразу занимает flow, а старый не меняет высоту body/scroll. */
+#menu-screen.screen-leaving,
+#time-control-screen.screen-leaving,
+#group-lobby-screen.screen-leaving,
+#waiting-screen.screen-leaving,
+#game-screen.screen-leaving {
+    position: fixed !important;
+    left: var(--screen-leave-left) !important;
+    top: var(--screen-leave-top) !important;
+    width: var(--screen-leave-width) !important;
+    height: var(--screen-leave-height) !important;
+    margin: 0 !important;
+    right: auto !important;
+    bottom: auto !important;
+    box-sizing: border-box;
+    z-index: 20;
+    pointer-events: none !important;
+    animation: screenLeave 440ms cubic-bezier(.4, 0, 1, 1) forwards !important;
+}
+
+@keyframes screenLeave {
+    from { opacity: 1; transform: translateY(0); }
+    to   { opacity: 0; transform: translateY(10px); }
+}
 body {
     display: flex;
     justify-content: center;
@@ -1971,13 +1982,19 @@ button.danger-button.button-press-flash::after {
         animation: none;
         opacity: 0.7;
     }
-    /* Экраны появляются мгновенно, без подъёма и проявления. */
-    #menu-screen:not(.hidden),
-    #time-control-screen:not(.hidden),
-    #group-lobby-screen:not(.hidden),
-    #waiting-screen:not(.hidden),
-    #game-screen:not(.hidden) {
-        animation: none;
+    /* Экранный cross-fade полностью отключён. JS при reduce сразу
+       прячет old screen; CSS дополнительно гасит enter/leave. */
+    #menu-screen:not(.hidden):not(.screen-leaving),
+    #time-control-screen:not(.hidden):not(.screen-leaving),
+    #group-lobby-screen:not(.hidden):not(.screen-leaving),
+    #waiting-screen:not(.hidden):not(.screen-leaving),
+    #game-screen:not(.hidden):not(.screen-leaving),
+    #menu-screen.screen-leaving,
+    #time-control-screen.screen-leaving,
+    #group-lobby-screen.screen-leaving,
+    #waiting-screen.screen-leaving,
+    #game-screen.screen-leaving {
+        animation: none !important;
     }
     /* Кнопка не движется: ни утопления, ни плавных переходов. Световой
        отклик при этом остаётся -- он статичен и движением не является,
