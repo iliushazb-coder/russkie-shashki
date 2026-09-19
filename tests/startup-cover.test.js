@@ -199,11 +199,10 @@ console.log('=== 6. showScreen() безусловно скрывает cover п�
   check('6.1 hideStartupCover() вызывается', /hideStartupCover\(\)/.test(src));
   check('6.2 вызов идёт РАНЬШЕ screen-transition lifecycle', (function () {
     const hideCoverPos = src.indexOf('hideStartupCover()');
-    const cancelPos = src.indexOf('cancelPendingScreenLeave(screen)');
-    const leavePos = src.indexOf('startScreenLeave(candidate)');
+    const hideScreenPos = src.indexOf('hideScreenImmediately(candidate)');
     return hideCoverPos !== -1 &&
-      cancelPos !== -1 && leavePos !== -1 &&
-      hideCoverPos < cancelPos && hideCoverPos < leavePos;
+      hideScreenPos !== -1 &&
+      hideCoverPos < hideScreenPos;
   })());
   check('6.3 вызов БЕЗУСЛОВНЫЙ — не внутри if/условия своей же строки',
     /function showScreen\(screen\) \{\s*\n\s*hideStartupCover\(\);/.test(src));

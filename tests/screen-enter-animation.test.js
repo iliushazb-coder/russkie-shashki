@@ -1,6 +1,5 @@
 // ==========================================================================
-// КОРОТКИЙ ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ.
-// Логика синхронна; весь visual handoff = 200ms, old уходит за первые 140ms.
+// MAIN SCREEN NAVIGATION: outgoing is hidden synchronously; incoming = 180ms.
 // ==========================================================================
 const fs = require('fs');
 const path = require('path');
@@ -33,111 +32,75 @@ const CLEAN = noComments(SRC);
 const CSS_CLEAN = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 const SCREENS = ['menu-screen','time-control-screen','group-lobby-screen','waiting-screen','game-screen'];
 
-console.log('=== 1. ENTER + LEAVE: ВСЕ 5 ЭКРАНОВ ===');
-const enterRule = /((?:#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\),\s*\n)*#[a-z-]+:not\(\.hidden\):not\(\.screen-leaving\))\s*\{[^}]*animation:\s*screenEnter 200ms/.exec(CSS_CLEAN);
-const leaveRule = /((?:#[a-z-]+\.screen-leaving,\s*\n)*#[a-z-]+\.screen-leaving)\s*\{[\s\S]*?animation:\s*screenLeave 140ms[^}]*\}/.exec(CSS_CLEAN);
-check('1.1 enter-rule найден и = 200ms', !!enterRule);
-check('1.2 leave-rule найден и = 140ms', !!leaveRule);
+console.log('=== 1. INCOMING ONLY = 180ms ===');
+const enterRule = /((?:#[a-z-]+:not\(\.hidden\),\s*\n)*#[a-z-]+:not\(\.hidden\))\s*\{[^}]*animation:\s*screenEnter 180ms/.exec(CSS_CLEAN);
+check('1.1 enter-rule найден и = 180ms', !!enterRule);
 SCREENS.forEach(function(id, i) {
-    check('1.' + (i + 3) + ' enter #' + id,
-        !!enterRule && enterRule[1].includes('#' + id + ':not(.hidden):not(.screen-leaving)'));
-    check('1.' + (i + 8) + ' leave #' + id,
-        !!leaveRule && leaveRule[1].includes('#' + id + '.screen-leaving'));
+    check('1.' + (i + 2) + ' enter #' + id,
+        !!enterRule && enterRule[1].includes('#' + id + ':not(.hidden)'));
 });
-check('1.13 оба keyframes существуют', /@keyframes screenEnter\s*\{/.test(CSS_CLEAN) && /@keyframes screenLeave\s*\{/.test(CSS_CLEAN));
-check('1.14 экраны существуют в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
-check('1.15 target не проявляется до 70% enter-animation',
-    /@keyframes screenEnter\s*\{[\s\S]*?0%,\s*70%\s*\{[^}]*opacity:\s*0/.test(CSS_CLEAN));
-check('1.16 невидимый target до 70% не принимает pointer-events',
-    /0%,\s*70%\s*\{[^}]*pointer-events:\s*none/.test(CSS_CLEAN) &&
-    /70\.01%,\s*100%\s*\{[^}]*pointer-events:\s*auto/.test(CSS_CLEAN));
+check('1.7 keyframes screenEnter существует', /@keyframes screenEnter\s*\{/.test(CSS_CLEAN));
+check('1.8 screenLeave CSS отсутствует', !/screenLeave/.test(CSS_CLEAN));
+check('1.9 .screen-leaving CSS отсутствует', !/\.screen-leaving/.test(CSS_CLEAN));
+check('1.10 все 5 экранов есть в HTML', SCREENS.every(id => HTML.includes('id="' + id + '"')));
+check('1.11 input guard class блокирует pointer events',
+    /\.screen-enter-input-guard\s*\{[^}]*pointer-events:\s*none\s*!important/.test(CSS_CLEAN));
+check('1.12 screenEnter не анимирует pointer-events', (function () {
+    const keyframes = /@keyframes screenEnter\s*\{([\s\S]*?)\n\}/.exec(CSS_CLEAN);
+    return !!keyframes && !/pointer-events/.test(keyframes[1]);
+})());
 
-console.log('\n=== 2. PER-SCREEN LIFECYCLE + STALE GUARD ===');
-check('2.1 WeakMap per-screen state', /const screenLeaveState = new WeakMap\(\)/.test(CLEAN));
-check('2.2 generation существует', /let screenLeaveGeneration = 0/.test(CLEAN));
-check('2.3 fallback = 300ms', /const SCREEN_TRANSITION_FALLBACK_MS = 300/.test(CLEAN));
+console.log('\n=== 2. OUTGOING HIDE СИНХРОННЫЙ ===');
 {
-    const finish = funcBody(CLEAN, 'finishScreenLeave') || '';
-    const cancel = funcBody(CLEAN, 'cancelPendingScreenLeave') || '';
-    const start = funcBody(CLEAN, 'startScreenLeave') || '';
-    check('2.4 stale generation не может finish', /state\.generation !== generation/.test(finish));
-    check('2.5 cancel чистит timer/listener', /clearScreenLeaveState/.test(cancel));
-    check('2.6 повторный leave идемпотентен', /screen-leaving/.test(start) && /screenLeaveState\.has/.test(start));
-    check('2.7 animationend фильтруется по target+name',
-        /event\.target !== screen/.test(start) && /event\.animationName !== "screenLeave"/.test(start));
-    check('2.8 fallback вызывает finish с generation',
-        /setTimeout[\s\S]*finishScreenLeave\(screen, generation\)/.test(start));
+    const hide = funcBody(CLEAN, 'hideScreenImmediately') || '';
+    const show = funcBody(CLEAN, 'showScreen') || '';
+    check('2.1 hide helper найден', !!hide);
+    check('2.2 outgoing сразу aria-hidden', /setAttribute\("aria-hidden", "true"\)/.test(hide));
+    check('2.3 outgoing сразу inert', /setAttribute\("inert", ""\)/.test(hide));
+    check('2.4 outgoing сразу .hidden', /classList\.add\("hidden"\)/.test(hide));
+    check('2.5 showScreen скрывает каждый non-target через helper',
+        /candidate !== screen[\s\S]*hideScreenImmediately\(candidate\)/.test(show));
+    check('2.6 target .hidden снимается синхронно', /screen\.classList\.remove\("hidden"\)/.test(show));
+    check('2.7 target снимает aria-hidden и запускает input guard',
+        /screen\.removeAttribute\("aria-hidden"\)/.test(show) &&
+        /startScreenInputGuard\(screen\)/.test(show));
+    check('2.8 showScreen сам остаётся sync без await/Promise/timer',
+        !/async |await |Promise|\.then\(|setTimeout/.test(show));
 }
 
-console.log('\n=== 3. SHOWSCREEN ЛОГИЧЕСКИ СИНХРОННЫЙ ===');
+console.log('\n=== 3. НЕТ STALE VISUAL TAIL ===');
+check('3.1 screenLeaveState удалён', !/screenLeaveState/.test(CLEAN));
+check('3.2 screenLeaveGeneration удалён', !/screenLeaveGeneration/.test(CLEAN));
+check('3.3 finishScreenLeave удалён', !/finishScreenLeave/.test(CLEAN));
+check('3.4 cancelPendingScreenLeave удалён', !/cancelPendingScreenLeave/.test(CLEAN));
+check('3.5 logical-active зависит только от hidden',
+    /function isScreenLogicallyActive[\s\S]*!screen\.classList\.contains\("hidden"\)/.test(CLEAN) &&
+    !/function isScreenLogicallyActive[\s\S]{0,200}screen-leaving/.test(CLEAN));
 {
-    const body = funcBody(CLEAN, 'showScreen') || '';
-    check('3.1 showScreen найден', !!body);
-    check('3.2 hideStartupCover остаётся первым действием',
-        /^function showScreen\(screen\)\s*\{\s*hideStartupCover\(\);/.test(body));
-    check('3.3 outgoing snapshot идёт ДО cancel reopened target', (function () {
-        const leavePos = body.indexOf('startScreenLeave(candidate)');
-        const cancelPos = body.indexOf('cancelPendingScreenLeave(screen)');
-        return leavePos !== -1 && cancelPos !== -1 && leavePos < cancelPos;
-    })());
-    check('3.4 target .hidden снимается синхронно', /screen\.classList\.remove\("hidden"\)/.test(body));
-    check('3.5 target сразу снимает aria-hidden/inert',
-        /screen\.removeAttribute\("aria-hidden"\)/.test(body) && /screen\.removeAttribute\("inert"\)/.test(body));
-    check('3.6 нет async/await/Promise', !/async |await |Promise|\.then\(/.test(body));
-    check('3.7 старые экраны уходят через общий helper', /startScreenLeave\(candidate\)/.test(body));
+    const cancelGuard = funcBody(CLEAN, 'cancelScreenInputGuard') || '';
+    const finishGuard = funcBody(CLEAN, 'finishScreenInputGuard') || '';
+    check('3.6 input guard хранит per-screen WeakMap state', /const screenInputGuardState = new WeakMap\(\)/.test(CLEAN));
+    check('3.7 rapid reopen отменяет старый input timer', /clearTimeout\(state\.timerId\)/.test(cancelGuard));
+    check('3.8 stale input callback проверяет identity state',
+        /screenInputGuardState\.get\(screen\) !== state/.test(finishGuard));
 }
 
-console.log('\n=== 4. LAYOUT: УХОДЯЩИЙ ЭКРАН ВНЕ FLOW ===');
-check('4.1 position fixed', /position:\s*fixed\s*!important/.test(leaveRule ? leaveRule[0] : ''));
-check('4.2 left/top берутся из snapshot vars',
-    /--screen-leave-left/.test(CSS_CLEAN) && /--screen-leave-top/.test(CSS_CLEAN));
-check('4.3 width/height фиксируются snapshot vars',
-    /--screen-leave-width/.test(CSS_CLEAN) && /--screen-leave-height/.test(CSS_CLEAN));
-check('4.4 уходящий экран не принимает pointer events',
-    /pointer-events:\s*none\s*!important/.test(leaveRule ? leaveRule[0] : ''));
+console.log('\n=== 4. GAME/FIREBASE ЛОГИКА НЕ ЖДЁТ ===');
 {
-    const start = funcBody(CLEAN, 'startScreenLeave') || '';
-    check('4.5 geometry берётся до screen-leaving', /getBoundingClientRect\(\)[\s\S]*classList\.add\("screen-leaving"\)/.test(start));
-    check('4.6 outgoing сразу aria-hidden + inert',
-        /setAttribute\("aria-hidden", "true"\)/.test(start) && /setAttribute\("inert", ""\)/.test(start));
-    check('4.7 leave сохраняет текущую opacity до смены animation',
-        /getComputedStyle\(screen\)\.opacity/.test(start) &&
-        /--screen-leave-opacity/.test(start));
-}
-check('4.8 screenLeave стартует с сохранённой opacity',
-    /from\s*\{[^}]*opacity:\s*var\(--screen-leave-opacity,\s*1\)/.test(CSS_CLEAN));
-
-console.log('\n=== 5. ЛОГИЧЕСКАЯ ВИДИМОСТЬ НЕ ЗАВЯЗАНА НА VISUAL TAIL ===');
-{
-    const logical = funcBody(CLEAN, 'isScreenLogicallyActive') || '';
-    check('5.1 helper исключает hidden', /classList\.contains\("hidden"\)/.test(logical));
-    check('5.2 helper исключает screen-leaving', /classList\.contains\("screen-leaving"\)/.test(logical));
-    check('5.3 game timer использует logical helper', /if \(isScreenLogicallyActive\(gameScreen\)\)/.test(CLEAN));
-    check('5.4 прямой gameScreen hidden-read больше не управляет timer',
-        !/if \(!gameScreen\.classList\.contains\("hidden"\)\)/.test(CLEAN));
+    const show = funcBody(CLEAN, 'showScreen') || '';
+    check('4.1 hideStartupCover остаётся первым действием',
+        /^function showScreen\(screen\)\s*\{\s*hideStartupCover\(\);/.test(show));
+    check('4.2 game timer использует logical helper', /if \(isScreenLogicallyActive\(gameScreen\)\)/.test(CLEAN));
+    check('4.3 showScreen не содержит delay', !/setTimeout|requestAnimationFrame/.test(show));
 }
 
-console.log('\n=== 6. REDUCED MOTION ===');
+console.log('\n=== 5. REDUCED MOTION + CACHE ===');
 {
-    const start = funcBody(CLEAN, 'startScreenLeave') || '';
-    check('6.1 JS reduce прячет outgoing сразу',
-        /prefersReducedScreenMotion\(\)[\s\S]*classList\.add\("hidden"\)/.test(start));
     const blocks = CSS_CLEAN.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g) || [];
-    const rm = blocks.find(b => /screen-leaving/.test(b) && /screenEnter/.test(CSS_CLEAN));
-    check('6.2 CSS reduced-motion содержит screen-leaving', !!rm);
-    check('6.3 CSS animation none !important', !!rm && /animation:\s*none\s*!important/.test(rm));
-}
-
-console.log('\n=== 7. ХАРАКТЕР АНИМАЦИИ + CACHE ===');
-{
-    const enter = /@keyframes screenEnter\s*\{[\s\S]*?\n\}/.exec(CSS_CLEAN);
-    const leave = /@keyframes screenLeave\s*\{[\s\S]*?\n\}/.exec(CSS_CLEAN);
-    check('7.1 enter opacity + 10px', !!enter && /opacity:\s*0/.test(enter[0]) && /translateY\(10px\)/.test(enter[0]));
-    check('7.2 leave opacity + 8px', !!leave && /opacity:\s*0/.test(leave[0]) && /translateY\(8px\)/.test(leave[0]));
-    check('7.3 без scale/blur/filter в screen keyframes',
-        !!enter && !!leave && !/scale\(|blur\(|filter:/.test(enter[0] + leave[0]));
-    check('7.4 style cache >= 44', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 44);
-    check('7.5 script cache >= 230', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 230);
+    const rm = blocks.find(b => /#menu-screen:not\(\.hidden\)/.test(b));
+    check('5.1 reduced-motion выключает incoming animation', !!rm && /animation:\s*none\s*!important/.test(rm));
+    check('5.2 style cache >= 48', Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 48);
+    check('5.3 script cache >= 233', Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 233);
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));

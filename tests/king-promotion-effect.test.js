@@ -1058,7 +1058,7 @@ console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА 
         let outcome = [];
         const saved = {};
         ['cancelKingSound', 'playVictorySound', 'playDefeatSound', 'playDrawSound',
-         'hideStartupCover', 'cancelPendingScreenLeave', 'getAppScreens', 'startScreenLeave',
+         'hideStartupCover', 'hideScreenImmediately', 'startScreenInputGuard', 'getAppScreens',
          'currentState', 'isSpectator', 'myTelegramId', 'myColor',
          'menuScreen', 'timeControlScreen', 'waitingScreen', 'gameScreen', 'document'
         ].forEach(function (k) { saved[k] = global[k]; });
@@ -1068,6 +1068,7 @@ console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА 
         global.playDefeatSound = function () { outcome.push('defeat'); };
         global.playDrawSound = function () { outcome.push('draw'); };
         global.hideStartupCover = function () {};
+        global.startScreenInputGuard = function () {};
         function el() {
             return {
                 classList: { add: function () {}, remove: function () {} },
@@ -1076,11 +1077,12 @@ console.log('\n=== 18. ОТМЕНА ЗАПЛАНИРОВАННОГО ЗВУКА 
         }
         global.menuScreen = el(); global.timeControlScreen = el();
         global.waitingScreen = el(); global.gameScreen = el();
-        global.cancelPendingScreenLeave = function () {};
+        global.hideScreenImmediately = function (screen) {
+            screen.classList.add('hidden');
+        };
         global.getAppScreens = function () {
             return [global.menuScreen, global.timeControlScreen, global.waitingScreen, global.gameScreen];
         };
-        global.startScreenLeave = function () {};
         global.document = { getElementById: function () { return el(); } };
 
         // eslint-disable-next-line no-eval
