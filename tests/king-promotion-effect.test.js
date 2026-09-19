@@ -1306,8 +1306,8 @@ console.log('\n=== 21. ОПТИЧЕСКАЯ ЦЕНТРОВКА ФИШЕК ===');
     // иначе при начале/окончании хода возник бы полупиксельный скачок.
     check('21.3 move ghost использует базовый .piece',
         /ghost\.className\s*=\s*"piece "/.test(SRC));
-    check('21.4 captured ghost использует базовый .piece',
-        /capturedGhost\.className\s*=\s*"piece "/.test(SRC));
+    check('21.4 captured ghost сохраняет базовый .piece во внутреннем слое',
+        /capturedPiece\.className\s*=\s*"piece "/.test(SRC));
     check('21.5 все три promotion-overlay используют базовый .piece',
         /flip\.className\s*=\s*"piece "/.test(SRC) &&
         /flipBack\.className\s*=\s*"piece "/.test(SRC) &&
@@ -1333,7 +1333,8 @@ console.log('\n=== 22. CAPTURE EFFECT (#4) ===');
         !/CAPTURE_FADE_DURATION_MS/.test(CLEAN));
 
     check('22.3 captured ghost по-прежнему строится только из snapshot',
-        /capturedGhost\.className\s*=\s*"piece "/.test(moveGhost) &&
+        /capturedGhost\.className\s*=\s*"move-ghost-captured"/.test(moveGhost) &&
+        /capturedPiece\.className\s*=\s*"piece "/.test(moveGhost) &&
         /capturedSnapshots/.test(moveGhost));
 
     check('22.4 snapshot по-прежнему только для capture + lastCapturedSquares',
@@ -1343,19 +1344,20 @@ console.log('\n=== 22. CAPTURE EFFECT (#4) ===');
     check('22.5 reduced-motion не создаёт новый capture motion',
         /!prefersReducedScreenMotion\(\)\s*&&\s*Array\.isArray\(capturedSnapshots\)/.test(moveGhost));
 
-    check('22.6 CSS использует отдельный capturedGhostImpact',
-        /animation:\s*capturedGhostImpact var\(--capture-effect-duration, 150ms\)/.test(CSS) &&
+    check('22.6 CSS использует отдельный capturedGhostImpact = 180ms',
+        /animation:\s*capturedGhostImpact var\(--capture-effect-duration, 180ms\)/.test(CSS) &&
         /@keyframes capturedGhostImpact\s*\{/.test(CSS));
 
     check('22.7 есть мягкий impact перед исчезновением',
-        /18%\s*\{[^}]*scale:\s*1\.04/.test(CSS));
+        /18%\s*\{[^}]*transform:\s*scale\(1\.04\) rotate\(0deg\)/.test(CSS));
 
     check('22.8 финал = fade + shrink + micro-rotation',
-        /100%\s*\{[^}]*opacity:\s*0;[^}]*scale:\s*0\.58;[^}]*rotate:\s*4deg/.test(CSS));
+        /100%\s*\{[^}]*opacity:\s*0;[^}]*transform:\s*scale\(0\.58\) rotate\(4deg\)/.test(CSS));
 
-    check('22.9 king-safe: effect анимирует individual scale/rotate, не transform',
-        /@keyframes capturedGhostImpact[\s\S]*scale:\s*1\.04[\s\S]*rotate:\s*4deg/.test(CSS) &&
-        !/@keyframes capturedGhostImpact\s*\{[^@]*transform:/.test(CSS));
+    check('22.9 king-safe: transform живёт на wrapper, king-текстура на inner .piece',
+        /capturedGhost\.className\s*=\s*"move-ghost-captured"/.test(moveGhost) &&
+        /capturedPiece\.className\s*=\s*"piece "/.test(moveGhost) &&
+        /\.move-ghost-captured-piece\s*\{[^}]*animation:\s*none\s*!important/.test(CSS));
 
     check('22.10 animationend фильтруется по target + имени',
         /event\.target !== capturedGhost/.test(moveGhost) &&
@@ -1371,8 +1373,8 @@ console.log('\n=== 22. CAPTURE EFFECT (#4) ===');
         /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.move-ghost-captured\s*\{[^}]*display:\s*none\s*!important/.test(CSS));
 
     check('22.14 cache-bust обновлён',
-        Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 49 &&
-        Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 234);
+        Number((/style\.css\?v=(\d+)/.exec(HTML) || [])[1]) >= 50 &&
+        Number((/script\.js\?v=(\d+)/.exec(HTML) || [])[1]) >= 235);
 }
 
 console.log('\nИТОГ: ' + passed + '/' + (passed + failed));
