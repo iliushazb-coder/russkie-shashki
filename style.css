@@ -775,17 +775,26 @@ button.danger-button.button-press-flash::after {
     z-index: 4;
     will-change: transform, opacity;
     transform-origin: center;
-    animation: capturedGhostImpact var(--capture-effect-duration, 150ms) cubic-bezier(.22,.7,.28,1) forwards !important;
+    animation: capturedGhostImpact var(--capture-effect-duration, 180ms) cubic-bezier(.22,.7,.28,1) forwards !important;
+}
+
+/* Внутренняя фигура сохраняет ровно ту же PNG-текстуру, что была на доске.
+   Wrapper, а не .piece, получает transform-анимацию: поэтому .king с
+   transform: scale(1.1) !important не конфликтует с эффектом. */
+.move-ghost-captured-piece {
+    width: 100% !important;
+    height: 100% !important;
+    pointer-events: none;
+    animation: none !important;
 }
 
 /* №4 Capture effect: короткий impact + fade/shrink + micro-rotation.
-   Используем individual scale/rotate, а НЕ transform: у .king есть
-   transform: scale(1.1) !important, и обычная transform-анимация не смогла
-   бы одинаково работать для сбитой дамки и обычной шашки. */
+   Только transform + opacity — максимально совместимый GPU-path для
+   Telegram WebView, без individual transform properties scale/rotate. */
 @keyframes capturedGhostImpact {
-    0%   { opacity: 1;    scale: 1;    rotate: 0deg; }
-    18%  { opacity: 0.96; scale: 1.04; rotate: 0deg; }
-    100% { opacity: 0;    scale: 0.58; rotate: 4deg; }
+    0%   { opacity: 1;    transform: scale(1) rotate(0deg); }
+    18%  { opacity: 0.96; transform: scale(1.04) rotate(0deg); }
+    100% { opacity: 0;    transform: scale(0.58) rotate(4deg); }
 }
 
 /* Реальная фигура на клетке-назначении, пока над ней летит ghost. */

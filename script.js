@@ -1565,7 +1565,7 @@ let lastAnimatedMoveCount = null;
 // видимость спрятанной реальной фигуры перед удалением ghost'а.
 let activeGhostCancelFns = [];
 const MOVE_GHOST_DURATION_MS = 150;
-const CAPTURE_EFFECT_DURATION_MS = 150;
+const CAPTURE_EFFECT_DURATION_MS = 180;
 
 function getLabels() {
     if (!flipped) {
@@ -2884,10 +2884,20 @@ function playMoveGhostAnimation(capturedSnapshots) {
             if (!capturedSquareEl) return;
 
             const capturedColorClass = snap.color === "light" ? "piece-light" : "piece-dark";
+
+            // Wrapper принимает transform-анимацию. Сама шашка/дамка живёт
+            // внутри как обычная .piece, поэтому .king { transform: ... !important }
+            // больше не может подавить capture transform. Заодно используем
+            // обычный transform вместо individual scale/rotate — это надёжнее
+            // в Telegram Android WebView старых версий.
             const capturedGhost = document.createElement("div");
-            capturedGhost.className = "piece " + capturedColorClass + " move-ghost-captured" + (snap.king ? " king" : "");
+            capturedGhost.className = "move-ghost-captured";
             capturedGhost.setAttribute("aria-hidden", "true");
             capturedGhost.style.setProperty("--capture-effect-duration", CAPTURE_EFFECT_DURATION_MS + "ms");
+
+            const capturedPiece = document.createElement("div");
+            capturedPiece.className = "piece " + capturedColorClass + " move-ghost-captured-piece" + (snap.king ? " king" : "");
+            capturedGhost.appendChild(capturedPiece);
             capturedSquareEl.appendChild(capturedGhost);
 
             let capCancelled = false;
