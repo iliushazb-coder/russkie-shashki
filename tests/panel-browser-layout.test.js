@@ -917,7 +917,7 @@ async function runModalCloseAnimationChecks(page, engineName) {
 
     // Не используем waitForFunction(): он по умолчанию поллится через
     // requestAnimationFrame, который headless WebKit может сильно
-    // притормозить. Ждём дольше production fallback (540ms) и затем
+    // притормозить. Ждём дольше production fallback (300ms) и затем
     // измеряем фактическое DOM-состояние напрямую.
     await page.waitForTimeout(650);
     state = await page.evaluate(function () {
@@ -951,13 +951,13 @@ async function runModalCloseAnimationChecks(page, engineName) {
         JSON.stringify(state));
     // Headless WebKit может доставлять animationend заметно позже CSS
     // duration. Сам визуальный контракт уже проверен выше через computed
-    // 0.18s; здесь проверяем только eventual cleanup после общего fallback.
+    // 0.2s; здесь проверяем только eventual cleanup после общего fallback.
     await page.waitForTimeout(650);
     state = await page.evaluate(function () {
         const m = document.getElementById('stats-modal');
         return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
     });
-    check(engineName + ' 3B: stats после 200ms animationend/fallback полностью закрыта',
+    check(engineName + ' 3B: stats после animationend/fallback полностью закрыта',
         state.hidden && !state.closing, JSON.stringify(state));
 
     // 2) Повторный close не создаёт новый цикл.
