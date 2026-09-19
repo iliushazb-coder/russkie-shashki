@@ -1364,12 +1364,18 @@ function showScreen(screen) {
     // Переход НА игровой экран ничего не отменяет.
     if (screen !== gameScreen) cancelKingSound();
 
-    // Reopen отменяет старый visual tail ДО показа target.
-    cancelPendingScreenLeave(screen);
-
+    // Сначала фиксируем ВСЕ уходящие экраны в их текущей геометрии.
+    // В rapid reopen target сам может ещё быть position:fixed от прошлого
+    // перехода. Если сначала вернуть target в flow, он на один sync-такт
+    // сдвинет текущий активный экран, и тот снимет уже неверный rect.
     getAppScreens().forEach(function (candidate) {
         if (candidate !== screen) startScreenLeave(candidate);
     });
+
+    // Только после snapshot уходящих экранов отменяем старый tail target.
+    // JS однопоточен: его старый timer/animationend не может вклиниться
+    // между этими синхронными операциями.
+    cancelPendingScreenLeave(screen);
 
     // Target становится видимым/интерактивным СРАЗУ. Game/Firebase не ждут.
     screen.removeAttribute("aria-hidden");

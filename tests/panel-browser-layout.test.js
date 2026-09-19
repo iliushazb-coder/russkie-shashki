@@ -1154,13 +1154,37 @@ async function runScreenTransitionChecks(page, engineName) {
         state.oldGen !== state.newGen && !state.hidden && state.leaving && state.current === state.newGen,
         JSON.stringify(state));
 
-    // Быстрый A->B->C->A: старые timers/listeners не имеют права спрятать reopened A.
+    // Быстрый A->B->C->A: stale callbacks не прячут reopened A, а C
+    // фиксируется РОВНО там, где стоял до reopen A. Это регрессия из review:
+    // если сначала вернуть A из fixed во flow, он временно сдвинет C до
+    // getBoundingClientRect(), и visual leave начнётся уже из чужой позиции.
     await reset();
     await page.evaluate(function(){ showScreen(document.getElementById('group-lobby-screen')); });
     await page.waitForTimeout(45);
     await page.evaluate(function(){ showScreen(document.getElementById('waiting-screen')); });
     await page.waitForTimeout(45);
+    const beforeRapidReopen = await page.evaluate(function(){
+        const r=document.getElementById('waiting-screen').getBoundingClientRect();
+        return {left:r.left,top:r.top,width:r.width,height:r.height};
+    });
     await page.evaluate(function(){ showScreen(menuScreen); });
+    const afterRapidReopen = await page.evaluate(function(){
+        const waiting=document.getElementById('waiting-screen');
+        const r=waiting.getBoundingClientRect();
+        return {
+            left:r.left,top:r.top,width:r.width,height:r.height,
+            leaving:waiting.classList.contains('screen-leaving'),
+            position:getComputedStyle(waiting).position
+        };
+    });
+    check(engineName + ' screen: rapid reopen не сдвигает outgoing snapshot',
+        afterRapidReopen.leaving && afterRapidReopen.position === 'fixed' &&
+        Math.abs(afterRapidReopen.left-beforeRapidReopen.left)<1 &&
+        Math.abs(afterRapidReopen.top-beforeRapidReopen.top)<1 &&
+        Math.abs(afterRapidReopen.width-beforeRapidReopen.width)<1 &&
+        Math.abs(afterRapidReopen.height-beforeRapidReopen.height)<1,
+        JSON.stringify({before:beforeRapidReopen,after:afterRapidReopen}));
+
     await page.waitForTimeout(650);
     state = await page.evaluate(function(){
         const lobby=document.getElementById('group-lobby-screen');

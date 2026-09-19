@@ -70,7 +70,11 @@ console.log('\n=== 3. SHOWSCREEN ЛОГИЧЕСКИ СИНХРОННЫЙ ===');
     check('3.1 showScreen найден', !!body);
     check('3.2 hideStartupCover остаётся первым действием',
         /^function showScreen\(screen\)\s*\{\s*hideStartupCover\(\);/.test(body));
-    check('3.3 target cancel-before-reopen', /cancelPendingScreenLeave\(screen\)/.test(body));
+    check('3.3 outgoing snapshot идёт ДО cancel reopened target', (function () {
+        const leavePos = body.indexOf('startScreenLeave(candidate)');
+        const cancelPos = body.indexOf('cancelPendingScreenLeave(screen)');
+        return leavePos !== -1 && cancelPos !== -1 && leavePos < cancelPos;
+    })());
     check('3.4 target .hidden снимается синхронно', /screen\.classList\.remove\("hidden"\)/.test(body));
     check('3.5 target сразу снимает aria-hidden/inert',
         /screen\.removeAttribute\("aria-hidden"\)/.test(body) && /screen\.removeAttribute\("inert"\)/.test(body));
