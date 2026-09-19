@@ -938,12 +938,15 @@ async function runModalCloseAnimationChecks(page, engineName) {
     check(engineName + ' 3B: stats close = 180ms',
         state.closing && state.overlayDuration === '0.18s' && state.boxDuration === '0.18s',
         JSON.stringify(state));
-    await page.waitForTimeout(260);
+    // Headless WebKit может доставлять animationend заметно позже CSS
+    // duration. Сам визуальный контракт уже проверен выше через computed
+    // 0.18s; здесь проверяем только eventual cleanup после общего fallback.
+    await page.waitForTimeout(650);
     state = await page.evaluate(function () {
         const m = document.getElementById('stats-modal');
         return { hidden: m.classList.contains('hidden'), closing: m.classList.contains('modal-closing') };
     });
-    check(engineName + ' 3B: stats после 260ms уже полностью закрыта',
+    check(engineName + ' 3B: stats после animationend/fallback полностью закрыта',
         state.hidden && !state.closing, JSON.stringify(state));
 
     // 2) Повторный close не создаёт новый цикл.
