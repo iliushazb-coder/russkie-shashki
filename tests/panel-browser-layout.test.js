@@ -1399,6 +1399,43 @@ async function runEngine(engine) {
         check(engine.name + ' capture: inner king сохраняет king texture',
             /king_dark\.png/.test(start.innerBg), start.innerBg);
         await capturePage.close();
+
+        // Reviewer regression: новый wrapper обязан сохранять геометрию
+        // прежней direct .piece, включая border и king scale.
+        const geometryPage = await browser.newPage({ viewport: { width: 390, height: 700 } });
+        await geometryPage.setContent('<!doctype html><html><head><style>' + CSS + '</style></head><body>'
+            + '<div id="old-normal" style="position:relative;width:80px;height:80px"><div class="piece piece-dark" style="position:absolute;inset:0;margin:auto;width:82%;height:82%;animation:none!important"></div></div>'
+            + '<div id="new-normal" style="position:relative;width:80px;height:80px"><div class="move-ghost-captured" style="animation:none!important"><div class="piece piece-dark move-ghost-captured-piece"></div></div></div>'
+            + '<div id="old-king" style="position:relative;width:80px;height:80px"><div class="piece piece-dark king" style="position:absolute;inset:0;margin:auto;width:82%;height:82%;animation:none!important"></div></div>'
+            + '<div id="new-king" style="position:relative;width:80px;height:80px"><div class="move-ghost-captured" style="animation:none!important"><div class="piece piece-dark king move-ghost-captured-piece"></div></div></div>'
+            + '</body></html>');
+        const geometry = await geometryPage.evaluate(function () {
+            function geom(parentId, selector) {
+                const p=document.getElementById(parentId), e=p.querySelector(selector);
+                const pr=p.getBoundingClientRect(), r=e.getBoundingClientRect(), cs=getComputedStyle(e);
+                return { left:r.left-pr.left, top:r.top-pr.top, width:r.width, height:r.height,
+                    centerX:(r.left+r.right)/2-pr.left, centerY:(r.top+r.bottom)/2-pr.top,
+                    boxSizing:cs.boxSizing };
+            }
+            return {
+                oldNormal:geom('old-normal','.piece'),
+                newNormal:geom('new-normal','.move-ghost-captured-piece'),
+                oldKing:geom('old-king','.piece'),
+                newKing:geom('new-king','.move-ghost-captured-piece')
+            };
+        });
+        function sameGeom(a,b) {
+            return ['left','top','width','height','centerX','centerY']
+                .every(function(k){ return Math.abs(a[k]-b[k]) <= 0.1; });
+        }
+        check(engine.name + ' capture geometry: normal wrapper == прежняя .piece',
+            sameGeom(geometry.oldNormal, geometry.newNormal), JSON.stringify(geometry));
+        check(engine.name + ' capture geometry: king wrapper == прежняя .piece.king',
+            sameGeom(geometry.oldKing, geometry.newKing), JSON.stringify(geometry));
+        check(engine.name + ' capture geometry: border остаётся border-box',
+            geometry.newNormal.boxSizing === 'border-box' && geometry.newKing.boxSizing === 'border-box',
+            JSON.stringify(geometry));
+        await geometryPage.close();
     }
 
     console.log('\n=== №42-B1: dialog focus management (4 локальные confirm-модалки) ===');
