@@ -72,6 +72,7 @@ const FILES = [
   ['BB.10 №42-B2a: async dialog focus management + per-dialog return-focus policy', 'modal-dialog-focus-b2a.test.js'],
   ['BB.11 №42-B2b: nested stats-modal/bot-details-modal focus management (sibling isolation, dynamic aria-labelledby)', 'modal-dialog-focus-b2b.test.js'],
   ['BB.12 №42-B2c: info-modal focus management, dynamic return-focus from real handler parameters', 'modal-dialog-focus-b2c.test.js'],
+  ['BB.12a №3B: generation-safe modal close animation', 'modal-close-animation.test.js'],
   ['BB.13 №43 slice 1: escapeHtml extracted to shared/string-utils.js (same pattern as game-engine.js)', 'shared-string-utils.test.js'],
   ['BB.14 №43 slice 2: audio-effects cluster extracted to shared/audio-effects.js (structural + behavioral fake AudioContext)', 'shared-audio-effects.test.js'],
   ['BB.15 №43 slice 3: formatTime extracted to shared/format-utils.js (pure function, no fakes needed)', 'shared-format-utils.test.js'],

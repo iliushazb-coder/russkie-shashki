@@ -217,8 +217,21 @@ console.log('=== 9. bot-difficulty "Назад": РЕАЛЬНЫЙ побочны
   // Исполняем РЕАЛЬНОЕ тело с минимальными stub'ами того, что не относится
   // к самому side-effect'у (экран/лобби) -- closeModal/openModal тоже
   // настоящие, извлечённые из того же script.js.
+  const fakeClasses = new Set();
+  const fakeModal = {
+    classList: {
+      add: function (n) { fakeClasses.add(n); },
+      remove: function (n) { fakeClasses.delete(n); },
+      contains: function (n) { return fakeClasses.has(n); }
+    },
+    contains: function () { return false; },
+    setAttribute: function () {},
+    removeAttribute: function () {},
+    addEventListener: function () {},
+    removeEventListener: function () {}
+  };
   const sandbox = {
-    botDifficultyModal: { classList: { add() {}, remove() {} } },
+    botDifficultyModal: fakeModal,
     menuScreen: {}, isBotGame: true,
     pendingReplaceExistingSession: 'STALE_SESSION_FROM_PREVIOUS_FLOW',
     pendingExistingSessionForResume: 'STALE_RESUME',

@@ -1044,6 +1044,28 @@ button.danger-button.button-press-flash::after {
     to { opacity: 1; }
 }
 
+/* №3B: логика закрывается в JS сразу, а эти 180ms — только визуальный хвост.
+   pointer-events:none обязателен: закрывающаяся модалка уже не интерактивна.
+   backdrop-filter НЕ анимируем — двигаются только opacity/transform. */
+.modal-overlay.modal-closing {
+    pointer-events: none;
+    animation: modalCloseOverlay 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+
+.modal-overlay.modal-closing .modal-box {
+    animation: modalCloseBox 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+
+@keyframes modalCloseOverlay {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+}
+
+@keyframes modalCloseBox {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(6px) scale(0.96); }
+}
+
 .modal-box {
     position: relative;
     background:
@@ -1937,6 +1959,14 @@ button.danger-button.button-press-flash::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    /* №3B: закрытие модалки мгновенное. JS тоже проверяет тот же media
+       query, а это правило — защитный CSS-слой на случай изменения порядка
+       выполнения/рендера. */
+    .modal-overlay.modal-closing,
+    .modal-overlay.modal-closing .modal-box {
+        animation: none !important;
+    }
+
     .startup-cover-spinner {
         animation: none;
         opacity: 0.7;
