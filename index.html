@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <!-- Без этого тега обычный мобильный браузер раскладывает страницу в
+         980 CSS-пикселях и потом уменьшает её целиком: доска получается
+         втрое мельче. В Telegram ширину задаёт контейнер, поэтому там
+         дефект проявлялся иначе — переполнением. Тег нужен обоим. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Русские Шашки</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script>
+        // Ранний UI route hint: ТОЛЬКО для выбора текста на startup-cover
+        // ("Подключение к столу…" vs "Загрузка…"), НЕ security-решение и НЕ
+        // замена checkForInviteLink() — та остаётся единственным реальным
+        // источником входа. Если start_param ещё не успел "разложиться"
+        // (задокументированная задержка Telegram, из-за которой у
+        // authenticateTelegramUser() есть отдельная защитная пауза) —
+        // здесь просто ничего не подставляем, cover покажет нейтральный
+        // текст "Загрузка…"; сам вход это никак не блокирует.
+        (function () {
+            try {
+                var tg = window.Telegram && window.Telegram.WebApp;
+                var p = tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param;
+                if (p) document.documentElement.classList.add("invite-launch-hint");
+            } catch (e) {}
+        })();
+    </script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
+    <link rel="stylesheet" href="style.css?v=84">
+</head>
+<body>
+    <div id="startup-cover">
+        <div class="startup-cover-spinner" aria-hidden="true"></div>
+        <p class="startup-cover-text startup-cover-text-normal" data-i18n="startup_loading">Загрузка…</p>
+        <p class="startup-cover-text startup-cover-text-invite" data-i18n="startup_connecting">Подключение к столу…</p>
+    </div>
+
+    <h1 data-i18n="h1_title">Русские Шашки 🎮</h1>
+
+    <div id="menu-screen">
+        <button id="btn-play-online" class="menu-button" data-i18n="btn_play_online">👥 Кто играет?</button>
+        <button id="btn-play-friend" class="menu-button" data-i18n="btn_play_friend">👥 Играть с другом</button>
+        <button id="btn-play-bot" class="menu-button" data-i18n="btn_play_bot">🤖 Играть с ботом</button>
+        <button id="btn-show-stats" class="menu-button" data-i18n="btn_show_stats">📊 Моя статистика</button>
+        
+        <div class="lang-switcher">
+            <button class="lang-btn" data-lang="ru" data-i18n-aria="aria_lang_ru">🇷🇺</button>
+            <button class="lang-btn" data-lang="it" data-i18n-aria="aria_lang_it">🇮🇹</button>
+            <button class="lang-btn" data-lang="en" data-i18n-aria="aria_lang_en">🇺🇸</button>
+        </div>
+    </div>
+
+    <div id="time-control-screen" class="hidden">
+        <p data-i18n="time_control_prompt">Выбери контроль времени на ход:</p>
+        <button class="menu-button time-option" data-seconds="0" data-i18n="time_0">Без ограничения</button>
+        <button class="menu-button time-option" data-seconds="30" data-i18n="time_30">30 секунд на ход</button>
+        <button class="menu-button time-option" data-seconds="60" data-i18n="time_60">1 минута на ход</button>
+        <button class="menu-button time-option" data-seconds="120" data-i18n="time_120">2 минуты на ход</button>
+        <button class="menu-button time-option" data-seconds="180" data-i18n="time_180">3 минуты на ход</button>
+        <button class="menu-button time-option" data-seconds="300" data-i18n="time_300">5 минут на ход</button>
+        <button id="btn-back-from-time-control" class="menu-button danger-button" style="margin-top: 15px;" data-i18n="btn_back">Назад</button>
+    </div>
+
+    <div id="group-lobby-screen" class="hidden">
+        <h2 data-i18n="btn_play_online">👥 Кто играет?</h2>
+        <div id="group-rooms-list"></div>
+        <button id="btn-back-to-menu" class="menu-button danger-button" style="margin-top: 15px;" data-i18n="btn_back">Назад</button>
+    </div>
+
+    <div id="waiting-screen" class="hidden">
+        <p id="waiting-invite-prompt" data-i18n="waiting_link_prompt">Приглашение готово</p>
+        <div class="waiting-visual" aria-hidden="true">
+            <span class="waiting-piece waiting-piece-light"></span>
+            <span class="waiting-bridge"></span>
+            <span class="waiting-piece waiting-piece-dark"></span>
+        </div>
+        <p id="waiting-text" aria-live="polite" data-i18n="waiting_friend">Ожидание подключения друга...</p>
+        <button id="btn-share-link" class="menu-button" data-i18n="btn_share_link">📤 Отправить другу</button>
+        <button id="btn-copy-link" class="menu-button" data-i18n="btn_copy_link">📋 Скопировать ссылку</button>
+        <button id="btn-back-from-waiting" class="menu-button danger-button" data-i18n="btn_back">Назад</button>
+    </div>
+
+    <div id="game-screen" class="hidden">
+        <p id="spectators-list" class="hidden"></p>
+        <div id="turn-timer"></div>
+
+        <div class="player-panel" id="player-top">
+            <div class="player-name" id="player-top-name"></div>
+            <div class="player-rating" id="player-top-rating"></div>
+            <div class="player-status" id="player-top-status"></div>
+            <div class="captured-icons" id="player-top-captured"></div>
+        </div>
+
+        <div id="board-wrapper">
+            <div id="board"></div>
+        </div>
+
+        <div class="player-panel" id="player-bottom">
+            <div class="player-name" id="player-bottom-name"></div>
+            <div class="player-rating" id="player-bottom-rating"></div>
+            <div class="player-status" id="player-bottom-status"></div>
+            <div class="captured-icons" id="player-bottom-captured"></div>
+        </div>
+
+        <div id="reactions-row" class="reactions-wrapper hidden">
+            <div class="action-row">
+                <button id="btn-react-laugh" class="reaction-btn" data-i18n-aria="aria_reaction_laugh">😂</button>
+                <button id="btn-offer-draw" class="menu-button" data-i18n="btn_draw">🤝 Ничья</button>
+                <button id="btn-react-fire" class="reaction-btn" data-i18n-aria="aria_reaction_fire">🔥</button>
+            </div>
+            <div class="action-row">
+                <button id="btn-react-shock" class="reaction-btn" data-i18n-aria="aria_reaction_shock">😱</button>
+                <button id="btn-resign" class="menu-button danger-button" data-i18n="btn_resign">🏳 Сдаться</button>
+                <button id="btn-react-angry" class="reaction-btn" data-i18n-aria="aria_reaction_angry">😡</button>
+            </div>
+        </div>
+
+        <!-- Кнопка выхода для игры с ботом -->
+        <button id="btn-back-bot" class="menu-button danger-button hidden" data-i18n="btn_back_bot">👈 Назад</button>
+
+        <!-- Кнопка выхода для зрителя (bot-зеркало или обычная online-партия) —
+             отдельная от btn-back-bot: у той есть подтверждение, уместное
+             для игрока, но не для пассивно смотрящего зрителя. -->
+        <button id="btn-back-spectator" class="menu-button danger-button hidden" data-i18n="btn_back_bot">👈 Назад</button>
+    </div>
+
+    <div id="emoji-burst-container" class="emoji-burst-container"></div>
+
+    <div id="resign-confirm-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="resign-confirm-modal-label">
+        <div class="modal-box">
+            <p id="resign-confirm-modal-label" data-i18n="confirm_resign">Вы уверены, что хотите сдаться?</p>
+            <div class="modal-buttons">
+                <button id="btn-resign-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
+                <button id="btn-resign-no" class="menu-button" data-i18n="btn_no" data-modal-initial-focus data-modal-escape>Нет</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="back-confirm-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="back-confirm-modal-label">
+        <div class="modal-box">
+            <p id="back-confirm-modal-label" data-i18n="confirm_back_bot">Вы точно хотите выйти?</p>
+            <div class="modal-buttons">
+                <button id="btn-back-bot-yes" class="menu-button danger-button" data-i18n="btn_yes">Да</button>
+                <button id="btn-back-bot-no" class="menu-button" data-i18n="btn_no" data-modal-initial-focus data-modal-escape>Нет</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="end-game-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="end-game-text">
+        <div class="modal-box">
+            <p id="end-game-text" class="end-game-text"></p>
+            <p id="end-game-subtext" class="end-game-subtext"></p>
+            <p id="end-game-rating" class="end-game-rating"></p>
+            <p id="rematch-wait-note" class="rematch-wait-note"></p>
+            <div class="modal-buttons">
+                <button id="btn-new-game" class="menu-button" data-i18n="btn_rematch">Реванш</button>
+                <button id="btn-close-game" class="menu-button" data-i18n="btn_close" data-modal-initial-focus data-modal-escape>Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="opponent-left-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p id="opponent-left-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-new-game-after-leave" class="menu-button" data-i18n="btn_new_game">Новая игра</button>
+                <button id="btn-close-after-leave" class="menu-button" data-i18n="btn_close">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="spectator-interrupted-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="spectator-interrupted-modal-label">
+        <div class="modal-box">
+            <p id="spectator-interrupted-modal-label" class="end-game-text" data-i18n="status_game_interrupted">Игра прервана</p>
+            <div class="modal-buttons">
+                <button id="btn-spectator-interrupted-ok" class="menu-button" data-i18n="btn_ok" data-modal-initial-focus data-modal-escape>Окей</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="info-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="info-modal-text">
+        <div class="modal-box">
+            <p id="info-modal-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-info-new-game" class="menu-button hidden" data-i18n="btn_start_new_game">Начать новую игру</button>
+                <button id="btn-info-close" class="menu-button" data-i18n="btn_close" data-modal-initial-focus data-modal-escape>Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+   <div id="stats-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="stats-title-online">
+        <div class="modal-box stats-modal-box">
+            <div class="stats-modal-header">
+                <div class="stats-tabs">
+                    <button id="stats-tab-online" class="stats-tab-btn stats-tab-active" data-i18n="stats_tab_online">🌐 Онлайн</button>
+                    <button id="stats-tab-bot" class="stats-tab-btn" data-i18n="stats_tab_bot">🤖 С ботом</button>
+                </div>
+                <p class="stats-section-title" id="stats-title-online" data-i18n="stats_top_online">📊 Топ игроков (Онлайн)</p>
+                <p class="stats-section-title hidden" id="stats-title-bot" data-i18n="stats_top_bot">🤖 Топ игроков (Против бота)</p>
+            </div>
+
+            <div class="stats-modal-body">
+                <div id="stats-view-online">
+                    <p id="stats-your-rank" class="stats-your-rank"></p>
+                    <div id="stats-leaderboard" class="stats-leaderboard"></div>
+                </div>
+
+                <div id="stats-view-bot" class="hidden">
+                    <div id="stats-leaderboard-bot" class="stats-leaderboard"></div>
+                </div>
+            </div>
+
+            <div class="stats-modal-footer modal-buttons">
+                <button id="btn-stats-close" class="menu-button" data-i18n="btn_back" data-modal-initial-focus data-modal-escape>Назад</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Подробности игрока против ботов (открывается кликом по строке в
+         «С ботом»; стоит ПОСЛЕ stats-modal в DOM, поэтому при одинаковом
+         z-index overlay'ев рисуется поверх окна статистики). -->
+    <div id="bot-details-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bot-details-title">
+        <div class="modal-box">
+            <p id="bot-details-title" class="end-game-text"></p>
+            <div id="bot-details-body" class="bot-details-body"></div>
+            <div class="modal-buttons">
+                <button id="btn-bot-details-close" class="menu-button" data-i18n="btn_close" data-modal-initial-focus data-modal-escape>Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="offline-opponent-modal" class="hidden modal-overlay">
+        <div class="modal-box">
+            <p class="end-game-text" data-i18n="modal_offline_opp">Соперник офлайн</p>
+            <p id="offline-opponent-text" class="stats-summary"></p>
+            <div class="modal-buttons">
+                <button id="btn-offline-play-bot" class="menu-button" data-i18n="btn_play_bot_offline">🤖 Играть с ботом</button>
+                <button id="btn-offline-invite-friend" class="menu-button" data-i18n="btn_invite_other">👥 Пригласить другого друга</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="bot-difficulty-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bot-difficulty-modal-label">
+        <div class="modal-box">
+            <p id="bot-difficulty-modal-label" class="end-game-text" data-i18n="modal_bot_difficulty">Выберите сложность</p>
+            <div class="modal-buttons">
+                <button id="btn-difficulty-easy" class="menu-button" data-i18n="btn_difficulty_easy">🌱 Лёгкий</button>
+                <button id="btn-difficulty-medium" class="menu-button" data-i18n="btn_difficulty_medium">⚖️ Средний</button>
+                <button id="btn-difficulty-hard" class="menu-button" data-i18n="btn_difficulty_hard">🔥 Сложный</button>
+                <button id="btn-difficulty-back" class="menu-button" data-i18n="btn_back" data-modal-initial-focus data-modal-escape>Назад</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="continue-or-new-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="continue-or-new-modal-label">
+        <div class="modal-box">
+            <p id="continue-or-new-modal-label" class="end-game-text" data-i18n="modal_continue_or_new">У вас уже есть партия с ботом</p>
+            <div class="modal-buttons">
+                <button id="btn-continue-existing-session" class="menu-button" data-i18n="btn_continue_existing" data-modal-initial-focus>▶️ Продолжить текущую</button>
+                <button id="btn-start-new-session" class="menu-button" data-i18n="btn_start_new_session">🆕 Начать новую</button>
+                <button id="btn-continue-or-new-back" class="menu-button" data-i18n="btn_back" data-modal-escape>Назад</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="rematch-request-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="rematch-request-text">
+        <div class="modal-box">
+            <p id="rematch-request-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-rematch-accept" class="menu-button" data-i18n="btn_accept">✅ Принять</button>
+                <button id="btn-rematch-decline" class="menu-button danger-button" data-i18n="btn_decline" data-modal-initial-focus>❌ Отклонить</button>
+            </div>
+        </div>
+    </div>
+    <div id="draw-offer-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="draw-offer-text">
+        <div class="modal-box">
+            <p id="draw-offer-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="btn-draw-accept" class="menu-button" data-i18n="btn_accept">✅ Принять</button>
+                <button id="btn-draw-decline" class="menu-button danger-button" data-i18n="btn_decline" data-modal-initial-focus>❌ Отклонить</button>
+                <button id="btn-draw-cancel" class="menu-button hidden" data-i18n="btn_cancel_offer" data-modal-initial-focus>Отменить предложение</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="credit-footer">Разработчик: <a href="https://t.me/yliusha" target="_blank" rel="noopener noreferrer">Telegram @yliusha</a></div>
+
+    <script src="shared/game-engine.js?v=1"></script>
+    <script src="shared/string-utils.js?v=1"></script>
+    <script src="shared/audio-effects.js?v=6"></script>
+    <script src="shared/format-utils.js?v=1"></script>
+    <script src="shared/captured-stack-utils.js?v=1"></script>
+    <script src="shared/startup-cover-utils.js?v=2"></script>
+    <script src="script.js?v=250"></script>
+</body>
+</html>

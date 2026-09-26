@@ -1,0 +1,3053 @@
+/* ===== ГЕОМЕТРИЯ ДОСКИ =====
+   Раньше размеры задавались напрямую в vw:
+       подписи clamp(20px, 6vw, 32px), клетка clamp(32px, 10.2vw, 50px)
+   Сумма ширин при этом никак не была связана с шириной экрана:
+       2*6vw + 8*10.2vw = 93.6vw  плюс 28px отступов и рамки обёртки
+       плюс 28px padding у body — итого 93.6vw + 56px.
+   Это меньше 100vw только начиная примерно с 875px, поэтому на ЛЮБОМ
+   телефоне обёртка вылезала за экран на 28-37px. body центрирует её, так
+   что обрезались ОБЕ колонки координат, а overflow-x: hidden прятал
+   переполнение вместо того, чтобы его не допускать.
+
+   Теперь ширина сходится ПО ПОСТРОЕНИЮ: сначала считаем, сколько места
+   реально доступно, затем вычитаем подписи, а остаток делим на 8 клеток.
+   Подогнанных коэффициентов нет — при любой ширине экрана сумма колонок
+   равна доступному месту либо меньше него (когда клетка упирается в
+   потолок 50px на больших экранах, где поведение не меняется вовсе). */
+:root {
+    /* ===== ЕДИНАЯ ТЁПЛАЯ ТЕМА =====
+       Статистика — эталон raised-surface. Остальные нейтральные поверхности
+       используют те же токены на разных уровнях глубины. Семантические
+       состояния (win/loss/draw, danger, timer-low, connected, turn state)
+       намеренно остаются отдельными правилами ниже. */
+    /* Единый декоративный язык заднего плана: мягкие ореолы живут только
+       в общем app-background, а не внутри экранов/карточек/модалок.
+       radial-gradient сам даёт размытую форму без тяжёлых blur-элементов. */
+    --theme-app-glow-primary: rgba(255, 238, 202, 0.17);
+    --theme-app-glow-secondary: rgba(255, 188, 108, 0.10);
+    --theme-app-glow-tertiary: rgba(190, 72, 49, 0.075);
+    --theme-app-bg:
+        radial-gradient(ellipse 72% 46% at 16% 9%,
+            var(--theme-app-glow-primary) 0%, rgba(255, 222, 166, 0.075) 34%, transparent 68%),
+        radial-gradient(ellipse 64% 40% at 88% 58%,
+            var(--theme-app-glow-secondary) 0%, rgba(255, 174, 92, 0.035) 38%, transparent 70%),
+        radial-gradient(ellipse 78% 42% at 30% 96%,
+            var(--theme-app-glow-tertiary) 0%, rgba(158, 47, 34, 0.025) 42%, transparent 74%),
+        linear-gradient(180deg, #35130e 0%, #250b08 55%, #170605 100%);
+
+    /* Follow-up Beauty: stats-inspired ambient light.
+       Это НЕ вторая тема и НЕ копия Stats-модалки. Цвета общие, производные
+       от её тёплой палитры; presets ниже меняют только геометрию и opacity.
+       По умолчанию слой прозрачен и не влияет на обычный app background. */
+    --theme-ambient-gold-rgb: 255, 205, 118;
+    --theme-ambient-amber-rgb: 255, 176, 82;
+    --theme-ambient-burgundy-rgb: 181, 61, 45;
+
+    --theme-ambient-primary-x: 50%;
+    --theme-ambient-primary-y: 50%;
+    --theme-ambient-primary-w: 80%;
+    --theme-ambient-primary-h: 50%;
+    --theme-ambient-primary-opacity: 0;
+
+    --theme-ambient-secondary-x: 82%;
+    --theme-ambient-secondary-y: 68%;
+    --theme-ambient-secondary-w: 58%;
+    --theme-ambient-secondary-h: 42%;
+    --theme-ambient-secondary-opacity: 0;
+
+    --theme-ambient-tertiary-x: 18%;
+    --theme-ambient-tertiary-y: 88%;
+    --theme-ambient-tertiary-w: 68%;
+    --theme-ambient-tertiary-h: 38%;
+    --theme-ambient-tertiary-opacity: 0;
+
+    --theme-screen-ambient:
+        radial-gradient(
+            ellipse var(--theme-ambient-primary-w) var(--theme-ambient-primary-h)
+            at var(--theme-ambient-primary-x) var(--theme-ambient-primary-y),
+            rgba(var(--theme-ambient-gold-rgb), var(--theme-ambient-primary-opacity)) 0%,
+            rgba(var(--theme-ambient-gold-rgb), 0) 72%
+        ),
+        radial-gradient(
+            ellipse var(--theme-ambient-secondary-w) var(--theme-ambient-secondary-h)
+            at var(--theme-ambient-secondary-x) var(--theme-ambient-secondary-y),
+            rgba(var(--theme-ambient-amber-rgb), var(--theme-ambient-secondary-opacity)) 0%,
+            rgba(var(--theme-ambient-amber-rgb), 0) 72%
+        ),
+        radial-gradient(
+            ellipse var(--theme-ambient-tertiary-w) var(--theme-ambient-tertiary-h)
+            at var(--theme-ambient-tertiary-x) var(--theme-ambient-tertiary-y),
+            rgba(var(--theme-ambient-burgundy-rgb), var(--theme-ambient-tertiary-opacity)) 0%,
+            rgba(var(--theme-ambient-burgundy-rgb), 0) 74%
+        );
+    --theme-startup-bg:
+        radial-gradient(circle at 50% 42%, rgba(196, 78, 47, 0.24), transparent 38%),
+        linear-gradient(180deg, rgba(69, 20, 15, 0.97), rgba(23, 7, 5, 0.99));
+    --theme-neutral-surface-bg:
+        radial-gradient(circle at 50% -8%, rgba(255, 205, 118, 0.13), transparent 40%),
+        linear-gradient(165deg, rgba(92, 28, 21, 0.72), rgba(34, 10, 8, 0.86));
+    --theme-neutral-border: rgba(255, 214, 143, 0.32);
+    --theme-neutral-shadow:
+        inset 0 1px 0 rgba(255, 230, 185, 0.12),
+        0 16px 36px rgba(0, 0, 0, 0.30);
+    --theme-raised-bg:
+        radial-gradient(circle at 50% -8%, rgba(255, 205, 118, 0.18), transparent 38%),
+        linear-gradient(165deg, rgba(105, 31, 23, 0.94), rgba(37, 12, 9, 0.98));
+    --theme-raised-border: rgba(255, 214, 143, 0.42);
+    --theme-raised-shadow:
+        0 24px 60px rgba(0,0,0,0.72),
+        0 0 34px rgba(255, 176, 82, 0.08),
+        inset 0 1.5px 0 rgba(255, 232, 185, 0.22);
+    --theme-raised-highlight:
+        linear-gradient(180deg, rgba(255, 239, 205, 0.15), transparent);
+    --theme-overlay-bg: rgba(18, 5, 4, 0.64);
+    --theme-button-bg:
+        linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.02) 45%),
+        linear-gradient(135deg, rgba(122, 32, 24, 0.65), rgba(58, 14, 10, 0.75));
+    --theme-button-border: rgba(255, 210, 130, 0.40);
+
+    /* 28px — padding body слева и справа; ещё 28px — padding 12px и
+       рамка 2px обёртки с обеих сторон. */
+    --board-avail: calc(100vw - 56px);
+    /* Подписи координат: доля доступного места с полом и потолком. */
+    --coord-size: clamp(18px, calc(var(--board-avail) * 0.055), 32px);
+    /* Клетка: весь остаток на восемь, но не крупнее прежнего потолка. */
+    --cell-size: min(50px, calc((var(--board-avail) - 2 * var(--coord-size)) / 8));
+    /* Полная внешняя ширина board-wrapper: две колонки координат, восемь
+       клеток, padding 12px с каждой стороны и рамка 2px с каждой стороны.
+       Панели игроков равняются по ней, поэтому расходиться с доской они
+       не могут ни на каком экране — переменные общие. */
+    --board-total: calc(2 * var(--coord-size) + 8 * var(--cell-size) + 28px);
+    /* Ширина колонки стопки. Считается под ПОЛНУЮ стопку: шесть иконок по
+       15px с наложением 11px даёт 15 + 5*4 = 35px, плюс 9px поля под
+       значок справа. Колонка держит эту ширину ВСЕГДА — и при нуле
+       взятых, и при двенадцати. Иначе остаток для имени менялся бы, а
+       вместе с ним ехали бы вертикали рейтинга и статуса.
+       39px стопка (19 + 5*4) + 3px отступ + до ~19px значок = ~61px.
+       Увеличение самих шашек компенсировано более сильным overlap (-15px),
+       поэтому фиксированный 61px track и геометрия панели не меняются. */
+    --stack-width: 61px;
+}
+
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ===== ПЕРЕХОД МЕЖДУ 5 ОСНОВНЫМИ ЭКРАНАМИ =====
+   Старый экран скрывается синхронно в showScreen(): никакого visual tail,
+   overlay или второго читаемого меню. Анимация принадлежит ТОЛЬКО новому
+   экрану и занимает 180ms. Game/Firebase не ждут анимацию. */
+#menu-screen:not(.hidden),
+#time-control-screen:not(.hidden),
+#group-lobby-screen:not(.hidden),
+#waiting-screen:not(.hidden),
+#game-screen:not(.hidden) {
+    animation: screenEnter 180ms cubic-bezier(.22, .61, .36, 1) both;
+}
+
+@keyframes screenEnter {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Cross-browser input guard: WebKit не должен зависеть от анимации
+   pointer-events внутри keyframes. JS снимает этот класс через ~130ms. */
+.screen-enter-input-guard {
+    pointer-events: none !important;
+}
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+    background:
+        var(--theme-screen-ambient),
+        var(--theme-app-bg);
+    color: #fdeecd;
+    margin: 0;
+    padding: 14px;
+    overflow-x: hidden;
+    min-height: 100vh;
+    letter-spacing: -0.01em;
+}
+
+/* ===== STATS-INSPIRED AMBIENT PRESETS =====
+   Все presets используют ОДИН --theme-screen-ambient. Никаких отдельных
+   цветов по экранам: меняются только координаты, размеры и прозрачность.
+   :has() влияет исключительно на custom properties body, поэтому не создаёт
+   containing/stacking context и не участвует в layout. :where() намеренно
+   обнуляет специфичность screen-ID внутри presets: общий modal override ниже
+   гарантированно побеждает их без усиления каскада. Если :has недоступен,
+   opacity остаётся 0 и безопасно виден только базовый фон PR #67. */
+
+/* WIDE: главное меню + lobby — широкий молочно-золотой свет в центральной
+   сцене и два более слабых боковых/нижних акцента. */
+body:has(:where(#menu-screen:not(.hidden))),
+body:has(:where(#group-lobby-screen:not(.hidden))) {
+    --theme-ambient-primary-x: 50%;
+    --theme-ambient-primary-y: 31%;
+    --theme-ambient-primary-w: 106%;
+    --theme-ambient-primary-h: 60%;
+    --theme-ambient-primary-opacity: 0.22;
+
+    --theme-ambient-secondary-x: 90%;
+    --theme-ambient-secondary-y: 68%;
+    --theme-ambient-secondary-w: 66%;
+    --theme-ambient-secondary-h: 44%;
+    --theme-ambient-secondary-opacity: 0.11;
+
+    --theme-ambient-tertiary-x: 12%;
+    --theme-ambient-tertiary-y: 90%;
+    --theme-ambient-tertiary-w: 76%;
+    --theme-ambient-tertiary-h: 38%;
+    --theme-ambient-tertiary-opacity: 0.075;
+}
+
+/* VERTICAL: выбор времени + waiting — вытянутый свет за колонкой действий,
+   с менее яркими диагональными акцентами сверху и снизу. */
+body:has(:where(#time-control-screen:not(.hidden))),
+body:has(:where(#waiting-screen:not(.hidden))) {
+    --theme-ambient-primary-x: 50%;
+    --theme-ambient-primary-y: 50%;
+    --theme-ambient-primary-w: 74%;
+    --theme-ambient-primary-h: 84%;
+    --theme-ambient-primary-opacity: 0.20;
+
+    --theme-ambient-secondary-x: 12%;
+    --theme-ambient-secondary-y: 17%;
+    --theme-ambient-secondary-w: 58%;
+    --theme-ambient-secondary-h: 40%;
+    --theme-ambient-secondary-opacity: 0.095;
+
+    --theme-ambient-tertiary-x: 90%;
+    --theme-ambient-tertiary-y: 88%;
+    --theme-ambient-tertiary-w: 66%;
+    --theme-ambient-tertiary-h: 42%;
+    --theme-ambient-tertiary-opacity: 0.07;
+}
+
+/* GAME: свет только в фоне сцены. Сам #board-wrapper остаётся своим
+   непрозрачным деревянным слоем и полностью закрывает ambient под доской. */
+body:has(:where(#game-screen:not(.hidden))) {
+    --theme-ambient-primary-x: 50%;
+    --theme-ambient-primary-y: 16%;
+    --theme-ambient-primary-w: 96%;
+    --theme-ambient-primary-h: 34%;
+    --theme-ambient-primary-opacity: 0.14;
+
+    --theme-ambient-secondary-x: 50%;
+    --theme-ambient-secondary-y: 84%;
+    --theme-ambient-secondary-w: 100%;
+    --theme-ambient-secondary-h: 30%;
+    --theme-ambient-secondary-opacity: 0.10;
+
+    --theme-ambient-tertiary-x: 96%;
+    --theme-ambient-tertiary-y: 52%;
+    --theme-ambient-tertiary-w: 44%;
+    --theme-ambient-tertiary-h: 70%;
+    --theme-ambient-tertiary-opacity: 0.055;
+}
+
+/* Любая открытая raised-модалка — Stats, bot difficulty/details и прочие —
+   гасит дополнительный ambient. Их собственная подсветка остаётся эталоном
+   и не получает double-glow из фоновой системы. */
+body:has(.modal-overlay:not(.hidden)) {
+    --theme-ambient-primary-opacity: 0;
+    --theme-ambient-secondary-opacity: 0;
+    --theme-ambient-tertiary-opacity: 0;
+}
+
+h1 {
+    font-size: clamp(24px, 6vw, 34px);
+    font-weight: 800;
+    text-align: center;
+    margin: 6px 0 14px;
+    color: #fff3d6;
+    text-shadow: 0 2px 14px rgba(0,0,0,0.6), 0 0 26px rgba(255, 195, 100, 0.35);
+}
+
+#menu-screen, #waiting-screen, #time-control-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+    width: 100%;
+}
+
+.section-title {
+    color: #e8c98a;
+    font-weight: 700;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    margin-bottom: 2px;
+}
+
+#active-rooms-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 18px;
+    width: 100%;
+}
+
+#active-rooms-list {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.menu-button {
+    position: relative;
+    font-size: 16px;
+    font-weight: 700;
+    padding: 12px 26px;
+    border-radius: 24px;
+    border: 1px solid var(--theme-button-border);
+    background: var(--theme-button-bg);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    color: #fff3d6;
+    cursor: pointer;
+    width: 100%; /* Резиновая ширина */
+    max-width: 270px; /* Потолок */
+    box-shadow:
+        0 10px 28px rgba(0,0,0,0.55),
+        inset 0 1.5px 0 rgba(255,225,170,0.4),
+        inset 0 -2px 4px rgba(0,0,0,0.3),
+        0 0 20px rgba(255, 180, 90, 0.10);
+    /* Системная подсветка тапа на мобильных накладывалась бы поверх
+       нашего собственного feedback'а и смазывала его. Отключаем только
+       её -- свой эффект нажатия остаётся. */
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.15s cubic-bezier(.4,0,.2,1), box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+/* Декоративный стеклянный блик. Отдельным слоем, а не тенью на самой
+   кнопке: так он появляется и гаснет независимо от её собственных теней и
+   не мешает им. Радиус повторяет кнопку, клики сквозь него проходят. */
+.menu-button::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    background:
+        linear-gradient(180deg, rgba(255,240,205,0.30), rgba(255,220,160,0.06) 42%, rgba(255,255,255,0) 70%);
+    transition: opacity 0.14s ease;
+}
+
+.menu-button:active {
+    /* Физическое утопление: кнопка чуть уменьшается И опускается на
+       полпикселя -- одного масштаба мало, чтобы прочиталось нажатие. */
+    transform: scale(0.965) translateY(1px);
+    /* Рамка ярче -- край как будто ловит свет. */
+    border-color: rgba(255, 226, 168, 0.75);
+    box-shadow:
+        /* внешняя тень короче: кнопка ближе к поверхности */
+        0 3px 9px rgba(0,0,0,0.55),
+        /* внутренний блик выражен сильнее прежнего */
+        inset 0 2px 0 rgba(255,235,195,0.55),
+        /* и тень изнутри снизу -- ощущение вдавленности */
+        inset 0 -3px 7px rgba(0,0,0,0.45),
+        0 0 22px rgba(255, 185, 95, 0.22);
+}
+
+.menu-button:active::after {
+    opacity: 1;
+}
+
+/* ===== ВСПЫШКА НАЖАТИЯ =====
+   :active показывает отклик, только пока палец на кнопке. При быстром
+   тапе этого не видно, поэтому класс ниже вешается на pointerdown и
+   держится 300 мс независимо от того, когда отпустили.
+
+   Слой принадлежит самой кнопке: никаких overlay поверх интерфейса. Если
+   экран сменился, кнопка ушла в display: none вместе с ним, и вспышка
+   исчезла -- в новом экране следа не остаётся.
+
+   border-radius: inherit даёт правильную форму и круглым кнопкам
+   (.lang-btn, .reaction-btn), и прямоугольным -- отдельных правил под
+   форму не нужно. */
+button.button-press-flash {
+    /* Нужно для абсолютного позиционирования слоя. Смещений нет, поэтому
+       на раскладку не влияет; у .menu-button это уже стояло. */
+    position: relative;
+}
+
+button.button-press-flash::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background:
+        linear-gradient(180deg, rgba(255,245,215,0.55), rgba(255,225,165,0.14) 45%, rgba(255,255,255,0) 72%);
+    box-shadow:
+        inset 0 0 0 1px rgba(255,235,185,0.75),
+        0 0 16px rgba(255,200,110,0.35);
+    animation: buttonPressFlash 300ms ease-out forwards;
+}
+
+/* Опасная кнопка сохраняет красный характер и во вспышке. */
+button.danger-button.button-press-flash::after {
+    background:
+        linear-gradient(180deg, rgba(255,220,212,0.55), rgba(255,175,165,0.14) 45%, rgba(255,255,255,0) 72%);
+    box-shadow:
+        inset 0 0 0 1px rgba(255,180,170,0.8),
+        0 0 16px rgba(255,120,100,0.35);
+}
+
+@keyframes buttonPressFlash {
+    /* Только свет: ни масштаба, ни сдвига, ни размытия.
+       ПЕРВЫЙ КАДР уже яркий -- никакого нарастания. Прежние 12% при
+       длительности 300 мс означали около 36 мс разгорания, и нажатие
+       переставало читаться как мгновенное. Держим полную яркость первую
+       треть, дальше спокойный уход. */
+    0%   { opacity: 1; }
+    35%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* Красный характер сохраняется: без этого правила рамка из
+   .menu-button:active (специфичность выше, чем у .danger-button)
+   перекрасила бы опасную кнопку в обычную золотистую. */
+.danger-button:active {
+    border-color: rgba(255, 170, 158, 0.8);
+}
+
+.danger-button::after {
+    background:
+        linear-gradient(180deg, rgba(255,215,205,0.30), rgba(255,180,170,0.06) 42%, rgba(255,255,255,0) 70%);
+}
+
+.room-item-button {
+    width: 100%; /* Резиновая ширина */
+    max-width: 270px; /* Потолок */
+    font-size: 14px;
+}
+
+.danger-button {
+    background:
+        linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.02) 45%),
+        linear-gradient(135deg, rgba(180, 45, 40, 0.6), rgba(90, 18, 15, 0.7));
+    border: 1px solid rgba(255, 150, 140, 0.4);
+}
+
+/* ===== №8: STARTUP / WAITING =====
+   Экран ожидания остаётся тем же функциональным экраном: ссылка, status и
+   кнопки не меняют порядок/обработчики. Ниже только presentation-layer. */
+#waiting-screen {
+    max-width: 340px;
+    box-sizing: border-box;
+    padding: 18px 14px 16px;
+    border: 1px solid var(--theme-neutral-border);
+    border-radius: 24px;
+    background: var(--theme-neutral-surface-bg);
+    box-shadow: var(--theme-neutral-shadow);
+}
+
+#waiting-invite-prompt {
+    margin: 0;
+    color: #d9c29a;
+    font-size: 14px;
+    line-height: 1.35;
+    text-align: center;
+}
+
+.waiting-visual {
+    position: relative;
+    width: 92px;
+    height: 38px;
+    flex: 0 0 38px;
+    opacity: 0.78;
+    animation: waitingVisualBreath 1.8s ease-in-out infinite;
+}
+
+.waiting-piece {
+    position: absolute;
+    top: 9px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 225, 170, 0.46);
+    box-sizing: border-box;
+}
+
+.waiting-piece-light {
+    left: 8px;
+    background:
+        radial-gradient(circle at 34% 28%, rgba(255,255,255,0.95), rgba(244,220,176,0.92) 42%, rgba(151,112,68,0.92));
+    box-shadow: 0 3px 8px rgba(0,0,0,0.38), 0 0 13px rgba(255,214,145,0.16);
+}
+
+.waiting-piece-dark {
+    right: 8px;
+    background:
+        radial-gradient(circle at 34% 28%, rgba(126,82,68,0.95), rgba(54,25,21,0.98) 48%, rgba(16,8,7,1));
+    box-shadow: 0 3px 8px rgba(0,0,0,0.50), 0 0 13px rgba(255,160,105,0.12);
+}
+
+.waiting-bridge {
+    position: absolute;
+    left: 31px;
+    right: 31px;
+    top: 18px;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+        rgba(255,215,150,0.10),
+        rgba(255,215,150,0.66),
+        rgba(255,215,150,0.10));
+    box-shadow: 0 0 8px rgba(255,190,105,0.18);
+}
+
+@keyframes waitingVisualBreath {
+    0%, 100% { opacity: 0.68; }
+    50% { opacity: 1; }
+}
+
+/* status=active: короткое подтверждение соединения. Класс ставится только
+   presentation-helper'ом в status-listener; game/Firebase state не меняется. */
+#waiting-screen.waiting-connected .waiting-visual {
+    opacity: 1;
+    animation: waitingConnectedCue 440ms ease-out 1;
+}
+#waiting-screen.waiting-connected .waiting-bridge {
+    background: linear-gradient(90deg,
+        rgba(142,219,158,0.18),
+        rgba(142,219,158,0.92),
+        rgba(142,219,158,0.18));
+    box-shadow: 0 0 12px rgba(142,219,158,0.30);
+}
+#waiting-screen.waiting-connected #waiting-text {
+    color: #d8f0dc;
+}
+
+@keyframes waitingConnectedCue {
+    0% { opacity: 0.72; transform: scale(0.985); }
+    55% { opacity: 1; transform: scale(1.035); }
+    100% { opacity: 1; transform: scale(1); }
+}
+
+#waiting-text {
+    color: #f0d9ae;
+    font-weight: 600;
+    font-size: 18px;
+    line-height: 1.35;
+    text-align: center;
+    margin: 0;
+}
+
+#game-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+}
+
+#spectators-list {
+    font-size: 12px;
+    color: #b3a184;
+    text-align: center;
+    margin: 0 0 6px;
+    max-width: 90vw;
+}
+
+.player-panel {
+    /* СЕТКА, а не поток. При flex каждый элемент стоял за предыдущим, и
+       короткое имя утаскивало рейтинг влево, а длинный статус — шашки
+       вправо. Колонки фиксированы, поэтому вертикали у верхней и нижней
+       панели совпадают всегда.
+       имя (доля) | рейтинг (под ⭐99999) | статус (под «Оффлайн 45с») | стопка */
+    display: grid;
+    /* Нижняя граница у имени: minmax(0, 1fr) на очень узком экране мог бы
+       сжать колонку до нуля, и имя пропало бы целиком. Пять знакомест —
+       это «@tet…», ещё читаемо. */
+    /* Колонки рейтинга и статуса ФИКСИРОВАНЫ. auto подстраивался под
+       содержимое КАЖДОЙ панели, поэтому у соперников с разными рейтингами
+       вертикали расходились. ch тоже не годится: в grid-template-columns
+       эта единица считается от шрифта самой панели (16px), а не дочерних
+       элементов с их clamp, и давала переполнение на 320px.
+       Значения измерены в Chromium по самому широкому содержимому:
+         рейтинг  ⭐99999             48px при мелком шрифте, 54px при крупном
+         статус   «Оффлайн 45с»       87px и 94px, вместе с точкой и отступом
+       Шрифты растут вместе с экраном, значит и колонки должны. Поэтому
+       панели задан ЯВНЫЙ размер шрифта, и колонки меряются в em от него:
+       так они масштабируются точно так же, как текст внутри, и остаются
+       одинаковыми у обеих панелей. Пиксели по максимуму съели бы место у
+       имени именно там, где его меньше всего. */
+    font-size: clamp(12px, 3.1vw, 15px);
+    /* №39: подняты по ИЗМЕРЕНИЯМ в двух движках, а не подогнаны к одному.
+       Диагностика показала, что при 4.1em/7.4em запас до обрезки в самом
+       Chromium был 0.6-1.2px, то есть его фактически не было, и WebKit с
+       более широкими метриками обрезал рейтинг и статус на всех четырёх
+       ширинах. Теперь треки покрывают самый широкий ИЗМЕРЕННЫЙ движок и
+       оставляют небольшой положительный запас (шрифт панели 12px):
+         рейтинг  52.19px  ->  4.5em  = 54px    (+1.81px, ~3.5%)
+         статус   85.88px текста + 7px точка + 4px зазор = 96.88px
+                           ->  8.25em = 99px    (+2.12px, ~2.2%)
+       Размеры точки и зазора статуса заданы в .player-status ниже; если
+       их менять, пересчитать и эту строку. */
+    --rating-width: 4.5em;
+    --status-width: 8.25em;
+    grid-template-columns: minmax(0, 1fr) var(--rating-width) var(--status-width) var(--stack-width);
+    align-items: center;
+    /* №39: зазоры и горизонтальные отступы сжимаются на узких экранах.
+       Расширение треков рейтинга и статуса нужно было чем-то оплатить, а
+       на 320px свободной ширины не было вовсе. Отнимать у имени нельзя --
+       это третья падавшая проверка. clamp отдаёт пиксели ровно там, где
+       они в дефиците, и сохраняет прежние отступы на широких экранах. */
+    gap: clamp(2.5px, 0.8vw, 4px);
+    /* Родитель — колоночный flex с align-items: center, поэтому дочерний
+       блок по умолчанию сжимается до содержимого: короткое имя давало
+       узкую панель, длинное — широкую, и верхняя с нижней различались.
+       Фиксируем ширину по доске. */
+    width: 100%;
+    max-width: var(--board-total);
+    align-self: center;
+    margin: 4px 0;
+    padding: 6px clamp(3px, 0.9vw, 10px);
+    border-radius: 18px;
+    background: linear-gradient(160deg, rgba(255,225,170,0.10), rgba(255,225,170,0.02));
+    backdrop-filter: blur(16px) saturate(170%);
+    -webkit-backdrop-filter: blur(16px) saturate(170%);
+    border: 1px solid var(--theme-neutral-border);
+    box-shadow: inset 0 1px 0 rgba(255,225,170,0.15), 0 4px 16px rgba(0,0,0,0.4);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+}
+
+/* №7: чей ход — ярко, у второй стороны — заметно темнее. Контраст
+   создаётся без изменения размеров, padding/grid или transform. */
+.player-panel.turn-active {
+    opacity: 1;
+    background: linear-gradient(160deg, rgba(255,225,170,0.20), rgba(255,190,90,0.055));
+    border-color: rgba(255, 224, 145, 0.96);
+    box-shadow:
+        inset 0 1px 0 rgba(255,245,210,0.38),
+        inset 0 0 12px rgba(255,200,110,0.22),
+        0 4px 16px rgba(0,0,0,0.4),
+        0 0 28px rgba(255, 190, 90, 0.52),
+        0 0 0 1px rgba(255, 226, 150, 0.24);
+}
+
+.player-panel.turn-inactive {
+    /* Variant 2: warm bronze read too close to active gold at a glance,
+       especially in the sparse bot-game top panel. Waiting now reads as
+       a distinct COOL graphite-bronze character, not just a dimmer copy
+       of active -- the hue itself shifts, not only the brightness.
+       Content stays legible: opacity is barely lowered (0.86, was 0.78)
+       so avatar/name/rating/status/stack never look switched off; the
+       calm read comes from the cooler border/background tint and the
+       complete absence of any glow, not from dimming the content. */
+    opacity: 0.86;
+    background: linear-gradient(160deg, rgba(64,66,70,0.10), rgba(14,13,12,0.30));
+    border-color: rgba(122, 128, 132, 0.55);
+    box-shadow:
+        inset 0 1px 0 rgba(150,155,158,0.12),
+        0 4px 16px rgba(0,0,0,0.46);
+}
+
+/* Короткий cue запускается JS только при реальной смене turn. Он заметный,
+   но одноразовый; transform не используется, геометрия панели не меняется. */
+.player-panel.turn-cue {
+    animation: turnPanelCue 600ms ease-out 1;
+}
+
+@keyframes turnPanelCue {
+    0%, 100% {
+        border-color: rgba(255, 224, 145, 0.96);
+        box-shadow:
+            inset 0 1px 0 rgba(255,245,210,0.38),
+            0 4px 16px rgba(0,0,0,0.4),
+            0 0 28px rgba(255, 190, 90, 0.52),
+            0 0 0 1px rgba(255, 226, 150, 0.24);
+    }
+    36% {
+        border-color: rgba(255, 243, 205, 1);
+        box-shadow:
+            inset 0 1px 0 rgba(255,248,220,0.52),
+            0 4px 16px rgba(0,0,0,0.4),
+            0 0 36px rgba(255, 201, 104, 0.68),
+            0 0 58px rgba(255, 165, 70, 0.24);
+    }
+}
+
+/* Первая grid-ячейка остаётся той же: avatar + compact name живут ВНУТРИ
+   неё, поэтому rating/status/captured не сдвигаются ни на пиксель. */
+.game-player-identity {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+    color: inherit;
+    text-decoration: none;
+}
+
+.game-player-identity-link {
+    cursor: pointer;
+}
+
+.game-player-avatar {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 50%;
+    overflow: visible;
+}
+
+.game-player-avatar-fallback {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background:
+        radial-gradient(circle at 32% 28%, rgba(255,238,205,0.18), transparent 42%),
+        rgba(74,28,21,0.96);
+    border: 1px solid rgba(255,220,158,0.34);
+    box-shadow: inset 0 1px 0 rgba(255,240,210,0.12), 0 2px 7px rgba(0,0,0,0.30);
+    color: #f1d9ad;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    text-transform: uppercase;
+}
+
+.game-player-avatar-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    object-fit: cover;
+    z-index: 1;
+}
+
+.player-color-dot {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    z-index: 2;
+    box-shadow: 0 0 0 1px rgba(36,10,8,0.92);
+}
+
+.player-color-dot::after {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.26);
+}
+
+.player-color-dot.light-dot {
+    background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
+    border: 1px solid #1a1a1a;
+}
+
+.player-color-dot.dark-dot {
+    background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
+    border: 1px solid #a0a0a8;
+}
+
+.player-name {
+    display: flex;
+    align-items: center;
+    font-size: clamp(12px, 3.4vw, 16px);
+    color: #fff3d6;
+    font-weight: 700;
+    min-width: 0;
+}
+
+/* Многоточие — только на самом имени, кружок не сокращается. */
+.player-name-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Рейтинг: своя колонка шириной под ⭐99999, никогда не сокращается. */
+.player-rating {
+    font-size: clamp(12px, 3.2vw, 15.5px);
+    white-space: nowrap;
+    color: #ffd98a;
+    text-align: left;
+}
+
+.player-status {
+    font-size: clamp(11px, 2.9vw, 13.5px);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    /* №39: точка и зазор -- накладные ВНУТРИ колонки статуса. Ужимаем на
+       2px вместе с точкой ниже: ровно те пиксели, которых не хватало имени. */
+    gap: 4px;
+    /* Статус: своя колонка. Помещается «Оффлайн 45с»; более длинные
+       варианты получают многоточие, но соседей не двигают.
+       overflow здесь НЕ ставим: он срезал свечение точки, и кружок
+       выглядел подрезанным. Обрезает текст вложенный элемент. */
+    min-width: 0;
+    white-space: nowrap;
+    transition: opacity 0.6s ease, transform 0.6s ease;
+}
+
+.player-status:empty {
+    display: none;
+}
+
+.player-status::before {
+    content: "";
+    display: block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+/* Многоточие живёт здесь, а не на контейнере: иначе оно срезает точку. */
+.player-status-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.player-status.status-online {
+    color: #7dffb0;
+}
+
+.player-status.status-online::before {
+    background: #4CD964;
+    box-shadow: 0 0 7px #4CD964, 0 0 2px #4CD964;
+    animation: statusPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.player-status.status-neutral {
+    color: #e8c98a;
+}
+
+/* Длинные переходные статусы должны помещаться в СУЩЕСТВУЮЩИЙ status-track.
+   Внешняя grid, --status-width и соседние колонки не меняются. */
+.player-status.status-neutral,
+.player-status.status-left {
+    /* Длинные переходные статусы остаются в прежнем status-track. */
+    font-size: clamp(9px, 2.2vw, 10px);
+    gap: 3px;
+}
+
+.player-status.status-neutral::before {
+    width: 6px;
+    height: 6px;
+}
+
+/* «Подтверждение…» шире «Подключение…»: WebKit на 320/360/390px
+   требовал ещё несколько пикселей. Сжимаем только этот редкий transient
+   state, не меняя grid/колонки/позиции rating и captured. */
+.player-status.status-left {
+    font-size: 8.5px;
+    gap: 2px;
+    letter-spacing: -0.2px;
+}
+
+.player-status.status-left::before {
+    width: 5px;
+    height: 5px;
+}
+
+.player-status.status-neutral::before {
+    background: #e8c98a;
+}
+
+/* Обратный отсчёт до технического поражения. */
+.player-status.status-countdown {
+    color: #ffb27d;
+}
+
+.player-status.status-countdown::before {
+    background: #ff8a3d;
+    box-shadow: 0 0 7px #ff8a3d;
+}
+
+.player-status.status-left {
+    color: #a09a8c;
+}
+
+.player-status.status-left::before {
+    background: #857f72;
+}
+
+.player-panel.player-faded {
+    opacity: 0.45;
+    transform: scale(0.97);
+}
+
+/* СТОПКА С ПЕРЕКРЫТИЕМ.
+   Раньше шашки лежали обычным потоком с переносом: четыре в ряд плюс
+   одна снизу у одного игрока и пять в ряд у другого — панели переставали
+   быть одинаковыми. Теперь они накладываются, и место почти не зависит
+   от количества. Переноса нет вовсе. */
+.captured-icons {
+    display: flex;
+    align-items: center;
+    /* Прижимаем к правому краю колонки: цифра стоит на месте, а стопка
+       растёт влево. При одной шашке и при двенадцати цифра на одной и
+       той же вертикали. */
+    justify-content: flex-end;
+    position: relative;
+    flex-wrap: nowrap;
+    /* Ширину держит колонка сетки, а не содержимое. Потолок оставлен как
+       страховка на случай, если предел стопки когда-нибудь поднимут. */
+    max-width: var(--stack-width);
+}
+
+/* Каждая следующая наезжает на предыдущую сильнее, чтобы 19px шашки
+   вместе с count-badge по-прежнему помещались в фиксированный 61px track.
+   Видимая полоска остаётся около 4px, поэтому стопка читается, но не растёт. */
+.captured-icons .captured-icon + .captured-icon {
+    margin-left: -15px;
+}
+
+/* Передняя — самая чёткая, дальние уходят в глубину.
+   Глубину задаёт САМА ШАШКА через переменные, выставленные при отрисовке.
+   Позиционные селекторы здесь не годятся: после иконок в контейнер
+   добавляется значок с числом, он становится последним ребёнком и
+   забирает nth-last-child(1) себе — вся последовательность съезжала на
+   шаг, и передняя шашка переставала быть непрозрачной. */
+.captured-icons .captured-icon {
+    opacity: var(--depth-opacity, 1);
+    z-index: var(--depth-order, 1);
+}
+
+/* Число: точное количество, даже когда в стопке показаны не все.
+   Раньше значок висел абсолютом над строкой и выглядел подпрыгнувшим.
+   Теперь это обычный элемент ряда: стоит после стопки, по её центру. */
+.captured-count {
+    align-self: center;
+    margin-left: 3px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 3px;
+    border-radius: 8px;
+    background: #0f6e56;
+    color: #e1f5ee;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    z-index: 6;
+}
+
+.captured-icon {
+    width: 19px;
+    height: 19px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    /* Нужен для блика и колец: у настоящей шашки они на ::before и ::after. */
+    position: relative;
+}
+
+/* Блик — та же геометрия, что у фигуры на доске. */
+.captured-icon::before {
+    content: "";
+    position: absolute;
+    top: 8%;
+    left: 16%;
+    width: 36%;
+    height: 22%;
+    background: rgba(255,255,255,0.7);
+    border-radius: 50%;
+    filter: blur(1px);
+    z-index: 2;
+}
+
+/* Внутреннее кольцо и ободок — то, что делает шашку узнаваемой. */
+.captured-icon::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 50% 50%, transparent 52%, rgba(0,0,0,0.2) 57%, transparent 63%),
+        radial-gradient(circle at 50% 50%, transparent 82%, rgba(255,255,255,0.22) 87%, transparent 94%);
+    z-index: 3;
+}
+
+/* Те же градиенты и рамки, что у настоящих шашек на доске: раньше мини
+   были золотисто-обведённые и на доску не походили. Тени уменьшены
+   пропорционально размеру — 15px против 50px, иначе они бы залили
+   иконку целиком. */
+.captured-icon.dark-icon {
+    background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
+    border: 1px solid #a0a0a8;
+    box-shadow:
+        inset -2px -2px 3px rgba(0,0,0,0.7),
+        inset 1px 1px 3px rgba(190,190,205,0.35),
+        0 1px 3px rgba(0,0,0,0.6);
+}
+
+.captured-icon.light-icon {
+    background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
+    border: 1px solid #1a1a1a;
+    box-shadow:
+        inset -2px -2px 3px rgba(100,70,30,0.4),
+        inset 1px 1px 3px rgba(255,250,230,0.4),
+        0 1px 3px rgba(0,0,0,0.45);
+}
+
+#turn-timer {
+    font-size: clamp(13px, 3.4vw, 17px);
+    font-weight: 700;
+    color: #ffd27a;
+    margin: 4px 0;
+    min-height: 20px;
+    text-shadow: 0 0 16px rgba(255,190,90,0.6);
+}
+
+/* №7: последние 10 секунд — явный красный секундный tick. Он должен
+   быть заметен боковым зрением, но не меняет размер/позицию таймера. */
+#turn-timer.timer-low {
+    color: #ff3f3f;
+    background: rgba(115, 0, 0, 0.28);
+    border-radius: 7px;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 85, 85, 0.24),
+        0 0 18px rgba(255, 35, 35, 0.24);
+    text-shadow:
+        0 0 12px rgba(255, 64, 64, 1),
+        0 0 30px rgba(255, 35, 35, 0.48);
+    animation: timerLowTick 1s steps(1, end) infinite;
+}
+
+@keyframes timerLowTick {
+    0%, 49% {
+        opacity: 1;
+        color: #ff3f3f;
+        text-shadow:
+            0 0 11px rgba(255, 76, 76, 0.92),
+            0 0 26px rgba(255, 50, 50, 0.40);
+    }
+    50%, 100% {
+        opacity: 0.56;
+        color: #ffaaa3;
+        text-shadow: 0 0 7px rgba(255, 76, 76, 0.48);
+    }
+}
+
+#board-wrapper {
+    /* Страховка на случай, если какая-то среда посчитает vw иначе
+       (например, с учётом полосы прокрутки): обёртка в любом случае не
+       выходит за пределы родителя. */
+    max-width: 100%;
+    display: grid;
+    grid-template-columns: var(--coord-size) repeat(8, var(--cell-size)) var(--coord-size);
+    grid-template-rows: var(--coord-size) repeat(8, var(--cell-size)) var(--coord-size);
+    border-radius: 14px;
+    padding: 12px;
+    background:
+        radial-gradient(circle at 30% 10%, rgba(255,200,140,0.12), transparent 55%),
+        repeating-linear-gradient(100deg, rgba(0,0,0,0.10) 0px, transparent 3px, transparent 7px),
+        linear-gradient(155deg, #9a2818 0%, #6a160e 55%, #3e0a06 100%);
+    border: 2px solid #d4a94f;
+    box-shadow:
+        0 22px 50px rgba(0,0,0,0.65),
+        inset 0 0 0 1px rgba(255,215,150,0.35),
+        inset 0 3px 4px rgba(255,215,150,0.2),
+        inset 0 -6px 14px rgba(0,0,0,0.5),
+        0 0 30px rgba(255, 150, 70, 0.08);
+}
+
+/* outline вместо border -- НЕ косметика, это геометрический фикс.
+   border участвует в box-модели: при box-sizing: border-box (глобально)
+   1px рамки с каждой стороны отъедал 2px от content/padding-box, куда
+   красится background (background-origin по умолчанию -- padding-box).
+   Но 8 grid-tracks ниже -- repeat(8, var(--cell-size)) -- фиксированной
+   (не fr) ширины, и браузер их НЕ сжимает под уменьшившийся box: клетки
+   как самостоятельно занимали 8*cell-size, так и продолжали, просто
+   на 2px шире, чем область фона. Отсюда линейно растущее к дальнему
+   краю расхождение между нарисованной клеткой и DOM-клеткой.
+   outline в box-модели не участвует вообще: border-box/padding-box
+   становятся друг другу равны, 8 треков и область фона совпадают
+   пиксель в пиксель. Проверено изолирующим тестом (A/B/C в аудите) --
+   outline даёт тот же визуальный результат, что и прежний border.
+   outline-offset: -1px рисует линию там же, где раньше была рамка
+   (внутри прежней border-box), а не поверх соседних элементов доски. */
+#board {
+    grid-column: 2 / span 8;
+    grid-row: 2 / span 8;
+    display: grid;
+    grid-template-columns: repeat(8, var(--cell-size));
+    grid-template-rows: repeat(8, var(--cell-size));
+    border-radius: 3px;
+    overflow: hidden;
+    outline: 1px solid #d4a94f;
+    outline-offset: -1px;
+    position: relative;
+    box-shadow:
+        0 8px 30px rgba(0,0,0,0.65),
+        inset 0 0 0 1px rgba(255,225,170,0.15);
+}
+
+#last-move-arrow-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.last-move-capture-mark {
+    fill: rgba(178, 214, 128, 0.35);
+    stroke: rgba(230, 245, 210, 0.4);
+    stroke-width: 1;
+}
+
+.square {
+    width: var(--cell-size);
+    height: var(--cell-size);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    position: relative;
+}
+
+.light {
+    background: linear-gradient(155deg, #e8d5a8 0%, #d4b88a 100%);
+    box-shadow:
+        inset 0 0 15px rgba(232, 213, 168, 0.5),
+        inset 0 0 4px rgba(0, 0, 0, 0.1);
+}
+
+.dark {
+    background: linear-gradient(155deg, #6b4226 0%, #3e2415 100%);
+    box-shadow:
+        inset 0 0 15px rgba(50, 30, 15, 0.5),
+        inset 0 0 4px rgba(0, 0, 0, 0.4);
+}
+
+.piece {
+    position: relative;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    /* Реальные Telegram-скриншоты после геометрического фикса доски
+       показывают остаточный оптический сдвиг видимого диска примерно на
+       пол-CSS-пикселя влево. DOM-box при этом математически центрирован.
+       Individual translate не конфликтует с transform-анимациями/scale:
+       тот же .piece-класс носят статичная фигура, move-ghost, captured
+       ghost и все три promotion-overlay, поэтому коррекция применяется
+       ко всем состояниям одинаково и не создаёт скачка между ними. */
+    translate: 0.5px 0;
+    animation: pieceAppear 0.24s cubic-bezier(.34,1.56,.64,1);
+    transition: transform 0.2s cubic-bezier(.34,1.56,.64,1), box-shadow 0.2s ease;
+    /* Подсказка браузеру заранее подготовить слой для анимации */
+    will-change: transform, box-shadow;
+}
+
+/* ===== ГОСТЬ-АНИМАЦИЯ ХОДА (визуальный слой поверх authoritative доски) =====
+   Ghost — временная копия шашки, летящая from -> to. Реальная authoritative
+   доска (updateBoardPieces()) обновляется мгновенно и независимо от этого —
+   ghost НИКОГДА не влияет на currentState/легальность/Firebase, чисто
+   декоративный оверлей. Использует только transform/opacity (дёшево, без
+   layout thrashing) — позиционируется абсолютно ВНУТРИ клетки-назначения,
+   поэтому её собственные grid/flex-координаты (в т.ч. с учётом переворота
+   доски) не нужно пересчитывать вручную. */
+.move-ghost-piece {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 5;
+    will-change: transform, opacity;
+    animation: none !important; /* не наследуем pieceAppear у .piece — ghost сам управляет своим transform */
+}
+
+.move-ghost-captured {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    pointer-events: none;
+    /* На реальном видео летящая шашка (z=5) полностью закрывала captured
+       ghost (раньше z=4) ровно в момент пересечения. Capture — это impact,
+       поэтому на эти 260мс он сознательно находится поверх move-ghost. */
+    z-index: 6;
+    overflow: visible;
+    will-change: transform, opacity;
+    transform-origin: center;
+    animation: capturedGhostImpact var(--capture-effect-duration, 260ms) cubic-bezier(.22,.7,.28,1) forwards !important;
+}
+
+/* Тонкое расходящееся кольцо делает сам момент удара читаемым даже когда
+   летящая шашка проходит через ту же клетку. Только transform/opacity:
+   никаких layout-пересчётов, canvas или частиц. */
+.move-ghost-captured::after {
+    content: "";
+    position: absolute;
+    inset: -7%;
+    border: 2px solid rgba(255, 236, 196, 0.82);
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0;
+    transform: scale(0.82);
+    transform-origin: center;
+    will-change: transform, opacity;
+    animation: capturedGhostImpactRing var(--capture-effect-duration, 260ms) ease-out forwards;
+}
+
+/* Внутренняя фигура сохраняет ровно ту же PNG-текстуру, что была на доске.
+   Wrapper, а не .piece, получает transform-анимацию: поэтому .king с
+   transform: scale(1.1) !important не конфликтует с эффектом. */
+.move-ghost-captured-piece {
+    width: 100% !important;
+    height: 100% !important;
+    pointer-events: none;
+    animation: none !important;
+}
+
+/* №4 Capture effect: заметный, но короткий impact именно в момент взятия,
+   затем быстрый fade/shrink + micro-rotation. */
+@keyframes capturedGhostImpact {
+    0%   { opacity: 1;    transform: scale(1) rotate(0deg); }
+    28%  { opacity: 1;    transform: scale(1.12) rotate(-1.5deg); }
+    58%  { opacity: 0.72; transform: scale(0.86) rotate(2deg); }
+    100% { opacity: 0;    transform: scale(0.48) rotate(5deg); }
+}
+
+@keyframes capturedGhostImpactRing {
+    0%   { opacity: 0;    transform: scale(0.82); }
+    22%  { opacity: 0.95; transform: scale(1); }
+    60%  { opacity: 0.42; transform: scale(1.17); }
+    100% { opacity: 0;    transform: scale(1.32); }
+}
+
+/* Реальная фигура на клетке-назначении, пока над ней летит ghost. */
+.piece-hidden-for-ghost {
+    opacity: 0 !important;
+    animation: none !important;
+}
+
+/* Настоящая дамка прячется на время превращения. Отдельный класс, а не
+   piece-hidden-for-ghost: тот снимается по окончании полёта (150 мс), а
+   эффект живёт дольше. Без этого в моменты, когда обе обычные стороны
+   стоят ребром (90 и 270 градусов), сквозь них проглядывала бы уже
+   готовая дамка -- то есть превращение было бы видно раньше времени. */
+.piece-hidden-for-promotion {
+    opacity: 0 !important;
+    animation: none !important;
+}
+
+@keyframes pieceAppear {
+    0% { transform: scale(0.5); opacity: 0.3; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.piece::before {
+    content: "";
+    position: absolute;
+    top: 8%;
+    left: 16%;
+    width: 36%;
+    height: 22%;
+    background: rgba(255,255,255,0.7);
+    border-radius: 50%;
+    filter: blur(2px);
+    pointer-events: none;
+    z-index: 2;
+}
+
+.piece::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 50% 50%, transparent 55%, rgba(0,0,0,0.14) 58%, transparent 62%),
+        radial-gradient(circle at 50% 50%, transparent 85%, rgba(255,255,255,0.18) 88%, transparent 93%);
+    pointer-events: none;
+}
+
+.piece-dark {
+    border-radius: 50% !important;
+    background: radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
+    border: 2px solid #a0a0a8;
+    box-shadow:
+        inset -5px -5px 9px rgba(0,0,0,0.7),
+        inset 4px 4px 8px rgba(190,190,205,0.35),
+        0 0 6px rgba(160, 160, 168, 0.3),
+        0 6px 12px rgba(0,0,0,0.6);
+}
+
+.piece-light {
+    border-radius: 50% !important;
+    background: radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
+    border: 2px solid #1a1a1a;
+    box-shadow:
+        inset -5px -5px 9px rgba(100,70,30,0.4),
+        inset 4px 4px 10px rgba(255,250,230,0.4),
+        0 0 5px rgba(0,0,0,0.4),
+        0 6px 12px rgba(0,0,0,0.45);
+}
+
+.labels {
+    display: flex;
+}
+
+.labels-top {
+    grid-column: 2 / span 8;
+    grid-row: 1;
+}
+
+.labels-bottom {
+    grid-column: 2 / span 8;
+    grid-row: 10;
+}
+
+.labels-left {
+    grid-column: 1;
+    grid-row: 2 / span 8;
+    flex-direction: column;
+}
+
+.labels-right {
+    grid-column: 10;
+    grid-row: 2 / span 8;
+    flex-direction: column;
+}
+
+.label {
+    width: var(--cell-size);
+    height: var(--coord-size);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: clamp(11px, 2.7vw, 14px);
+    font-weight: 700;
+    color: #e8c98a;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.6);
+}
+
+.labels-left .label,
+.labels-right .label {
+    width: var(--coord-size);
+    height: var(--cell-size);
+}
+
+/* ===== №6: ВИЗУАЛЬНАЯ ИЕРАРХИЯ ДОСКИ =====
+   Приоритет: mandatory capture > selected > move hint > last move.
+   Постоянные пульсации убраны: состояния различаются силой, размером и
+   слоем, а не конкурирующими бесконечными анимациями. */
+
+/* Выбранная шашка: лёгкий физический подъём + спокойный зелёный акцент. */
+.piece.selected {
+    transform: translateY(-3%) scale(1.08);
+    animation: none !important;
+    z-index: 4;
+}
+.piece-light.selected {
+    filter:
+        drop-shadow(0 0 9px rgba(91, 226, 119, 0.78))
+        drop-shadow(0 4px 5px rgba(0,0,0,0.46));
+}
+.piece-dark.selected {
+    filter:
+        drop-shadow(0 0 9px rgba(91, 226, 119, 0.82))
+        drop-shadow(0 4px 4px rgba(0,0,0,0.42));
+}
+
+/* Дамка сохраняет свой базовый scale(1.1), но получает тот же язык
+   выделения, что обычная шашка: никакого отдельного розового pulse. */
+.piece.king.selected {
+    transform: translateY(-2.5%) scale(1.16) !important;
+    animation: none !important;
+}
+.piece-light.king.selected {
+    filter:
+        drop-shadow(0 0 10px rgba(91, 226, 119, 0.82))
+        drop-shadow(0 4px 5px rgba(0,0,0,0.46));
+}
+.piece-dark.king.selected {
+    filter:
+        drop-shadow(0 0 10px rgba(91, 226, 119, 0.86))
+        drop-shadow(0 4px 4px rgba(0,0,0,0.42));
+}
+
+/* Возможные клетки: маленькая статичная точка. Она читается после selected,
+   но не спорит с фигурой и не создаёт ещё один ритм на доске. */
+.square.move-hint::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 24%;
+    height: 24%;
+    border-radius: 50%;
+    background:
+        radial-gradient(circle at 35% 30%, rgba(255,255,255,0.78), transparent 42%),
+        radial-gradient(circle, rgba(116,224,137,0.88), rgba(62,178,87,0.62) 72%, transparent 100%);
+    box-shadow:
+        0 0 8px rgba(76,217,100,0.48),
+        inset 0 0 3px rgba(255,255,255,0.28);
+    pointer-events: none;
+    opacity: 0.90;
+    transform: translate(-50%, -50%);
+    animation: none !important;
+    z-index: 3;
+}
+
+/* Обязательное взятие — самый сильный сигнал. Подсказка по-прежнему
+   появляется по существующей логике через 5 секунд; меняется только вид.
+   Она статична, поэтому не конкурирует с selected/move/last-move pulse. */
+.piece.must-capture-hint {
+    border-color: #ff9b45 !important;
+    animation: none !important;
+    z-index: 5;
+}
+.piece-light.must-capture-hint,
+.piece-light.king.must-capture-hint {
+    filter:
+        drop-shadow(0 0 5px rgba(255, 174, 84, 0.92))
+        drop-shadow(0 0 15px rgba(255, 132, 54, 0.74))
+        drop-shadow(0 4px 5px rgba(0,0,0,0.46));
+}
+.piece-dark.must-capture-hint,
+.piece-dark.king.must-capture-hint {
+    filter:
+        drop-shadow(0 0 5px rgba(255, 174, 84, 0.96))
+        drop-shadow(0 0 16px rgba(255, 132, 54, 0.78))
+        drop-shadow(0 4px 4px rgba(0,0,0,0.42));
+}
+
+/* Последний ход — фоновая память, самый тихий уровень. */
+#last-move-arrow-svg {
+    z-index: 2;
+    opacity: 0.42;
+}
+
+.last-move {
+    position: relative;
+}
+
+.last-move::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle, rgba(255,225,170,0.22), transparent 76%);
+    box-shadow: inset 0 0 9px rgba(255,190,90,0.18);
+    pointer-events: none;
+    opacity: 0.72;
+    animation: none !important;
+    z-index: 1;
+}
+
+.king::before {
+    content: "";
+    position: absolute;
+    top: 20% !important;
+    left: 20% !important;
+    width: 60% !important;
+    height: 60% !important;
+    inset: auto !important;
+    background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%20100%20100%27%3E%3Cdefs%3E%3ClinearGradient%20id%3D%27goldGrad%27%20x1%3D%270%27%20y1%3D%270%27%20x2%3D%270%27%20y2%3D%271%27%3E%3Cstop%20offset%3D%270%25%27%20stop-color%3D%27%23fff6d0%27/%3E%3Cstop%20offset%3D%2735%25%27%20stop-color%3D%27%23ffd700%27/%3E%3Cstop%20offset%3D%2765%25%27%20stop-color%3D%27%23b8860b%27/%3E%3Cstop%20offset%3D%27100%25%27%20stop-color%3D%27%235c440d%27/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath%20d%3D%27M15%2C40%20L30%2C60%20L50%2C25%20L70%2C60%20L85%2C40%20L80%2C75%20L20%2C75%20Z%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%273%27%20stroke-linejoin%3D%27round%27/%3E%3Crect%20x%3D%2720%27%20y%3D%2765%27%20width%3D%2760%27%20height%3D%2710%27%20rx%3D%273%27%20fill%3D%27url%28%23goldGrad%29%27%20stroke%3D%27%233a2708%27%20stroke-width%3D%272%27/%3E%3Ccircle%20cx%3D%2715%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2725%27%20r%3D%276%27%20fill%3D%27%234db8ff%27%20stroke%3D%27%23002a66%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2785%27%20cy%3D%2740%27%20r%3D%275%27%20fill%3D%27%23ff3b3b%27%20stroke%3D%27%23661212%27%20stroke-width%3D%271.5%27/%3E%3Ccircle%20cx%3D%2750%27%20cy%3D%2770%27%20r%3D%273.5%27%20fill%3D%27%234dff88%27%20stroke%3D%27%23003311%27%20stroke-width%3D%271%27/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    filter: drop-shadow(0 2px 3px rgba(0,0,0,0.6)) drop-shadow(0 0 8px rgba(255,215,120,0.9));
+    pointer-events: none;
+    z-index: 3;
+    animation: crownAppear 0.45s cubic-bezier(.34,1.56,.64,1), crownShimmer 2.6s ease-in-out 0.45s infinite;
+}
+
+@keyframes crownAppear {
+    0% { transform: scale(0.3) rotate(-20deg); opacity: 0; }
+    55% { transform: scale(1.18) rotate(6deg); opacity: 1; }
+    80% { transform: scale(0.95) rotate(-2deg); }
+    100% { transform: scale(1) rotate(0deg); opacity: 1; }
+}
+
+@keyframes crownShimmer {
+    0%, 100% {
+        filter: drop-shadow(0 0 7px rgba(255,215,120,0.9)) drop-shadow(0 1px 2px rgba(0,0,0,0.55)) brightness(1);
+    }
+    50% {
+        filter: drop-shadow(0 0 16px rgba(255,235,170,1)) drop-shadow(0 1px 2px rgba(0,0,0,0.55)) brightness(1.2);
+    }
+}
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: var(--theme-overlay-bg);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 100;
+    animation: fadeInOverlay 0.18s ease;
+}
+
+@keyframes fadeInOverlay {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* №3B: логика закрывается в JS сразу; 180ms — единый визуальный ритм
+   для ВСЕХ модалок, такой же как у их открытия и у screen navigation.
+   pointer-events:none обязателен: закрывающаяся модалка уже не интерактивна.
+   backdrop-filter НЕ анимируем — двигаются только opacity/transform. */
+.modal-overlay.modal-closing {
+    pointer-events: none;
+    animation: modalCloseOverlay 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+
+.modal-overlay.modal-closing .modal-box {
+    animation: modalCloseBox 180ms cubic-bezier(.4, 0, 1, 1) forwards;
+}
+
+@keyframes modalCloseOverlay {
+    from { opacity: 1; }
+    to   { opacity: 0; }
+}
+
+@keyframes modalCloseBox {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(10px) scale(0.94); }
+}
+
+.modal-box {
+    position: relative;
+    background: var(--theme-raised-bg);
+    backdrop-filter: blur(26px) saturate(180%);
+    -webkit-backdrop-filter: blur(26px) saturate(180%);
+    border: 1px solid var(--theme-raised-border);
+    border-radius: 28px;
+    padding: 30px;
+    text-align: center;
+    max-width: 85vw;
+    box-shadow: var(--theme-raised-shadow);
+    animation: modalPop 0.18s cubic-bezier(.34,1.56,.64,1);
+    overflow: hidden;
+}
+
+.modal-box::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 10%;
+    width: 45%;
+    height: 40%;
+    background: var(--theme-raised-highlight);
+    border-radius: 0 0 60% 60% / 0 0 100% 100%;
+    pointer-events: none;
+}
+
+@keyframes modalPop {
+    0% { transform: scale(0.85); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
+}
+
+.modal-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 16px;
+    flex-wrap: wrap;
+}
+
+.end-game-text {
+    font-size: 20px;
+    font-weight: 800;
+    margin-bottom: 6px;
+    color: #fff3d6;
+    white-space: pre-line;
+    text-shadow: 0 0 16px rgba(255,200,110,0.4);
+}
+
+/* ===== №5: финальное настроение итога партии =====
+   Без частиц и новых motion-слоёв: только спокойные статичные акценты. */
+#end-game-modal.end-game-mood-win .modal-box {
+    background:
+        linear-gradient(180deg, rgba(255, 229, 163, 0.18), rgba(255, 229, 163, 0.03) 34%),
+        linear-gradient(160deg, rgba(105, 65, 24, 0.90), rgba(47, 27, 11, 0.96));
+    border-color: rgba(255, 220, 138, 0.52);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.68),
+        0 0 34px rgba(255,197,92,0.18),
+        inset 0 1.5px 0 rgba(255,234,181,0.34);
+}
+#end-game-modal.end-game-mood-win .modal-box::before {
+    background: linear-gradient(180deg, rgba(255,238,197,0.34), transparent);
+}
+#end-game-modal.end-game-mood-win .end-game-text {
+    color: #fff0c7;
+    text-shadow: 0 0 18px rgba(255,205,112,0.48);
+}
+#end-game-modal.end-game-mood-win .end-game-subtext,
+#end-game-modal.end-game-mood-win .end-game-rating {
+    color: rgba(255,237,199,0.84);
+}
+
+#end-game-modal.end-game-mood-loss .modal-box {
+    background:
+        linear-gradient(180deg, rgba(220,196,184,0.07), rgba(220,196,184,0.01) 34%),
+        linear-gradient(160deg, rgba(72,49,47,0.92), rgba(34,27,26,0.97));
+    border-color: rgba(197,169,157,0.24);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.72),
+        0 0 20px rgba(132,100,96,0.08),
+        inset 0 1.5px 0 rgba(228,204,193,0.12);
+}
+#end-game-modal.end-game-mood-loss .modal-box::before {
+    background: linear-gradient(180deg, rgba(214,190,179,0.10), transparent);
+}
+#end-game-modal.end-game-mood-loss .end-game-text {
+    color: #eadeda;
+    text-shadow: 0 0 10px rgba(180,145,136,0.16);
+}
+#end-game-modal.end-game-mood-loss .end-game-subtext,
+#end-game-modal.end-game-mood-loss .end-game-rating {
+    color: rgba(231,215,208,0.72);
+}
+
+#end-game-modal.end-game-mood-draw .modal-box {
+    background:
+        linear-gradient(180deg, rgba(224,217,199,0.09), rgba(224,217,199,0.015) 34%),
+        linear-gradient(160deg, rgba(67,59,51,0.92), rgba(35,32,29,0.97));
+    border-color: rgba(219,209,186,0.28);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.70),
+        0 0 22px rgba(206,192,157,0.07),
+        inset 0 1.5px 0 rgba(231,221,199,0.14);
+}
+#end-game-modal.end-game-mood-draw .modal-box::before {
+    background: linear-gradient(180deg, rgba(223,214,192,0.12), transparent);
+}
+#end-game-modal.end-game-mood-draw .end-game-text {
+    color: #eee8dc;
+    text-shadow: 0 0 10px rgba(220,207,178,0.16);
+}
+#end-game-modal.end-game-mood-draw .end-game-subtext,
+#end-game-modal.end-game-mood-draw .end-game-rating {
+    color: rgba(232,225,210,0.74);
+}
+
+/* Зритель decisive-партии: нейтрально, без личного win/loss акцента. */
+#end-game-modal.end-game-mood-neutral .modal-box {
+    background:
+        linear-gradient(180deg, rgba(225,210,184,0.08), rgba(225,210,184,0.015) 34%),
+        linear-gradient(160deg, rgba(70,53,43,0.90), rgba(36,29,25,0.96));
+    border-color: rgba(215,194,159,0.24);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.70),
+        inset 0 1.5px 0 rgba(231,211,176,0.12);
+}
+#end-game-modal.end-game-mood-neutral .modal-box::before {
+    background: linear-gradient(180deg, rgba(220,204,174,0.10), transparent);
+}
+#end-game-modal.end-game-mood-neutral .end-game-text {
+    color: #f0e5d3;
+    text-shadow: 0 0 10px rgba(214,188,147,0.14);
+}
+#end-game-modal.end-game-mood-neutral .end-game-subtext,
+#end-game-modal.end-game-mood-neutral .end-game-rating {
+    color: rgba(234,224,207,0.72);
+}
+
+
+/* Вторая строка окна результата: причина ничьей по правилам.
+   Намеренно меньше и легче основного заголовка — иначе "НИЧЬЯ ПО ПРАВИЛАМ"
+   и текст причины рендерились бы одинаково крупно (20px/800) и на мобильном
+   занимали бы 4-5 строк сплошным жирным. Меньший кегль почти вдвое
+   увеличивает вместимость строки, поэтому причины длиной 45-50 символов
+   помещаются в две строки. Пустое значение элемент не показывает. */
+.end-game-subtext {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+    margin: 0 0 10px;
+    color: rgba(255, 243, 214, 0.78);
+    white-space: pre-line;
+}
+.end-game-subtext:empty {
+    display: none;
+    margin: 0;
+}
+
+#credit-footer {
+    margin-top: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #b3925a;
+    text-align: center;
+    opacity: 0.75;
+    letter-spacing: 0.04em;
+}
+
+/* Стиль для ссылки на Telegram */
+#credit-footer a {
+    color: #e8c98a; /* Чуть ярче основного текста */
+    text-decoration: underline;
+    text-decoration-color: rgba(232, 201, 138, 0.4); /* Полупрозрачное подчёркивание */
+    text-underline-offset: 2px;
+    transition: color 0.2s, text-decoration-color 0.2s;
+}
+
+/* Эффект при нажатии (для телефонов) */
+#credit-footer a:active {
+    color: #fff3d6; /* Загорается ярко при тапе */
+    text-decoration-color: #fff3d6;
+}
+
+.stats-summary {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 12px 0 6px;
+    line-height: 1.6;
+    color: #fff3d6;
+}
+
+/* ===== №9: STATS — визуальная иерархия =====
+   Только presentation-layer. Firebase-чтения, сортировка рейтинга,
+   вычисление места и логика вкладок не меняются. */
+.stats-modal-box {
+    width: 92vw;
+    max-width: 480px;
+    height: 90vh;
+    height: 90dvh;
+    max-height: 90vh;
+    max-height: 90dvh;
+    padding: 14px 13px 13px;
+    display: flex;
+    flex-direction: column;
+    background: var(--theme-raised-bg);
+    border-color: var(--theme-raised-border);
+    box-shadow: var(--theme-raised-shadow);
+}
+
+.stats-modal-box::before {
+    left: 12%;
+    width: 76%;
+    height: 24%;
+    background: var(--theme-raised-highlight);
+}
+
+.stats-modal-header {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 auto;
+    padding: 1px 0 9px;
+    margin-bottom: 7px;
+    border-bottom: 1px solid rgba(255, 213, 145, 0.12);
+}
+
+.stats-modal-body {
+    position: relative;
+    z-index: 1;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 2px 2px 4px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 207, 130, 0.34) transparent;
+}
+
+.stats-modal-footer {
+    position: relative;
+    z-index: 1;
+    flex: 0 0 auto;
+    margin-top: 9px;
+}
+
+.stats-modal-footer .menu-button {
+    width: 100%;
+    max-width: 300px;
+}
+
+.stats-section-title {
+    font-size: 14px;
+    font-weight: 800;
+    line-height: 1.25;
+    margin: 2px 0 0;
+    color: #f3ddb2;
+    opacity: 0.96;
+    text-shadow: 0 0 14px rgba(255, 195, 105, 0.14);
+}
+
+.stats-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 10px;
+    border: 1px solid rgba(255, 211, 139, 0.14);
+    border-radius: 15px;
+    background: rgba(20, 7, 5, 0.34);
+    box-shadow: inset 0 1px 0 rgba(255, 231, 188, 0.05);
+}
+
+.stats-tab-btn {
+    flex: 1;
+    min-height: 40px;
+    padding: 8px 7px;
+    border-radius: 11px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: rgba(224, 201, 161, 0.70);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.stats-tab-btn.stats-tab-active {
+    background:
+        linear-gradient(180deg, rgba(255, 219, 154, 0.19), rgba(255, 184, 98, 0.08)),
+        rgba(116, 38, 28, 0.48);
+    border-color: rgba(255, 218, 151, 0.44);
+    color: #fff1d2;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 239, 205, 0.16),
+        0 5px 14px rgba(0,0,0,0.18);
+}
+
+.stats-leaderboard {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+    padding: 2px 0 4px;
+}
+
+.stats-row {
+    /* Жёсткая геометрия 40/60 сохраняется: beauty-слой не должен двигать
+       колонки ⭐/🏆/❌/🎮 и не должен зависеть от длины имени. */
+    display: grid;
+    grid-template-columns: 40% 60%;
+    align-items: center;
+    min-height: 42px;
+    padding: 8px 10px;
+    border-radius: 12px;
+    background:
+        linear-gradient(90deg, rgba(255, 224, 170, 0.075), rgba(255, 224, 170, 0.035));
+    box-shadow: inset 0 0 0 1px rgba(255, 216, 150, 0.08);
+    font-size: 13px;
+    color: #f0d9ae;
+}
+
+/* TOP-3 читаются как пьедестал, но без новых анимаций и без изменения
+   геометрии строки. */
+.stats-row-podium {
+    font-weight: 700;
+}
+
+.stats-row-rank-1 {
+    background:
+        linear-gradient(180deg,
+            rgba(255, 252, 230, 0.13) 0%,
+            rgba(255, 252, 230, 0.00) 48%),
+        linear-gradient(90deg,
+            rgba(255, 222, 119, 0.31) 0%,
+            rgba(213, 165, 70, 0.22) 60%,
+            rgba(105, 72, 20, 0.11) 100%);
+    box-shadow:
+        inset 4px 0 0 rgba(255, 220, 84, 0.98),
+        inset 0 0 0 2px rgba(255, 231, 151, 0.84),
+        inset 0 1px 0 rgba(255, 252, 229, 0.20),
+        0 5px 16px rgba(112, 77, 18, 0.14);
+}
+
+.stats-row-rank-2 {
+    background:
+        linear-gradient(90deg,
+            rgba(232, 240, 248, 0.28) 0%,
+            rgba(132, 147, 164, 0.22) 62%,
+            rgba(59, 69, 81, 0.17) 100%);
+    box-shadow:
+        inset 4px 0 0 rgba(222, 233, 244, 0.96),
+        inset 0 0 0 2px rgba(229, 238, 247, 0.64),
+        0 5px 15px rgba(30, 39, 50, 0.13);
+}
+
+.stats-row-rank-3 {
+    background:
+        linear-gradient(180deg,
+            rgba(255, 219, 190, 0.09) 0%,
+            rgba(255, 219, 190, 0.00) 48%),
+        linear-gradient(90deg,
+            rgba(225, 128, 71, 0.42) 0%,
+            rgba(160, 79, 41, 0.32) 60%,
+            rgba(83, 38, 23, 0.23) 100%);
+    box-shadow:
+        inset 4px 0 0 rgba(235, 150, 94, 0.98),
+        inset 0 0 0 2px rgba(239, 169, 119, 0.76),
+        inset 0 1px 0 rgba(255, 221, 194, 0.12),
+        0 5px 15px rgba(85, 38, 20, 0.18);
+}
+
+.stats-row-rank-1 .stats-rank,
+.stats-row-rank-2 .stats-rank,
+.stats-row-rank-3 .stats-rank {
+    display: inline-block;
+    opacity: 1;
+    transform: scale(1.12);
+    transform-origin: center;
+    filter: saturate(1.08) brightness(1.06) drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+}
+
+/* Своя строка узнаётся с первого взгляда. outline не участвует в layout,
+   поэтому таблица не прыгает даже если пользователь одновременно в TOP-3. */
+.stats-row-self {
+    outline: 1px solid rgba(255, 226, 166, 0.78);
+    outline-offset: -1px;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 236, 199, 0.12),
+        0 0 17px rgba(255, 190, 95, 0.13);
+}
+
+/* Если текущий пользователь находится в TOP-3, его подсветка добавляется
+   СНАРУЖИ и не заменяет цвет места. Так сохраняются одновременно:
+   золотая/серебряная/бронзовая рамка, левый акцент и маркер "это я". */
+.stats-row-rank-1.stats-row-self {
+    outline-color: rgba(255, 249, 224, 0.98);
+    outline-offset: 1px;
+    box-shadow:
+        inset 4px 0 0 rgba(255, 220, 84, 0.98),
+        inset 0 0 0 2px rgba(255, 231, 151, 0.84),
+        inset 0 1px 0 rgba(255, 252, 229, 0.20),
+        0 0 18px rgba(255, 211, 112, 0.22);
+}
+
+.stats-row-rank-2.stats-row-self {
+    outline-color: rgba(244, 248, 252, 0.94);
+    outline-offset: 1px;
+    box-shadow:
+        inset 4px 0 0 rgba(222, 233, 244, 0.96),
+        inset 0 0 0 2px rgba(229, 238, 247, 0.64),
+        0 0 18px rgba(189, 209, 229, 0.18);
+}
+
+.stats-row-rank-3.stats-row-self {
+    outline-color: rgba(255, 226, 205, 0.96);
+    outline-offset: 1px;
+    box-shadow:
+        inset 4px 0 0 rgba(235, 150, 94, 0.98),
+        inset 0 0 0 2px rgba(239, 169, 119, 0.76),
+        inset 0 1px 0 rgba(255, 221, 194, 0.12),
+        0 0 18px rgba(221, 128, 75, 0.22);
+}
+
+.stats-row-expandable {
+    cursor: pointer;
+    transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stats-row-expandable:active {
+    background: rgba(255,210,130,0.16);
+    box-shadow: inset 0 0 0 1px rgba(255, 222, 158, 0.22);
+}
+
+.stats-row .stats-rank {
+    opacity: 0.72;
+    margin-right: 8px;
+}
+
+.stats-name-block {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.stats-name-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: left;
+}
+
+.stats-info-block {
+    display: grid;
+    align-items: center;
+    min-width: 0;
+    white-space: nowrap;
+}
+
+.stats-info-online {
+    grid-template-columns: 1.2fr 1fr 1fr 1fr;
+}
+
+.stats-info-bot {
+    grid-template-columns: repeat(3, 1fr);
+}
+
+.stats-stat {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-align: left;
+}
+
+.stats-user-link {
+    color: #fff3d6;
+    text-decoration: underline;
+    text-decoration-color: rgba(255, 210, 130, 0.34);
+    text-underline-offset: 2px;
+    transition: color 0.2s, text-decoration-color 0.2s;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.stats-user-link:active {
+    color: #ffffff;
+    text-decoration-color: #ffffff;
+}
+
+/* Bot details — тот же визуальный язык, без дополнительных Firebase-read. */
+#bot-details-modal .modal-box {
+    width: min(88vw, 370px);
+    padding: 22px 18px 18px;
+    background: var(--theme-raised-bg);
+    border-color: var(--theme-raised-border);
+}
+
+#bot-details-modal .modal-box::before {
+    width: 70%;
+    height: 28%;
+    left: 15%;
+    background: linear-gradient(180deg, rgba(255, 237, 200, 0.13), transparent);
+}
+
+#bot-details-title {
+    position: relative;
+    z-index: 1;
+    margin: 0 0 12px;
+    font-size: 18px;
+    color: #fff0d0;
+}
+
+.bot-details-body {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) 1fr 1fr 1fr;
+    align-items: center;
+    gap: 0;
+    margin: 4px 0 14px;
+    border: 1px solid rgba(255, 215, 148, 0.14);
+    border-radius: 14px;
+    overflow: hidden;
+    background: rgba(23, 8, 6, 0.28);
+    font-size: 13px;
+    color: #f0d9ae;
+}
+
+.bot-details-body > * {
+    min-width: 0;
+    padding: 9px 6px;
+    border-bottom: 1px solid rgba(255, 215, 148, 0.09);
+}
+
+.bot-details-body > :nth-child(-n+4) {
+    background: rgba(255, 215, 148, 0.055);
+}
+
+.bot-details-body > :nth-last-child(-n+4) {
+    border-bottom: 0;
+}
+
+.bot-details-level {
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 700;
+    color: #f5dfb8;
+}
+
+.bot-details-stat {
+    text-align: center;
+    white-space: nowrap;
+}
+
+@media (max-width: 360px) {
+    .stats-modal-box {
+        width: 95vw;
+        padding: 11px 9px 10px;
+        border-radius: 23px;
+    }
+    .stats-tabs {
+        margin-bottom: 8px;
+    }
+    .stats-tab-btn {
+        min-height: 38px;
+        padding: 7px 5px;
+        font-size: 12px;
+    }
+    .stats-section-title {
+        font-size: 12.5px;
+    }
+    .stats-row {
+        min-height: 40px;
+        padding: 7px 8px;
+        border-radius: 11px;
+        font-size: 12px;
+    }
+    .stats-leaderboard {
+        gap: 5px;
+    }
+    #bot-details-modal .modal-box {
+        width: 92vw;
+        padding: 18px 12px 14px;
+    }
+    .bot-details-body {
+        font-size: 12px;
+    }
+    .bot-details-body > * {
+        padding: 8px 4px;
+    }
+}
+
+/* ===== ПЕРЕКЛЮЧАТЕЛЬ ЯЗЫКА ===== */
+.lang-switcher {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 12px;
+}
+
+.lang-btn {
+    font-size: 26px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 210, 130, 0.3);
+    border-radius: 50%;
+    width: 50px;
+    height: 50px;
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: transform 0.15s ease, opacity 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+    opacity: 0.4;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.lang-btn:active {
+    transform: scale(0.9);
+}
+
+.lang-btn.active {
+    opacity: 1;
+    border-color: rgba(255, 210, 130, 0.8);
+    background: rgba(255, 210, 130, 0.15);
+    transform: scale(1.05);
+    box-shadow: 0 0 12px rgba(255, 190, 90, 0.2);
+}
+
+.room-item-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 270px;
+}
+
+.room-item-row .room-item-button {
+    flex: 1;
+    width: auto;
+}
+
+.room-item-remove {
+    flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 210, 130, 0.3);
+    background: rgba(255,255,255,0.06);
+    color: #fff3d6;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+.room-item-remove:active {
+    background: rgba(255, 90, 90, 0.3);
+}
+
+/* =========================================================
+   ФИНАЛЬНЫЕ СТИЛИ ДАМОК (В КОНЦЕ ФАЙЛА, ПЕРЕБИВАЮТ ВСЁ)
+   ========================================================= */
+
+.king {
+    border-color: #a855f7 !important;
+    border-width: 3px !important;
+    transform: scale(1.1) !important;
+}
+
+.piece-light.king {
+    background: radial-gradient(circle at 30% 22%, #ffffff, #f0e9d6 45%, #d8caa8 85%) !important;
+    box-shadow:
+        inset -4px -4px 8px rgba(0,0,0,0.35),
+        inset 3px 3px 8px rgba(255,240,200,0.55),
+        0 0 15px rgba(168, 85, 247, 0.5),
+        0 5px 10px rgba(0,0,0,0.5) !important;
+}
+
+.piece-dark.king {
+    background: radial-gradient(circle at 30% 22%, #4a4a52, #1a1a1e 45%, #000000 85%) !important;
+    box-shadow:
+        inset -5px -5px 9px rgba(0,0,0,0.7),
+        inset 3px 3px 8px rgba(150,150,160,0.35),
+        0 0 10px rgba(168, 85, 247, 0.45),
+        0 5px 10px rgba(0,0,0,0.5) !important;
+}
+/* =========================================================
+   НОВЫЙ ДИЗАЙН: ФОТО-ШАШКИ И ДОСКА (ДОБАВЛЕНО В КОНЕЦ ФАЙЛА)
+   ========================================================= */
+
+#board {
+    background-image: url('assets/board.png?v=1');
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+}
+
+.light,
+.dark {
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
+.piece::before,
+.piece::after {
+    display: none !important;
+}
+
+/* .piece -- квадратный box (82% от одной и той же переменной по обеим
+   осям), PNG тоже 200x200: при background-size: contain изображение
+   заполняет box без остатка, background-position физически нечего
+   двигать. Проверено и математикой, и прямым замером DOM (piece/square
+   center delta = 0.000px в headless-рендере) -- добавление
+   background-position: center сюда было бы no-op, поэтому его здесь нет.
+
+   Крупный геометрический рассинхрон после PR #37 был устранён у #board
+   (border -> outline) и во внутренней сетке board.png. После этого на
+   реальных Telegram-скриншотах остался небольшой ОПТИЧЕСКИЙ сдвиг самого
+   видимого диска влево при математически точном DOM-центре. Он компенсирован
+   один раз в базовом .piece через translate: 0.5px 0, поэтому одинаково
+   действует на обычную фигуру, дамку, ghost и promotion-overlay. */
+.piece-dark {
+    background-image: url('assets/piece_dark.png?v=2') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+    /* Выделяем тёмные шашки в отдельный слой видеокарты (как это уже происходит
+       у светлых шашек благодаря filter: drop-shadow), чтобы анимация выделения
+       не заставляла браузер каждый раз перерисовывать фон доски под шашкой */
+    will-change: transform;
+}
+
+.piece-light {
+    background-image: url('assets/piece_light.png?v=2') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.piece-dark.king {
+    background-image: url('assets/king_dark.png?v=2') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.piece-light.king {
+    background-image: url('assets/king_light.png?v=2') !important;
+    background-size: contain !important;
+    background-repeat: no-repeat !important;
+    background-color: transparent !important;
+}
+
+.king::before {
+    display: none !important;
+}
+
+.piece-dark,
+.piece-light,
+.piece-dark.king,
+.piece-light.king {
+    box-shadow: none !important;
+}
+
+.piece-light,
+.piece-light.king {
+    filter: drop-shadow(0 3px 5px rgba(0,0,0,0.45));
+}
+/* =========================================================
+   №10 BEAUTY: «КТО ИГРАЕТ?» / ЛОББИ
+   Только presentation-layer. Геометрия контейнера и карточек сохранена:
+   max-width, padding, gap и scroll-flow не меняются. Аватары — отдельный №11.
+   ========================================================= */
+
+#group-lobby-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 350px;
+}
+
+#group-rooms-list {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.group-room-card {
+    position: relative;
+    background: var(--theme-neutral-surface-bg);
+    border: 1px solid var(--theme-neutral-border);
+    border-radius: 16px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 232, 190, 0.11),
+        0 6px 16px rgba(0,0,0,0.32),
+        0 0 18px rgba(255, 176, 82, 0.035);
+}
+
+.group-room-info {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 6px;
+    min-width: 0;
+    width: 100%;
+    font-size: 15px;
+    font-weight: 700;
+    color: #f0d9ae;
+    text-align: center;
+}
+
+.group-room-info.active {
+    position: relative;
+    color: #f0d9ae;
+}
+
+.group-room-info.active::after {
+    content: "";
+    position: absolute;
+    top: -2px;
+    right: 0;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #7dffb0;
+    box-shadow: 0 0 8px rgba(125, 255, 176, 0.42);
+}
+
+.group-room-info.waiting {
+    color: #ffd27a;
+}
+
+.group-room-player {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+}
+
+.group-room-player-light { justify-content: flex-start; }
+.group-room-player-dark { justify-content: flex-end; }
+
+.group-room-avatar {
+    position: relative;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    overflow: hidden;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background:
+        radial-gradient(circle at 32% 28%, rgba(255, 238, 205, 0.16), transparent 42%),
+        rgba(74, 28, 21, 0.88);
+    border: 1px solid rgba(255, 220, 158, 0.28);
+    box-shadow:
+        inset 0 1px 0 rgba(255, 240, 210, 0.10),
+        0 2px 7px rgba(0, 0, 0, 0.28);
+}
+
+.group-room-avatar-fallback {
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1;
+    color: #f1d9ad;
+    text-transform: uppercase;
+}
+
+.group-room-avatar-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
+}
+
+.group-room-player-light .group-room-name { text-align: left; }
+.group-room-player-dark .group-room-name { text-align: right; }
+
+.group-room-piece {
+    flex: 0 0 auto;
+    line-height: 1;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.34));
+}
+
+.group-room-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.group-room-vs {
+    color: rgba(232, 201, 154, 0.66);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.group-room-spectators {
+    font-size: 12px;
+    color: #b8a888;
+    text-align: center;
+    opacity: 0.85;
+}
+
+.group-join-btn {
+    background: linear-gradient(135deg, rgba(76,217,100,0.6), rgba(40,150,60,0.7));
+    border: 1px solid rgba(150,255,170,0.4);
+    color: #fff;
+    font-weight: 700;
+    padding: 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.group-join-btn:active { transform: scale(0.96); }
+
+.group-watch-btn,
+.group-resume-btn {
+    color: #fff3d6;
+    font-weight: 700;
+    padding: 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.group-watch-btn {
+    background:
+        linear-gradient(180deg, rgba(255, 229, 181, 0.09), rgba(255, 229, 181, 0.02) 46%),
+        rgba(63, 20, 15, 0.72);
+    border: 1px solid rgba(255, 211, 139, 0.30);
+    color: #ead3aa;
+    box-shadow: inset 0 1px 0 rgba(255, 237, 200, 0.08);
+}
+
+.group-resume-btn {
+    background: var(--theme-button-bg);
+    border: 1px solid rgba(255, 218, 150, 0.56);
+    color: #fff3d6;
+    box-shadow:
+        inset 0 1px 0 rgba(255, 238, 202, 0.20),
+        0 4px 12px rgba(0,0,0,0.22);
+}
+
+.group-watch-btn:active,
+.group-resume-btn:active { transform: scale(0.96); }
+
+.lobby-empty-state {
+    width: 100%;
+    margin: 6px 0 0;
+    padding: 16px 12px;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 214, 143, 0.20);
+    border-radius: 16px;
+    background:
+        linear-gradient(180deg, rgba(255, 230, 184, 0.055), rgba(255, 230, 184, 0.015)),
+        rgba(45, 14, 11, 0.22);
+    color: #d9c29a;
+    text-transform: none;
+    letter-spacing: 0.02em;
+    text-align: center;
+}
+
+.lobby-empty-state::before {
+    content: "⚫  ·  ⚪";
+    display: block;
+    margin-bottom: 7px;
+    color: #ead6b0;
+    font-size: 17px;
+    letter-spacing: 0.08em;
+    opacity: 0.78;
+}
+
+/* ===== ЭМОЦИИ (РЕАКЦИИ) ===== */
+.reactions-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    margin-top: 8px;
+}
+
+.action-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-width: 320px;
+    margin-bottom: 0;
+}
+
+/* Делаем кнопки внутри ряда резиновыми, чтобы они ужимались 
+   и оставляли место для круглых кнопок-эмодзи по краям */
+.action-row .menu-button {
+    width: auto;
+    flex: 1;
+    max-width: 220px;
+    margin: 0; /* Убираем дефолтные отступы, т.к. gap в action-row всё сделает */
+}
+
+.reaction-btn {
+    font-size: 22px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 210, 130, 0.3);
+    border-radius: 50%;
+    width: 45px;
+    height: 45px;
+    flex-shrink: 0; /* Запрещаем сжиматься */
+    cursor: pointer;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    transition: transform 0.1s ease, background 0.2s ease;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+
+.reaction-btn:active {
+    transform: scale(0.85);
+    background: rgba(255, 210, 130, 0.2);
+}
+
+.emoji-burst-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none; /* Не блокируем клики по доске */
+    z-index: 9999;
+    overflow: hidden;
+}
+
+.burst-emoji {
+    position: absolute;
+    bottom: 15%; /* Начинают лететь снизу */
+    font-size: 28px;
+    will-change: transform, opacity; /* GPU ускорение */
+    animation: emojiFloatUp 2s ease-out forwards;
+}
+
+@keyframes emojiFloatUp {
+    0% { 
+        transform: translate3d(0, 0, 0) scale(0.5) rotate(0deg); 
+        opacity: 0; 
+    }
+    15% { 
+        transform: translate3d(var(--dx-mid), -50px, 0) scale(1.5) rotate(15deg); 
+        opacity: 1; 
+    }
+    100% { 
+        transform: translate3d(var(--dx-end), -80vh, 0) scale(0.8) rotate(-15deg); 
+        opacity: 0; 
+    }
+}
+/* Изменение рейтинга в окне итога партии. */
+.end-game-rating {
+    margin-top: 6px;
+    font-size: clamp(12px, 3.2vw, 15px);
+    opacity: 0.9;
+    white-space: pre-line;
+}
+
+/* №9: место текущего игрока — отдельный спокойный badge над таблицей. */
+.stats-your-rank {
+    display: flex;
+    width: max-content;
+    max-width: 100%;
+    align-items: center;
+    justify-content: center;
+    margin: 2px auto 10px;
+    padding: 6px 11px;
+    border: 1px solid rgba(255, 216, 148, 0.25);
+    border-radius: 999px;
+    background: rgba(255, 211, 139, 0.075);
+    color: #ead1a4;
+    font-size: clamp(12px, 3.2vw, 14px);
+    font-weight: 700;
+    line-height: 1.2;
+    opacity: 1;
+}
+.stats-your-rank:empty {
+    display: none;
+}
+
+/* Короткий статус между итогом партии и безопасным реваншем. */
+.rematch-wait-note {
+    margin: 4px 0 8px;
+    min-height: 1.2em;
+    font-size: clamp(11px, 3vw, 14px);
+    opacity: 0.82;
+}
+.rematch-wait-note:empty {
+    display: none;
+}
+
+/* ===== STARTUP COVER (invite-link/lobby flash fix) =====
+   Существует в разметке видимым по умолчанию, БЕЗ участия JS — единственный
+   способ гарантированно перекрыть #menu-screen ещё до того, как script.js
+   (лежащий в самом низу body) вообще начал скачиваться/исполняться. */
+#startup-cover {
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: var(--theme-startup-bg);
+    backdrop-filter: blur(10px) saturate(120%);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    animation: fadeInOverlay 0.15s ease;
+}
+
+/* №8: две шашки вращаются вокруг общей оси. Сам механизм остаётся
+   прежним и не влияет на layout; меняем только читаемость самих фигур.
+   Палитра повторяет реальные светлую/тёмную шашки с доски, поэтому loader
+   выглядит частью игры, а тёмная шашка не растворяется в тёплом фоне. */
+.startup-cover-spinner {
+    position: relative;
+    width: 54px;
+    height: 54px;
+    border-radius: 50%;
+    box-shadow:
+        inset 0 0 0 1px rgba(255, 218, 160, 0.10),
+        0 0 30px rgba(255, 174, 90, 0.14);
+    animation: startupCoverSpin 1.65s linear infinite;
+    will-change: transform;
+}
+
+.startup-cover-spinner::before,
+.startup-cover-spinner::after {
+    content: "";
+    position: absolute;
+    top: 16px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+
+.startup-cover-spinner::before {
+    left: -1px;
+    background:
+        radial-gradient(circle at 30% 22%, #eaddc4, #d4c3a0 45%, #b8a07c 85%);
+    border: 2px solid rgba(26, 26, 26, 0.86);
+    box-shadow:
+        inset -3px -3px 6px rgba(100,70,30,0.42),
+        inset 3px 3px 7px rgba(255,250,230,0.48),
+        0 3px 8px rgba(0,0,0,0.42),
+        0 0 12px rgba(255,224,170,0.20);
+}
+
+.startup-cover-spinner::after {
+    right: -1px;
+    background:
+        radial-gradient(circle at 30% 22%, #6a6a76, #2a2a32 45%, #0a0a0d 85%);
+    border: 2px solid rgba(160, 160, 168, 0.96);
+    box-shadow:
+        inset -3px -3px 6px rgba(0,0,0,0.70),
+        inset 3px 3px 6px rgba(190,190,205,0.34),
+        0 3px 8px rgba(0,0,0,0.55),
+        0 0 13px rgba(210,205,220,0.18);
+}
+
+@keyframes startupCoverSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* ===== ПРЕВРАЩЕНИЕ В ДАМКУ -- одноразовый эффект =====
+   Наложение поверх клетки, построенное по образцу .move-ghost-piece.
+   Класса .king у него НЕТ намеренно: в .king стоит
+   transform: scale(1.1) !important, а !important по каскаду приоритетнее
+   анимации (и !important внутри @keyframes игнорируется), поэтому любая
+   анимация transform на самой дамке была бы подавлена. Наложение этой
+   проблемы лишено и заодно не трогает настоящую фигуру.
+
+   Текстура меняется «в середине» без единой строчки JS: под наложением
+   уже лежит готовая дамка, а наложение показывает обычную шашку и к
+   середине эффекта растворяется, открывая её. */
+/* ТРИ НАЛОЖЕНИЯ, ОДНА ФИГУРА.
+   Две ОБЫЧНЫЕ стороны разнесены на 180 градусов: вместе с
+   backface-visibility: hidden они покрывают весь оборот непрерывно, и
+   обычная шашка видна всё время вращения без провалов в невидимость.
+   Одним элементом так не выйдет: при 540 градусах он пропадал бы дважды
+   (90-270 и 450-540).
+
+   Третье наложение -- дамка. Оно включается РОВНО ОДИН РАЗ, на последней
+   четверти оборота, и обратно уже не выключается. Переключение
+   происходит на 450 градусах, когда обе стороны стоят ребром к зрителю,
+   поэтому самой подмены не видно.
+
+   Раньше сторон было две (обычная и дамка, сдвиг 180), и это давало
+   чередование обычная -> дамка -> обычная -> дамка: дамка появлялась уже
+   на 90 градусах и потом пропадала. Семантика превращения требует
+   обратного -- дамка возникает один раз и остаётся.
+   perspective задаётся прямо в keyframes, а не на клетке: так объёмность
+   остаётся локальной для эффекта и не влияет на раскладку доски. */
+.king-promotion-flip,
+.king-promotion-flip-back,
+.king-promotion-flip-king {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 82%;
+    height: 82%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 6;
+    will-change: transform, opacity;
+    transform-style: preserve-3d;
+    backface-visibility: hidden;
+    /* До старта анимации наложение полностью невидимо: в это время шашка
+       ещё летит move-ghost'ом к этой же клетке, и показывать здесь вторую
+       обычную шашку нельзя. Задержка приходит из JS переменной
+       --king-promotion-delay, равной MOVE_GHOST_DURATION_MS, чтобы число
+       не дублировалось в двух местах. Фолбэк 0ms -- на случай, если
+       переменная почему-то не выставлена. */
+    opacity: 0;
+    /* Длительность БЕЗ запасного значения и это намеренно: любое число
+       здесь было бы вторым источником истины рядом с
+       KING_PROMOTION_DURATION_MS и рано или поздно разошлось бы с ним.
+       Переменную всегда выставляет JS до вставки элемента в DOM. Если её
+       вдруг не окажется, вся animation станет невалидной, эффект просто не
+       проиграется -- а наложение останется невидимым из-за opacity: 0 выше
+       и будет снято обычной уборкой. То есть деградация тихая и
+       безопасная, без рассинхронизованной анимации. */
+    animation: kingPromotionFlip var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Вторая ОБЫЧНАЯ сторона: тот же тайминг, угол смещён на 180. */
+.king-promotion-flip-back {
+    animation: kingPromotionFlipBack var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Сторона дамки: та же позиция, что у второй обычной, но появляется
+   только на финальной четверти. */
+.king-promotion-flip-king {
+    animation: kingPromotionFlipKing var(--king-promotion-duration) cubic-bezier(.33,.02,.24,1) var(--king-promotion-delay, 0ms) forwards !important;
+}
+
+/* Текстура дамки БЕЗ класса .king -- он несёт transform: scale(1.1)
+   !important, который подавил бы анимацию. Специфичность (0,2,0) выше,
+   чем у .piece-dark / .piece-light, поэтому !important не нужен. */
+.king-promotion-flip-king.piece-dark {
+    background-image: url('assets/king_dark.png?v=2');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-color: transparent;
+}
+
+.king-promotion-flip-king.piece-light {
+    background-image: url('assets/king_light.png?v=2');
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-color: transparent;
+}
+
+/* Свечение отдельным слоем -- чтобы не трогать filter настоящей фигуры
+   и её собственные тени. */
+.king-promotion-glow {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 96%;
+    height: 96%;
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 4;
+    opacity: 0;
+    background: radial-gradient(circle,
+        rgba(255, 228, 150, 0.85) 0%,
+        rgba(255, 205, 90, 0.35) 45%,
+        rgba(255, 190, 60, 0) 72%);
+    /* Та же задержка, что у наложения: свечение не должно опережать полёт. */
+    animation: kingPromotionGlow var(--king-promotion-duration) ease-out var(--king-promotion-delay, 0ms) forwards;
+}
+
+/* Полтора оборота за один проход. Ключ на 72% ставит фигуру ровно на
+   450 градусов -- это ребро, и именно там обычная сторона уступает место
+   дамке. Все три наложения идут по ОДНОЙ траектории подъёма и масштаба,
+   различаются только углом и моментом включения.
+   Финальный scale(1.1) совпадает с размером настоящей дамки (.king имеет
+   scale(1.1)), поэтому снятия наложений не видно. */
+/* Один полный оборот = ДВА прохода ребром (на 90 и на 270 градусах), то
+   есть два переворота. Прежние 540 давали три.
+
+   Ключ на 72% ставит фигуру ровно на 270 градусов -- это второе ребро, и
+   именно там обычная сторона уступает место дамке.
+
+   Расстановка сторон отличается от версии с 540 градусами. При целом
+   обороте фигура заканчивает лицом в исходном положении, поэтому дамка
+   делит позицию с ПЕРВОЙ обычной стороной (тот же угол), а не со второй.
+   Вторая обычная сторона просто закрывает середину оборота и никакой
+   сменой прозрачности не управляет -- её прячет backface.
+
+   Все три наложения идут по ОДНОЙ траектории подъёма и масштаба.
+   Финальный scale(1.1) совпадает с размером настоящей дамки. */
+/* Подъём и масштаб подобраны так, чтобы наложение (82% клетки) НЕ выходило
+   за пределы клетки ни в одном кадре: свободное поле вокруг .piece внутри
+   .square -- (100%-82%)/2 = 9% высоты клетки, и пиковый кадр (40%) держит
+   суммарный верхний выход в пределах этого поля (translateY в долях
+   собственной высоты overlay + половина прироста от scale). Раньше пик
+   давал ~30% выхода за клетку -- при 1000 мс это держалось на экране
+   достаточно долго, чтобы читаться как "фигура вылетает из клетки вверх".
+   Финальный кадр (100%) НЕ трогаем: scale(1.1) должен точно совпасть с
+   отдыхающей .king { transform: scale(1.1) }, иначе в момент снятия
+   наложения будет заметный скачок позиции. */
+@keyframes kingPromotionFlip {
+    0%    { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 1; }
+    15%   { transform: perspective(620px) translateY(-3%)  rotateX(60deg)  scale(1.02); opacity: 1; }
+    40%   { transform: perspective(620px) translateY(-7%)  rotateX(200deg) scale(1.05); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-4%)  rotateX(270deg) scale(1.04); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-4%)  rotateX(272deg) scale(1.04); opacity: 0; }
+    88%   { transform: perspective(620px) translateY(-0.5%) rotateX(330deg) scale(1.045); opacity: 0; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(360deg) scale(1.1);  opacity: 0; }
+}
+
+/* Вторая ОБЫЧНАЯ сторона: угол +180, закрывает середину оборота.
+   Прозрачностью не управляет -- когда она не нужна, её скрывает
+   backface-visibility. */
+@keyframes kingPromotionFlipBack {
+    0%    { transform: perspective(620px) translateY(0)    rotateX(180deg) scale(1);    opacity: 1; }
+    15%   { transform: perspective(620px) translateY(-3%)  rotateX(240deg) scale(1.02); opacity: 1; }
+    40%   { transform: perspective(620px) translateY(-7%)  rotateX(380deg) scale(1.05); opacity: 1; }
+    72%   { transform: perspective(620px) translateY(-4%)  rotateX(450deg) scale(1.04); opacity: 1; }
+    72.5% { transform: perspective(620px) translateY(-4%)  rotateX(452deg) scale(1.04); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-0.5%) rotateX(510deg) scale(1.045); opacity: 1; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(540deg) scale(1.1);  opacity: 1; }
+}
+
+/* Дамка: та же позиция, что у ПЕРВОЙ обычной стороны, зажигается ровно
+   там, где та гаснет -- на ребре в 270 градусов. Один раз и навсегда. */
+@keyframes kingPromotionFlipKing {
+    0%    { transform: perspective(620px) translateY(0)    rotateX(0deg)   scale(1);    opacity: 0; }
+    15%   { transform: perspective(620px) translateY(-3%)  rotateX(60deg)  scale(1.02); opacity: 0; }
+    40%   { transform: perspective(620px) translateY(-7%)  rotateX(200deg) scale(1.05); opacity: 0; }
+    72%   { transform: perspective(620px) translateY(-4%)  rotateX(270deg) scale(1.04); opacity: 0; }
+    72.5% { transform: perspective(620px) translateY(-4%)  rotateX(272deg) scale(1.04); opacity: 1; }
+    88%   { transform: perspective(620px) translateY(-0.5%) rotateX(330deg) scale(1.045); opacity: 1; }
+    100%  { transform: perspective(620px) translateY(0)    rotateX(360deg) scale(1.1);  opacity: 1; }
+}
+
+@keyframes kingPromotionGlow {
+    /* Пик сразу после появления дамки (72%), дальше спокойный уход --
+       короткий и мягкий, без вспышки. До этого свечение почти незаметно:
+       оно подчёркивает момент превращения, а не весь спин. */
+    0%   { opacity: 0;    transform: scale(0.80); }
+    55%  { opacity: 0.30; transform: scale(1.02); }
+    76%  { opacity: 0.88; transform: scale(1.18); }
+    100% { opacity: 0;    transform: scale(1.34); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    /* №7: смысл состояния остаётся через статичный цвет/glow, движение нет. */
+    #turn-timer.timer-low,
+    .player-panel.turn-cue {
+        animation: none !important;
+    }
+
+    /* №3B: закрытие модалки мгновенное. JS тоже проверяет тот же media
+       query, а это правило — защитный CSS-слой на случай изменения порядка
+       выполнения/рендера. */
+    .modal-overlay.modal-closing,
+    .modal-overlay.modal-closing .modal-box {
+        animation: none !important;
+    }
+
+    .startup-cover-spinner,
+    .waiting-visual,
+    #waiting-screen.waiting-connected .waiting-visual {
+        animation: none !important;
+    }
+    .startup-cover-spinner {
+        opacity: 0.82;
+    }
+    .waiting-visual,
+    #waiting-screen.waiting-connected .waiting-visual {
+        opacity: 1;
+        transform: none;
+    }
+    /* Экранный переход полностью отключён. JS при reduce сразу
+       прячет old screen; CSS дополнительно гасит enter. */
+    #menu-screen:not(.hidden),
+    #time-control-screen:not(.hidden),
+    #group-lobby-screen:not(.hidden),
+    #waiting-screen:not(.hidden),
+    #game-screen:not(.hidden) {
+        animation: none !important;
+    }
+    /* Кнопка не движется: ни утопления, ни плавных переходов. Световой
+       отклик при этом остаётся -- он статичен и движением не является,
+       а без него нажатие перестало бы читаться вовсе. */
+    .menu-button {
+        transition: none;
+    }
+    .menu-button:active {
+        transform: none;
+    }
+    .menu-button::after {
+        transition: none;
+    }
+    /* №4: capture ghost — полностью декоративный motion-слой. JS не создаёт
+       его при reduced-motion; CSS дублирует это как защитный fallback. */
+    .move-ghost-captured {
+        display: none !important;
+        animation: none !important;
+    }
+    /* Вспышка остаётся: она только световая, движением не является, и без
+       неё быстрый тап снова перестал бы читаться. Убеждаемся лишь, что в
+       ней нет ни масштаба, ни сдвига -- их там и нет по построению. */
+    button.button-press-flash::after {
+        /* Статический отклик: анимации нет вовсе, слой просто виден, пока
+           на кнопке висит класс. Снимает его тот же JS-таймер через
+           300 мс, поэтому длительность отклика не меняется -- исчезает
+           только плавное угасание. */
+        animation: none;
+        opacity: 1;
+        transform: none;
+    }
+    /* Ни подъёма, ни поворота: наложение просто не показывается, и дамка
+       появляется мгновенно. Звук при этом остаётся -- он не является
+       движением. */
+    .king-promotion-flip,
+    .king-promotion-flip-back,
+    .king-promotion-flip-king {
+        animation: none !important;
+        opacity: 0 !important;
+    }
+    /* Наложения выключены -- значит animationend не придёт, и уборка
+       случится только по страховочному таймауту (150 + 680 + 120 мс).
+       Без этого правила настоящая дамка почти секунду оставалась бы
+       скрытой классом piece-hidden-for-promotion, и игрок видел бы пустую
+       клетку -- при том что требование обратное: дамка появляется сразу.
+
+       :not(.piece-hidden-for-ghost) здесь обязателен. Оба класса висят на
+       фигуре одновременно первые MOVE_GHOST_DURATION_MS, пока шашка летит.
+       Без этой защиты правило (одинаковая специфичность, но позже по
+       файлу) перебило бы сокрытие на время полёта, и на доске оказались бы
+       две шашки разом. С ней оно просто не совпадает, пока идёт полёт, и
+       включается ровно тогда, когда полёт закончился. */
+    .piece-hidden-for-promotion:not(.piece-hidden-for-ghost) {
+        opacity: 1 !important;
+    }
+    .king-promotion-glow {
+        animation: none;
+        opacity: 0;
+    }
+}
+
+.startup-cover-text {
+    color: #f3ddb2;
+    font-size: 16px;
+    font-weight: 650;
+    letter-spacing: 0.02em;
+    line-height: 1.4;
+    text-align: center;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.55), 0 0 18px rgba(255,190,105,0.12);
+    margin: 0;
+    max-width: 80vw;
+}
+
+/* По умолчанию (обычный запуск) виден нейтральный текст; ранний
+   route-hint в <head> добавляет invite-launch-hint классу html ДО первого
+   paint, если start_param уже успел разложиться — это чистый CSS-свитч,
+   не зависящий от таймингов JS-исполнения. */
+.startup-cover-text-invite {
+    display: none;
+}
+html.invite-launch-hint .startup-cover-text-normal {
+    display: none;
+}
+html.invite-launch-hint .startup-cover-text-invite {
+    display: block;
+}
