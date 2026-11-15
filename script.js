@@ -3,6 +3,11 @@ if (window.Telegram && window.Telegram.WebApp) {
     Telegram.WebApp.expand();
 }
 
+// Признак окружения СБОРКИ. В исходниках и в production всегда "production"; только STAGING-сборщик
+// (tools/build-staging-frontend.js) подменяет ровно одно вхождение на "staging". От него зависит единственное:
+// STAGING-диагностика (см. absenceDiag* ниже). Игровая логика этот признак не читает.
+const BUILD_ENVIRONMENT = "production";
+
 // ===== FIREBASE =====
 
 const firebaseConfig = {
@@ -64,6 +69,36 @@ let serverAckSinceConnect = false;
 // подключению, могли бы «протечь» из предыдущей комнаты в новую.
 // Доказательство свежести обязано относиться к ТЕКУЩЕЙ комнате.
 let listenerGeneration = 0;
+
+// PR-30: bind the retained ruleset move source to the authoritative
+// room-listener lifetime. No move path consumes this lifecycle yet.
+const onlineRulesetMoveSourceLifecycle = OnlineRulesetMoveSourceLifecycle.create();
+let onlineRulesetMoveSourceToken = null;
+let onlineRulesetMoveSourceRuleset = null;
+// Italian online transport is intentionally serialized independently from the
+// legacy Russian pending-sync chain. The marker is tied to one room/token/state
+// context and is cleared on listener teardown so stale promises cannot block a
+// later room.
+let italianOnlineMoveTransportInFlight = null;
+// Only a failed rollback read may expose manual retry. This identity is never
+// a move-write capability: retry can re-read but never re-submit the move.
+let italianOnlineMoveRecoveryFailedMarker = null;
+// Each rollback server read has its own short-lived authority. After a stall,
+// old Firebase completions MUST NOT adopt state, even within the same room.
+let italianOnlineMoveRecoveryReadAttempt = null;
+const ITALIAN_RECOVERY_READ_STALL_MS = 30000;
+function beginOnlineRulesetMoveSourceLifecycle() {
+    onlineRulesetMoveSourceToken = onlineRulesetMoveSourceLifecycle.begin();
+    return onlineRulesetMoveSourceToken;
+}
+function clearOnlineRulesetMoveSourceLifecycle() {
+    onlineRulesetMoveSourceLifecycle.clear();
+    onlineRulesetMoveSourceToken = null;
+    onlineRulesetMoveSourceRuleset = null;
+    italianOnlineMoveTransportInFlight = null;
+    italianOnlineMoveRecoveryFailedMarker = null;
+    italianOnlineMoveRecoveryReadAttempt = null;
+}
 // Обнуляет доказательства и открывает новое поколение подписки.
 function resetRoomFreshnessProof() {
     listenerGeneration++;
@@ -151,8 +186,18 @@ let firebaseAuthReady = false;
 let authPhase = "pending";
 let authPromise = null;
 let localOnlyBotGame = false;
+let localBotRuleset = "russian";
 let pendingFirebaseIdentity = null;
 let firebaseFlowsStarted = false;
+// STEP I phase 2: STAGING-only read-only diagnostics (shared/italian-online-diag.js). Inert unless the diagnostics module armed itself for a staging
+// database; the data is built lazily and nothing here can throw into the app or change its behaviour.
+function itDiag(tag, data, key, val) {
+    try {
+        const d = window.ItalianOnlineDiag; if (!d || !d.on) return;
+        if (key !== undefined) { const m = itDiag.seen || (itDiag.seen = {}); if (m[key] === val) return; m[key] = val; }   // change-only (a list re-renders often)
+        d.note(tag, typeof data === "function" ? data() : data);
+    } catch (e) {}
+}
 function canUseFirebase() {
     const currentUser = auth && auth.currentUser;
     return firebaseAuthReady === true && !localOnlyBotGame
@@ -196,25 +241,74 @@ const verifiedTelegramUsernameCache = Object.create(null);
 const verifiedTelegramUsernameLoads = Object.create(null);
 
 // ===== ЛОКАЛИЗАЦИЯ (i18n) =====
-let currentLang = localStorage.getItem("shashki_lang");
-if (!currentLang) {
-    let tgLang = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe && Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.language_code) ? Telegram.WebApp.initDataUnsafe.user.language_code : "ru";
-    if (tgLang === "ru" || tgLang === "en" || tgLang === "it") {
-        currentLang = tgLang;
-    } else {
-        currentLang = "ru"; // Для всех остальных языков по умолчанию русский
-    }
-    localStorage.setItem("shashki_lang", currentLang);
+// Язык интерфейса и правила игры -- два НЕЗАВИСИМЫХ состояния. Язык хранится
+// только в shashki_lang / shashki_lang_manual; выбранные правила (selectedRuleset)
+// живут в памяти и никогда не выводятся из языка (и наоборот).
+const SUPPORTED_UI_LANGS = ["ru", "en", "it"];
+const LANG_STORAGE_KEY = "shashki_lang";
+const LANG_MANUAL_KEY = "shashki_lang_manual";
+
+function normalizeUiLang(value) {
+    if (typeof value !== "string") return null;
+    const base = value.trim().toLowerCase().split(/[-_]/)[0];
+    return SUPPORTED_UI_LANGS.indexOf(base) !== -1 ? base : null;
 }
+
+// Автоопределение (чистая функция): язык Telegram > язык телефона/браузера > ru.
+function detectAutoLanguage(telegramLang, browserLangs) {
+    let auto = normalizeUiLang(telegramLang);
+    if (!auto && browserLangs && typeof browserLangs.length === "number") {
+        for (let i = 0; i < browserLangs.length && !auto; i++) auto = normalizeUiLang(browserLangs[i]);
+    }
+    return auto || "ru";
+}
+
+// Чистая функция: ручной выбор флагом (флаг shashki_lang_manual) имеет приоритет;
+// иначе язык определяется заново при каждом запуске. Автоязык в хранилище НЕ записывается.
+function resolveInterfaceLanguage(storedLang, manualFlag, telegramLang, browserLangs) {
+    const stored = normalizeUiLang(storedLang);
+    if (stored && manualFlag === "1") return stored;
+    return detectAutoLanguage(telegramLang, browserLangs);
+}
+
+// Одноразовая миграция: старые версии записывали в shashki_lang и автоязык. Значение без флага,
+// отличающееся от автоопределённого, могло быть выбрано только руками -- сохраняем его как ручное.
+// Совпадающее с автоязыком остаётся автоматическим и дальше следует за Telegram.
+function legacyLanguageIsManual(storedLang, telegramLang, browserLangs) {
+    const stored = normalizeUiLang(storedLang);
+    return !!stored && stored !== detectAutoLanguage(telegramLang, browserLangs);
+}
+
+let selectedRuleset = null; // null | "russian" | "italian" -- только в памяти, не язык
+
+let currentLang = (function () {
+    let stored = null, manual = null;
+    try {
+        stored = localStorage.getItem(LANG_STORAGE_KEY);
+        manual = localStorage.getItem(LANG_MANUAL_KEY);
+    } catch (e) {}
+    const tg = (window.Telegram && window.Telegram.WebApp && Telegram.WebApp.initDataUnsafe &&
+        Telegram.WebApp.initDataUnsafe.user && Telegram.WebApp.initDataUnsafe.user.language_code) || null;
+    let nav = [];
+    try {
+        nav = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language];
+    } catch (e) {}
+    if (manual !== "1" && legacyLanguageIsManual(stored, tg, nav)) {
+        manual = "1";
+        try { localStorage.setItem(LANG_MANUAL_KEY, "1"); } catch (e) {}
+    }
+    return resolveInterfaceLanguage(stored, manual, tg, nav);
+})();
 
 // Словарь переводов
 const translations = {
     ru: {
         h1_title: "Русские Шашки 🎮",
+        game_title_italian: "Итальянские Шашки 🎮",
         no_active_game: "Нет активной игры",
         active_games: "Активные игры",
         btn_play_online: "👥 Кто играет?",
-        btn_play_friend: "👥 Играть с другом",
+        btn_play_friend: "🤝 Играть с другом",
         btn_play_bot: "🤖 Играть с ботом",
         btn_continue: "▶️ Продолжить",
         btn_show_stats: "📊 Моя статистика",
@@ -226,6 +320,7 @@ const translations = {
         time_180: "3 минуты на ход",
         time_300: "5 минут на ход",
         btn_back: "Назад",
+        btn_back_mode: "⬅️ Назад",
         waiting_link_prompt: "Приглашение готово",
         btn_share_link: "📤 Отправить другу",
         btn_copy_link: "📋 Скопировать ссылку",
@@ -267,6 +362,8 @@ const translations = {
         draw_reason_np30: "Лимит 30 ходов в окончании с 4\u20135 фигурами",
         draw_reason_np60: "Лимит 60 ходов в окончании с 6\u20137 фигурами",
         draw_reason_longroad: "Лимит 5 ходов: дамка на большой дороге",
+        draw_reason_it_repetition: "Правило приложения: одна и та же позиция повторилась три раза.",
+        draw_reason_it_forty: "Правило приложения: 40 ходов каждой стороны только дамками, без взятия и хода простой шашки.",
         btn_to_menu: "В меню",
         btn_close: "Закрыть",
         btn_ok: "ОК",
@@ -291,6 +388,7 @@ const translations = {
         err_resync_failed: "Потеряно соединение с сервером. Попробуйте перезайти в игру.",
         err_load_game: "Не удалось загрузить игру. Проверьте интернет-соединение.",
         err_no_active_game: "Нет активной игры",
+        err_italian_online_unavailable: "Итальянские онлайн-шашки пока недоступны.",
         err_play_self: "Нельзя играть против самого себя",
         err_opponent_offline: "Соперник оффлайн\n\n",
         err_opponent_offline_2: " больше не находится в игре.",
@@ -319,6 +417,8 @@ const translations = {
         waiting_for_opponent: "Ожидание соперника...",
         loading: "Загрузка...",
         lobby_empty: "Пока никто не играет",
+        lobby_kind_russian: "Русские шашки",
+        lobby_kind_italian: "Итальянские шашки",
         btn_back_bot: "👈 Назад",
         confirm_back_bot: "Вы точно хотите выйти?",
         confirm_resign: "Вы уверены, что хотите сдаться?",
@@ -327,8 +427,8 @@ const translations = {
         btn_rematch: "Реванш",
         btn_new_game: "Новая игра",
         btn_start_new_game: "Начать новую игру",
-        stats_top_online: "📊 Топ игроков (Онлайн)",
-        stats_top_bot: "🤖 Топ игроков (Против бота)",
+        stats_top_online: "📊 Русские шашки — топ (Онлайн)",
+        stats_top_bot: "🤖 Русские шашки — топ (Против бота)",
         stats_tab_online: "🌐 Онлайн",
         stats_tab_bot: "🤖 С ботом",
         stats_label_wins: "Побед",
@@ -337,6 +437,9 @@ const translations = {
         stats_label_bylevel: "По уровням сложности",
         modal_offline_opp: "Соперник офлайн",
         modal_bot_difficulty: "Выберите сложность",
+        modal_bot_ruleset: "Выберите правила",
+        btn_ruleset_russian: "Русские шашки",
+        btn_ruleset_italian: "Итальянские шашки",
         modal_continue_or_new: "У вас уже есть партия с ботом",
         btn_continue_existing: "▶️ Продолжить текущую",
         btn_start_new_session: "🆕 Начать новую",
@@ -358,16 +461,23 @@ const translations = {
         stats_load_error: "Не удалось загрузить рейтинг",
         stats_no_bot_games: "Пока никто не играл с ботом",
         bot_details_total: "Всего",
+        stats_rules_ru: "Русские",
+        stats_rules_it: "Итальянские",
+        stats_top_italian_bot: "🤖 Итальянские шашки — топ (Против бота)",
+        stats_no_italian_bot_games: "Пока никто не играл с итальянским ботом",
+        stats_top_italian_online: "🌐 Итальянские шашки — топ (Онлайн)",
+        stats_no_italian_online_games: "Пока никто не играл в итальянский онлайн",
         stats_games_word: "партий",
         lobby_waiting: "Ждут игру",
         lobby_active: "Идут игры",
     },
     en: {
         h1_title: "Russian Checkers 🎮",
+        game_title_italian: "Italian Draughts 🎮",
         no_active_game: "No active games",
         active_games: "Active games",
         btn_play_online: "👥 Who is playing?",
-        btn_play_friend: "👥 Play with a friend",
+        btn_play_friend: "🤝 Play with a friend",
         btn_play_bot: "🤖 Play with bot",
         btn_continue: "▶️ Continue",
         btn_show_stats: "📊 My statistics",
@@ -379,6 +489,7 @@ const translations = {
         time_180: "3 minutes per move",
         time_300: "5 minutes per move",
         btn_back: "Back",
+        btn_back_mode: "⬅️ Back",
         waiting_link_prompt: "Invitation ready",
         btn_share_link: "📤 Send to friend",
         btn_copy_link: "📋 Copy link",
@@ -420,6 +531,8 @@ const translations = {
         draw_reason_np30: "30-move limit in a 4\u20135 piece ending",
         draw_reason_np60: "60-move limit in a 6\u20137 piece ending",
         draw_reason_longroad: "5-move limit: lone king on the long diagonal",
+        draw_reason_it_repetition: "App rule: the same position occurred three times.",
+        draw_reason_it_forty: "App rule: 40 moves by each side with kings only, no capture and no man move.",
         btn_to_menu: "To menu",
         btn_close: "Close",
         btn_ok: "OK",
@@ -442,6 +555,7 @@ const translations = {
         err_resync_failed: "Lost connection to server. Try rejoining the game.",
         err_load_game: "Failed to load game. Check your internet connection.",
         err_no_active_game: "No active game",
+        err_italian_online_unavailable: "Italian online checkers are not available yet.",
         err_play_self: "Cannot play against yourself",
         err_opponent_offline: "Opponent is offline\n\n",
         err_opponent_offline_2: " is no longer in the game.",
@@ -469,6 +583,8 @@ const translations = {
         waiting_for_opponent: "Waiting for an opponent...",
         loading: "Loading...",
         lobby_empty: "Nobody is playing right now",
+        lobby_kind_russian: "Russian checkers",
+        lobby_kind_italian: "Italian draughts",
         btn_back_bot: "👈 Back",
         confirm_back_bot: "Are you sure you want to exit?",
         confirm_resign: "Are you sure you want to resign?",
@@ -477,8 +593,8 @@ const translations = {
         btn_rematch: "Rematch",
         btn_new_game: "New game",
         btn_start_new_game: "Start new game",
-        stats_top_online: "📊 Top players (Online)",
-        stats_top_bot: "🤖 Top players (vs Bot)",
+        stats_top_online: "📊 Russian Checkers — top (Online)",
+        stats_top_bot: "🤖 Russian Checkers — top (vs Bot)",
         stats_tab_online: "🌐 Online",
         stats_tab_bot: "🤖 vs Bot",
         stats_label_wins: "Wins",
@@ -487,6 +603,9 @@ const translations = {
         stats_label_bylevel: "By difficulty",
         modal_offline_opp: "Opponent offline",
         modal_bot_difficulty: "Choose difficulty",
+        modal_bot_ruleset: "Choose rules",
+        btn_ruleset_russian: "Russian Checkers",
+        btn_ruleset_italian: "Italian Draughts",
         modal_continue_or_new: "You already have a game with the bot",
         btn_continue_existing: "▶️ Continue current",
         btn_start_new_session: "🆕 Start new",
@@ -508,16 +627,23 @@ const translations = {
         stats_load_error: "Failed to load leaderboard",
         stats_no_bot_games: "No games against the bot have been played yet",
         bot_details_total: "Total",
+        stats_rules_ru: "Russian",
+        stats_rules_it: "Italian",
+        stats_top_italian_bot: "🤖 Italian draughts — top (vs Bot)",
+        stats_no_italian_bot_games: "No games against the Italian bot have been played yet",
+        stats_top_italian_online: "🌐 Italian draughts — top (Online)",
+        stats_no_italian_online_games: "No Italian online games have been played yet",
         stats_games_word: "games",
         lobby_waiting: "Waiting for a game",
         lobby_active: "Games in progress",
     },
     it: {
         h1_title: "Dama Russa 🎮",
+        game_title_italian: "Dama Italiana 🎮",
         no_active_game: "Nessuna partita attiva",
         active_games: "Partite attive",
         btn_play_online: "👥 Chi sta giocando?",
-        btn_play_friend: "👥 Gioca con un amico",
+        btn_play_friend: "🤝 Gioca con un amico",
         btn_play_bot: "🤖 Gioca con il bot",
         btn_continue: "▶️ Continua",
         btn_show_stats: "📊 Le mie statistiche",
@@ -529,6 +655,7 @@ const translations = {
         time_180: "3 minuti per mossa",
         time_300: "5 minuti per mossa",
         btn_back: "Indietro",
+        btn_back_mode: "⬅️ Indietro",
         waiting_link_prompt: "Invito pronto",
         btn_share_link: "📤 Invia ad un amico",
         btn_copy_link: "📋 Copia link",
@@ -570,6 +697,8 @@ const translations = {
         draw_reason_np30: "Limite di 30 mosse in un finale con 4\u20135 pezzi",
         draw_reason_np60: "Limite di 60 mosse in un finale con 6\u20137 pezzi",
         draw_reason_longroad: "Limite di 5 mosse: dama sulla diagonale principale",
+        draw_reason_it_repetition: "Regola dell'app: la stessa posizione si è ripetuta tre volte.",
+        draw_reason_it_forty: "Regola dell'app: 40 mosse per parte con sole dame, senza prese e senza spostamenti di pedine.",
         btn_to_menu: "Al menu",
         btn_close: "Chiudi",
         btn_ok: "OK",
@@ -592,6 +721,7 @@ const translations = {
         err_resync_failed: "Connessione al server persa. Prova a rientrare nella partita.",
         err_load_game: "Impossibile caricare la partita. Controlla la connessione.",
         err_no_active_game: "Nessuna partita attiva",
+        err_italian_online_unavailable: "La dama italiana online non è ancora disponibile.",
         err_play_self: "Non puoi giocare contro te stesso",
         err_opponent_offline: "L'avversario è offline\n\n",
         err_opponent_offline_2: " non è più in gioco.",
@@ -619,6 +749,8 @@ const translations = {
         waiting_for_opponent: "In attesa di un avversario...",
         loading: "Caricamento...",
         lobby_empty: "Nessuno sta giocando",
+        lobby_kind_russian: "Dama russa",
+        lobby_kind_italian: "Dama italiana",
         btn_back_bot: "👈 Indietro",
         confirm_back_bot: "Sei sicuro di voler uscire?",
         confirm_resign: "Sei sicuro di voler abbandonare?",
@@ -627,8 +759,8 @@ const translations = {
         btn_rematch: "Rivincita",
         btn_new_game: "Nuova partita",
         btn_start_new_game: "Inizia nuova partita",
-        stats_top_online: "📊 Migliori (Online)",
-        stats_top_bot: "🤖 Migliori (vs Bot)",
+        stats_top_online: "📊 Dama Russa — migliori (Online)",
+        stats_top_bot: "🤖 Dama Russa — migliori (vs Bot)",
         stats_tab_online: "🌐 Online",
         stats_tab_bot: "🤖 vs Bot",
         stats_label_wins: "Vittorie",
@@ -637,6 +769,9 @@ const translations = {
         stats_label_bylevel: "Per difficoltà",
         modal_offline_opp: "Avversario offline",
         modal_bot_difficulty: "Scegli la difficoltà",
+        modal_bot_ruleset: "Scegli le regole",
+        btn_ruleset_russian: "Dama Russa",
+        btn_ruleset_italian: "Dama Italiana",
         modal_continue_or_new: "Hai già una partita con il bot",
         btn_continue_existing: "▶️ Continua quella attuale",
         btn_start_new_session: "🆕 Inizia una nuova",
@@ -658,15 +793,29 @@ const translations = {
         stats_load_error: "Impossibile caricare la classifica",
         stats_no_bot_games: "Non è stata ancora giocata nessuna partita contro il bot",
         bot_details_total: "Totale",
+        stats_rules_ru: "Russe",
+        stats_rules_it: "Italiane",
+        stats_top_italian_bot: "🤖 Dama italiana — classifica (contro il bot)",
+        stats_no_italian_bot_games: "Nessuno ha ancora giocato contro il bot italiano",
+        stats_top_italian_online: "🌐 Dama italiana — classifica (online)",
+        stats_no_italian_online_games: "Nessuno ha ancora giocato online a dama italiana",
         stats_games_word: "partite",
         lobby_waiting: "In attesa di una partita",
         lobby_active: "Partite in corso",
     }
 };
 
+// Тексты главного меню живут в одном расширяемом пакете (shared/main-menu-i18n.js) и подмешиваются в общий словарь.
+if (window.MainMenuI18n) window.MainMenuI18n.mergeInto(translations);
+
 // Функция получения перевода по ключу
 function t(key) {
     return (translations[currentLang] && translations[currentLang][key]) || (translations['ru'] && translations['ru'][key]) || key;
+}
+
+// Stage 3 / Step C-1: Italian Online (shared/italian-online-i18n.js) использует ЭТОТ ЖЕ язык приложения -- второй настройки языка нет.
+if (window.ItalianOnlineI18n && typeof window.ItalianOnlineI18n.setLanguageProvider === "function") {
+    window.ItalianOnlineI18n.setLanguageProvider(function () { return currentLang; });
 }
 
 
@@ -688,17 +837,32 @@ function applyTranslationsToDOM() {
     document.querySelectorAll(".lang-btn").forEach(function(btn) {
         if (btn.getAttribute("data-lang") === currentLang) {
             btn.classList.add("active");
+            btn.setAttribute("aria-pressed", "true");
         } else {
             btn.classList.remove("active");
+            btn.setAttribute("aria-pressed", "false");
         }
     });
+    updateModeScreenTitle();
+    updateGameTitle();
+    if (window.MainMenuCarousel) window.MainMenuCarousel.refreshText();
+    // C-1: итальянская онлайн-панель перерисовывает только ТЕКСТЫ (состояние партии, ходы и сеть не затрагиваются).
+    if (window.ItalianOnlineI18n && typeof window.ItalianOnlineI18n.languageChanged === "function") {
+        window.ItalianOnlineI18n.languageChanged();
+    }
 }
 
 // Обработчики кнопок ручного переключения языка (три отдельных флага)
 document.querySelectorAll(".lang-btn").forEach(function(btn) {
     btn.addEventListener("click", function() {
-        currentLang = btn.getAttribute("data-lang");
-        localStorage.setItem("shashki_lang", currentLang);
+        const chosen = normalizeUiLang(btn.getAttribute("data-lang"));
+        if (!chosen) return;
+        currentLang = chosen;
+        // Только явный клик по флагу делает выбор ручным (он имеет приоритет над автоязыком).
+        try {
+            localStorage.setItem(LANG_STORAGE_KEY, currentLang);
+            localStorage.setItem(LANG_MANUAL_KEY, "1");
+        } catch (e) {}
         applyTranslationsToDOM(); // Применяем новый язык сразу
     });
 });
@@ -712,6 +876,12 @@ const gameScreen = document.getElementById("game-screen");
 const btnPlayOnline = document.getElementById("btn-play-online");
 const btnPlayFriend = document.getElementById("btn-play-friend");
 const btnPlayBot = document.getElementById("btn-play-bot");
+const modeScreen = document.getElementById("mode-screen");
+const modeRulesetTitle = document.getElementById("mode-ruleset-title");
+const btnChooseRussian = document.getElementById("btn-choose-russian");
+const btnChooseItalian = document.getElementById("btn-choose-italian");
+const btnBackFromMode = document.getElementById("btn-back-from-mode");
+const btnItalianOnlineEntry = document.getElementById("btn-italian-online");
 const waitingInvitePrompt = document.getElementById("waiting-invite-prompt");
 const btnShareLink = document.getElementById("btn-share-link");
 const btnCopyLink = document.getElementById("btn-copy-link");
@@ -759,6 +929,10 @@ const statsModal = document.getElementById("stats-modal");
 const statsLeaderboard = document.getElementById("stats-leaderboard");
 const btnStatsClose = document.getElementById("btn-stats-close");
 const offlineOpponentModal = document.getElementById("offline-opponent-modal");
+const botRulesetModal = document.getElementById("bot-ruleset-modal");
+const btnRulesetRussian = document.getElementById("btn-ruleset-russian");
+const btnRulesetItalian = document.getElementById("btn-ruleset-italian");
+const btnRulesetBack = document.getElementById("btn-ruleset-back");
 const botDifficultyModal = document.getElementById("bot-difficulty-modal");
 const btnDifficultyEasy = document.getElementById("btn-difficulty-easy");
 const btnDifficultyMedium = document.getElementById("btn-difficulty-medium");
@@ -868,6 +1042,39 @@ let groupLobbyListener = null;
 let lobbyRoomsByCode = {}; // последний известный room-объект по коду — чисто локальный UI-кеш
 let lobbySignatureByCode = {}; // последняя "видимая" сигнатура на комнату — для пропуска лишних DOM-рендеров
 let lobbyStaleCheckTimer = null; // локальный JS-таймер (не Firebase-read) для комнат, переставших слать события вообще
+// ===== ЛОББИ, итальянская часть (Stage 3, Step B) =====
+// ОТДЕЛЬНЫЙ кеш и ОТДЕЛЬНЫЙ слушатель: русский кеш (lobbyRoomsByCode), русский sweep и
+// ветка /rooms не знают об итальянских комнатах и ничего в /roomsItalian не пишут.
+// Слушатель запрашивает ТОЛЬКО status=active (limitToFirst) и ТОЛЬКО у подтверждённого
+// тестера (italianOnlineControl/testers/<uid> === true); без staging-Rules запрос будет
+// отклонён сервером, итальянская часть тихо отключится, русский список продолжит работать.
+const ITALIAN_LOBBY_LIMIT = 50;
+let lobbyItalianQuery = null;
+let lobbyItalianRoomsByCode = {};
+let lobbyItalianSignatureByCode = {};
+let lobbyItalianSession = 0; // защита от запоздалых ответов после выхода из лобби
+let lobbyItalianStatus = "off"; // "off" | "checking" | "live" | "unavailable"
+// Step B: presence итальянских партий (roomsItalianPresence/<code>) для скрытия брошенных партий. Отдельный узел,
+// комната и её ETag не затрагиваются. Нет данных presence != «брошена».
+let lobbyItalianPresenceByCode = {};
+let lobbyItalianPresenceWatch = {};
+let lobbyItalianAbandonedByCode = {};
+let lobbyItalianSweepTimer = null;
+const ITALIAN_LOBBY_SWEEP_MS = 5000;
+// Начальная загрузка итальянской части списка: пока тестер не проверен, список комнат не прочитан и не пришло presence каждой комнаты, пустой
+// список не объявляем (нейтральное «Загрузка…»). Предел ожидания, чтобы при сетевой ошибке загрузка не была бесконечной.
+const ITALIAN_LOBBY_LOAD_MAX_MS = 8000;
+let lobbyItalianListRead = false;
+let lobbyItalianLoadGaveUp = false;
+let lobbyItalianLoadTimer = null;
+function isItalianLobbyLoading() {
+    if (lobbyItalianLoadGaveUp) return false;
+    if (lobbyItalianStatus === "checking") return true;
+    if (lobbyItalianStatus !== "live") return false;
+    if (!lobbyItalianListRead) return true;
+    for (const code in lobbyItalianRoomsByCode) if (!(code in lobbyItalianPresenceByCode)) return true;
+    return false;
+}
 const LOBBY_STALE_CHECK_INTERVAL_MS = 8000;
 // Не null, когда уже запланирован (но ещё не выполнен) один кадр рендера —
 // не даёт нескольким child_added/changed/removed подряд (burst) вызвать
@@ -1272,6 +1479,7 @@ function closeModal(modal) {
 function getAppScreens() {
     return [
         menuScreen,
+        modeScreen,
         timeControlScreen,
         document.getElementById("group-lobby-screen"),
         waitingScreen,
@@ -1348,8 +1556,13 @@ function hideScreenImmediately(screen) {
     screen.classList.add("hidden");
 }
 
+// STEP K3: the Russian #time-control-screen is also the first step of «Играть с другом» in the Italian rules. The flag says that the screen was opened
+// from the Italian entry (set by the Italian branch of btnPlayFriend, cleared by every way out of the screen); the Russian flow never sets it.
+let italianTimeChoicePending = false;
+
 function showScreen(screen) {
     hideStartupCover();
+    if (screen !== timeControlScreen) italianTimeChoicePending = false;
 
     // Уходим с доски -- снимаем ещё не прозвучавший мотив превращения.
     // Переход НА игровой экран ничего не отменяет.
@@ -1368,19 +1581,98 @@ function showScreen(screen) {
 
     // Target становится текущим экраном сразу. Его 180ms enter -- только
     // визуальный эффект; game/Firebase не ждут.
+    if (screen === gameScreen) updateGameTitle();
     screen.removeAttribute("aria-hidden");
     startScreenInputGuard(screen);
     screen.classList.remove("hidden");
 }
+
+// ===== ДВУХУРОВНЕВОЕ МЕНЮ: правила -> режим =====
+// Первый экран (#menu-screen) выбирает правила, второй (#mode-screen) -- способ игры.
+// Язык интерфейса от этого выбора не зависит и при переходах не меняется.
+function normalizeSelectableRuleset(value) {
+    return value === "russian" || value === "italian" ? value : null;
+}
+
+function updateModeScreenTitle() {
+    if (!modeRulesetTitle) return;
+    const r = normalizeSelectableRuleset(selectedRuleset);
+    modeRulesetTitle.textContent = r ? t("btn_ruleset_" + r) : "";
+}
+
+function showModeScreen(ruleset) {
+    const r = normalizeSelectableRuleset(ruleset);
+    if (!r || !modeScreen) return false;
+    selectedRuleset = r;
+    updateModeScreenTitle();
+    showScreen(modeScreen);
+    return true;
+}
+
+function showRulesScreen() {
+    selectedRuleset = null;
+    updateModeScreenTitle();
+    showScreen(menuScreen);
+}
+
+// Отмена внутри бот-потока возвращает на экран режима выбранных правил, а не на первый экран.
+function showMenuAfterCancel() {
+    if (normalizeSelectableRuleset(selectedRuleset) && modeScreen) showScreen(modeScreen);
+    else showScreen(menuScreen);
+}
+
+// Окончание партии (результат, сдача, уход соперника, выход из игры с ботом)
+// возвращает игрока на второй экран тех правил, по которым партия шла.
+// Правила берутся из самой партии, а не только из selectedRuleset: игрок,
+// пришедший по пригласительной ссылке, на первом экране ничего не выбирал.
+// Язык не затрагивается. Ошибки, реконнект, resume, приглашения и лобби
+// сюда НЕ ходят: у них свои переходы.
+function showModeScreenAfterGame(endedRuleset) {
+    const r = normalizeSelectableRuleset(endedRuleset)
+        || normalizeSelectableRuleset(selectedRuleset)
+        || "russian";
+    if (!showModeScreen(r)) showScreen(menuScreen);
+}
+
+if (btnChooseRussian) btnChooseRussian.addEventListener("click", function () { showModeScreen("russian"); });
+if (btnChooseItalian) btnChooseItalian.addEventListener("click", function () { showModeScreen("italian"); });
+if (btnBackFromMode) btnBackFromMode.addEventListener("click", showRulesScreen);
+
+// Главное меню (shared/main-menu-carousel.js): карусель флагов + карточка. «Играть» делает ровно тот же переход на второе меню,
+// что раньше делали кнопки правил (клик по ним, их обработчики выше не менялись). Игровая логика и Firebase модулю недоступны.
+if (window.MainMenuCarousel) {
+    window.MainMenuCarousel.init({
+        t: t,
+        initialId: currentLang === "it" ? "italian" : "russian",
+        onPlay: function (ruleset) {
+            const b = ruleset === "italian" ? btnChooseItalian : btnChooseRussian;
+            if (b) b.click();
+        }
+    });
+}
+
+// Итальянская онлайн-панель (shared/italian-online-two-player-ui.js) -- отдельный оверлей поверх приложения.
+// По «Вернуться в меню» она закрывается и шлёт это событие; второй экран итальянских шашек открывается
+// здесь явно и не зависит от того, какой экран оказался под панелью (меню, приглашение it_..., resume).
+// Русские обработчики завершения комнаты не используются; Firebase и Worker не затрагиваются.
+document.addEventListener("italian-online:exit", function (e) {
+    showModeScreenAfterGame("italian");
+    // Как в русском: ссылка / «Продолжить» на завершённую, брошенную или несуществующую партию -> второй экран + окно «Нет активной игры», доска не открывается.
+    if (e && e.detail && e.detail.notice === "no_active_game") showInfoModal(t("err_no_active_game"), false, false);
+});
 
 
 // ===== ИГРОВОЙ ДВИЖОК (№22: вынесен в shared/game-engine.js) =====
 // Единый implementation source для client и Worker. Здесь — только
 // bindings на реально используемые в script.js primitives; сама логика
 // (createInitialPieces...computeNextDrawState) больше не дублируется тут.
-if (!window.RussianCheckersEngine || typeof window.RussianCheckersEngine.attemptMove !== "function") {
-    throw new Error("RussianCheckersEngine failed to load");
+if (!window.CheckersRulesetRegistry || typeof window.CheckersRulesetRegistry.getEngine !== "function") {
+    throw new Error("CheckersRulesetRegistry failed to load");
 }
+// PR-1 is a Russian-behavior freeze: no room selection is active yet.
+// All current client gameplay is deliberately dispatched to the registered
+// Russian engine. Later PRs may resolve a room's immutable ruleset here.
+const activeRulesEngine = window.CheckersRulesetRegistry.getEngine("russian");
 const {
     createInitialPieces,
     pieceAt,
@@ -1399,7 +1691,55 @@ const {
     checkAutomaticDraw,
     attemptMove,
     computeNextDrawState
-} = window.RussianCheckersEngine;
+} = activeRulesEngine;
+
+// PR-3 local-only Italian gameplay adapter. Russian online/Firebase and the
+// existing Russian bot continue to use the frozen activeRulesEngine above.
+function isItalianLocalBotGame() {
+    return isBotGame && localOnlyBotGame && localBotRuleset === "italian";
+}
+
+// Заголовок игрового экрана следует правилам партии (RuleSet) и языку интерфейса; игровая логика не затрагивается.
+function updateGameTitle() {
+    const h1 = document.querySelector("body > h1[data-i18n]");
+    if (!h1) return;
+    h1.textContent = isItalianLocalBotGame() ? t("game_title_italian") : t("h1_title");
+}
+
+function getItalianLocalAdapter() {
+    if (!window.LocalRulesetAdapter || typeof window.LocalRulesetAdapter.get !== "function") {
+        throw new Error("LocalRulesetAdapter failed to load");
+    }
+    return window.LocalRulesetAdapter.get("italian");
+}
+
+// PR-40 authority proof: an Italian online state is authoritative only when
+// it is the exact state retained by the CURRENT listener lifecycle token.
+// Presentation and move-execution gates reuse this same identity proof; the
+// helper itself performs no rendering, mutation or Firebase write.
+function isItalianOnlineAuthoritativeState(state) {
+    if (!isOnlineGame || !state ||
+        !onlineRulesetMoveSourceToken ||
+        onlineRulesetMoveSourceRuleset !== "italian") return false;
+    const retainedRulesetMoveSource = onlineRulesetMoveSourceLifecycle.get(
+        onlineRulesetMoveSourceToken
+    );
+    return !!retainedRulesetMoveSource &&
+        retainedRulesetMoveSource.ruleset === "italian" &&
+        retainedRulesetMoveSource.mode === "italian_move_source_stored" &&
+        retainedRulesetMoveSource.state === state;
+}
+
+function localGameplayPieceAt(state, row, col) {
+    if (isItalianLocalBotGame() || isItalianOnlineAuthoritativeState(state)) {
+        return getItalianLocalAdapter().pieceAt(state, row, col);
+    }
+    return pieceAt(state.pieces, row, col);
+}
+
+function getItalianLocalMoves(state, color) {
+    return getItalianLocalAdapter().getLegalMoves(state, color);
+}
 
 // ===== №43: STRING UTILS (вынесены в shared/string-utils.js) =====
 // Первый slice постепенной модульности -- та же схема, что и у движка выше.
@@ -2044,6 +2384,9 @@ function detachRoomSpectatorsListener() {
 // прежние "roomListenerRef.off(); roomListenerRef = null;" заменены на вызов
 // этой функции, так что оба listener'а всегда живут и умирают вместе.
 function detachRoomListener() {
+    // Invalidate before detaching so no previous listener generation can
+    // retain a ruleset source into a later authoritative room context.
+    clearOnlineRulesetMoveSourceLifecycle();
     if (roomListenerRef) { roomListenerRef.off(); roomListenerRef = null; }
     detachRoomSpectatorsListener();
 }
@@ -2051,6 +2394,14 @@ function detachRoomListener() {
 function renderSpectatorsList() {
     const el = document.getElementById("spectators-list");
     if (!el) return;
+    // Italian-online spectator lifecycle is not wired yet. Do not project
+    // legacy Russian room spectators from an exact authoritative Italian
+    // state; clear any previously rendered list instead.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        el.classList.add("hidden");
+        el.textContent = "";
+        return;
+    }
     if (isSpectator || !currentState || !currentState.spectators) {
         el.classList.add("hidden");
         el.textContent = "";
@@ -2145,8 +2496,12 @@ function renderPlayerPanels() {
     // Имя и рейтинг: «⚪ Татьяна · ⭐1108». Сегмент рейтинга добавляется
     // здесь, а не в статусе, поэтому он не исчезает ни в одной ветке
     // статуса присутствия.
-    const topRating = ratingSegmentForColor(topColor);
-    const bottomRating = ratingSegmentForColor(bottomColor);
+    const italianOnlinePresentation = isItalianOnlineAuthoritativeState(currentState);
+    // Italian-online rating registration/settlement is not wired yet. Keep the
+    // panel presentation-only instead of consulting the legacy rated-generation
+    // pipeline for a state that deliberately does not carry ratedMatchId/createdAt.
+    const topRating = italianOnlinePresentation ? "" : ratingSegmentForColor(topColor);
+    const bottomRating = italianOnlinePresentation ? "" : ratingSegmentForColor(bottomColor);
     // Имя и рейтинг кладутся в РАЗНЫЕ элементы: сокращать многоточием
     // разрешено только имя, рейтинг обрезаться не должен никогда. Раньше
     // это была одна строка, и ellipsis съел бы вместе с именем и Elo.
@@ -2155,8 +2510,12 @@ function renderPlayerPanels() {
     // это внешние данные.
     const topPlayer = gamePanelPlayerForColor(topColor);
     const bottomPlayer = gamePanelPlayerForColor(bottomColor);
-    const topTrustedUsername = trustedGamePanelUsernameForPlayer(topPlayer);
-    const bottomTrustedUsername = trustedGamePanelUsernameForPlayer(bottomPlayer);
+    // trustedGamePanelUsernameForPlayer() may start an async Firebase profile
+    // read for an uncached opponent. Italian-online rendering is not allowed to
+    // acquire even that legacy read-side capability yet; names/avatars still
+    // render from the detached authoritative presentation snapshot.
+    const topTrustedUsername = italianOnlinePresentation ? "" : trustedGamePanelUsernameForPlayer(topPlayer);
+    const bottomTrustedUsername = italianOnlinePresentation ? "" : trustedGamePanelUsernameForPlayer(bottomPlayer);
 
     renderPlayerNameCell(playerTopName,
         topColor,
@@ -2191,10 +2550,21 @@ function renderPlayerPanels() {
     // обе тут же скрывались (0 кнопок «Назад»), у игрока с ботом обе тут
     // же показывались (2 кнопки «Назад»). Точечное управление — только
     // теми двумя кнопками, для которых эта логика реально предназначалась.
-    if (btnOfferDraw) btnOfferDraw.classList.toggle("hidden", isSpectator);
-    if (btnResign) btnResign.classList.toggle("hidden", isSpectator);
+    // Italian-online action transport is not wired yet. Rendering the
+    // authoritative Italian board must not expose legacy Russian controls
+    // whose click handlers can mutate the room. Keep them hidden until their
+    // dedicated Italian-online execution boundary is explicitly enabled.
+    const hideLegacyOnlineActions = isSpectator || italianOnlinePresentation;
+    if (btnOfferDraw) btnOfferDraw.classList.toggle("hidden", hideLegacyOnlineActions);
+    if (btnResign) btnResign.classList.toggle("hidden", hideLegacyOnlineActions);
 
-    checkOpponentAbsence();
+    // Italian-online presentation is being enabled boundary-by-boundary.
+    // Do not let rendering an authoritative Italian state enter the legacy
+    // Russian room-lifecycle side effect until that lifecycle is explicitly
+    // wired for Italian online. Russian and all existing bot paths are unchanged.
+    if (!italianOnlinePresentation) {
+        checkOpponentAbsence();
+    }
 }
 
 let opponentGraceTimer = null;
@@ -2238,8 +2608,9 @@ function checkOpponentAbsence() {
             return;
         }
         opponentAbsenceHandled = true;
-        showInfoModal(t("rematch_no_response"), false);
-        showScreen(menuScreen);
+        // Партия завершена: третий аргумент false, чтобы «ОК» не уводил на первый экран.
+        showInfoModal(t("rematch_no_response"), false, false);
+        showModeScreenAfterGame("russian");
         loadActiveRooms();
         cleanupAbandonedRoom();
         return;
@@ -2652,6 +3023,9 @@ function stopPresenceHeartbeat() {
 // v184: тихий выход из брошенной партии. Никакого результата, никаких
 // начислений — просто закрываем экран и возвращаемся в меню.
 function leaveAbandonedRoomToMenu() {
+    // Abandoning the authoritative room is a listener-lifecycle boundary too.
+    // Central detach invalidates any retained ruleset source before teardown.
+    detachRoomListener();
     detachMyPresence();
     roomCode = null;
     isOnlineGame = false;
@@ -2878,7 +3252,7 @@ function updateBoardPieces() {
             ));
             square.classList.toggle("last-move", isLastMove);
 
-            const pieceData = pieceAt(currentState.pieces, row, col);
+            const pieceData = localGameplayPieceAt(currentState, row, col);
             const existingPieceEl = pieceElements[key];
             const isSelected = !!(selectedFrom && selectedFrom.row === row && selectedFrom.col === col);
 
@@ -2940,6 +3314,11 @@ function cancelActiveGhostAnimations() {
 // currentState/game logic, никаких новых игровых полей — чисто временный
 // локальный снимок для рендера, живущий один вызов renderBoard(). ---
 function captureCapturedPieceSnapshotsBeforeUpdate() {
+    // Italian-online ghost metadata is not wired yet. Do not consume legacy
+    // Russian moveType/lastCapturedSquares from the exact authoritative source.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        return [];
+    }
     if (!currentState || currentState.moveType !== "capture" || !Array.isArray(currentState.lastCapturedSquares)) {
         return [];
     }
@@ -2965,6 +3344,14 @@ function captureCapturedPieceSnapshotsBeforeUpdate() {
 // заранее снятый (см. captureCapturedPieceSnapshotsBeforeUpdate) DOM-снимок,
 // поскольку у уже удалённой из pieces фигуры не осталось игровых данных.
 function playMoveGhostAnimation(capturedSnapshots) {
+    // Italian-online move-ghost metadata is not wired yet. Clear any legacy
+    // overlay left by the previous presentation source, synchronize the local
+    // animation serial, and stop before reading Russian lastMove/moveType.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        cancelActiveGhostAnimations();
+        lastAnimatedMoveCount = currentState.moveCount;
+        return;
+    }
     // ПОРЯДОК ЗДЕСЬ ПРИНЦИПИАЛЕН.
     //
     // Раньше cancelActiveGhostAnimations() стояла первой строкой, до
@@ -2990,13 +3377,20 @@ function playMoveGhostAnimation(capturedSnapshots) {
     if (!currentState || !currentState.lastMove) {
         // Хода нет вообще -- старым наложениям здесь не место.
         cancelActiveGhostAnimations();
-        lastAnimatedMoveCount = currentState ? currentState.moveCount : null;
+        lastAnimatedMoveCount = currentState
+            ? ((typeof currentState.localMoveVisualSerial === "number")
+                ? currentState.localMoveVisualSerial
+                : currentState.moveCount)
+            : null;
         return;
     }
 
+    const currentAnimationSerial = (typeof currentState.localMoveVisualSerial === "number")
+        ? currentState.localMoveVisualSerial
+        : currentState.moveCount;
     const isFirstRenderSinceAttach = (lastAnimatedMoveCount === null);
-    const isGenuinelyNewMove = !isFirstRenderSinceAttach && currentState.moveCount !== lastAnimatedMoveCount;
-    lastAnimatedMoveCount = currentState.moveCount;
+    const isGenuinelyNewMove = !isFirstRenderSinceAttach && currentAnimationSerial !== lastAnimatedMoveCount;
+    lastAnimatedMoveCount = currentAnimationSerial;
 
     if (isFirstRenderSinceAttach) {
         // Подключение, reconnect, вход зрителя: ход, случившийся ДО нас,
@@ -3023,7 +3417,7 @@ function playMoveGhostAnimation(capturedSnapshots) {
     const realPieceEl = pieceElements[toKey];
     if (!fromSquareEl || !toSquareEl || !realPieceEl) return; // защитный выход — доска уже корректна без анимации
 
-    const pieceData = currentState.pieces[toKey];
+    const pieceData = localGameplayPieceAt(currentState, move.to.row, move.to.col);
     if (!pieceData) return;
 
     // Превращение в дамку -- ПОСЛЕ проверок клеток и реальной фигуры.
@@ -3225,7 +3619,11 @@ function playKingPromotionEffect() {
 
     const toKey = currentState.lastMove.to.row + "_" + currentState.lastMove.to.col;
     const squareEl = squareElements[toKey];
-    const pieceData = currentState.pieces[toKey];
+    const pieceData = localGameplayPieceAt(
+        currentState,
+        currentState.lastMove.to.row,
+        currentState.lastMove.to.col
+    );
     if (!squareEl || !pieceData) return; // доска уже корректна и без эффекта
 
     const colorClass = pieceData.color === "light" ? "piece-light" : "piece-dark";
@@ -3405,6 +3803,13 @@ function renderLastMoveArrow() {
     const linesAndCircles = svg.querySelectorAll("line, circle");
     linesAndCircles.forEach(function(el) { el.remove(); });
 
+    // Italian-online last-move presentation metadata is not wired yet.
+    // Clear any legacy Russian arrow/capture marks, then stop before reading
+    // Russian lastMovePath/lastCapturedSquares from the authoritative source.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        return;
+    }
+
     const path = currentState && currentState.lastMovePath;
     if (!path || path.length < 2) return;
 
@@ -3463,8 +3868,26 @@ function showMustCaptureHint() {
     if (!currentState || currentState.winner || selectedFrom) return;
     const myTurnColor = isOnlineGame ? myColor : (isBotGame ? myColor : currentState.turn);
     if (currentState.turn !== myTurnColor) return;
-    if (!hasMandatoryCapture(currentState.pieces, currentState.turn)) return;
 
+    if (isItalianLocalBotGame() || isItalianOnlineAuthoritativeState(currentState)) {
+        const captureMoves = getItalianLocalMoves(currentState, currentState.turn).filter(function (move) {
+            return move.capture;
+        });
+        const seen = {};
+        captureMoves.forEach(function (move) {
+            const key = move.fromRow + "_" + move.fromCol;
+            if (seen[key]) return;
+            seen[key] = true;
+            const el = pieceElements[key];
+            if (el) {
+                el.classList.add("must-capture-hint");
+                hintedMustCapturePieces.push(el);
+            }
+        });
+        return;
+    }
+
+    if (!hasMandatoryCapture(currentState.pieces, currentState.turn)) return;
     for (const key in currentState.pieces) {
         const p = currentState.pieces[key];
         if (p.color !== currentState.turn) continue;
@@ -3537,6 +3960,22 @@ function getLegalDestinations(pieces, row, col, color, king, pendingRemovals) {
 function showMoveHints(sel) {
     clearMoveHints();
     if (!sel || !currentState) return;
+
+    if (isItalianLocalBotGame() || isItalianOnlineAuthoritativeState(currentState)) {
+        getItalianLocalMoves(currentState, currentState.turn)
+            .filter(function (move) {
+                return move.fromRow === sel.row && move.fromCol === sel.col;
+            })
+            .forEach(function (move) {
+                const sq = squareElements[move.toRow + "_" + move.toCol];
+                if (sq) {
+                    sq.classList.add("move-hint");
+                    hintedSquares.push(sq);
+                }
+            });
+        return;
+    }
+
     const pieceData = pieceAt(currentState.pieces, sel.row, sel.col);
     if (!pieceData) return;
     const destinations = getLegalDestinations(currentState.pieces, sel.row, sel.col, pieceData.color, !!pieceData.king, currentState.pendingRemovals);
@@ -3556,7 +3995,12 @@ function updateTimerDisplay() {
     // к «Отправляю ход…», закончившейся партии или игре без таймера.
     turnTimerDiv.classList.remove("timer-low");
 
-    if (!currentState || currentState.winner) {
+    // A failed Italian speculative final capture may temporarily set winner.
+    // Its read-only retry must remain visible until rollback succeeds. Russian
+    // finished-game presentation keeps its original early-return behavior.
+    if (!currentState ||
+        (currentState.winner && !(italianOnlineMoveTransportInFlight &&
+            isItalianOnlineAuthoritativeState(currentState)))) {
         turnTimerDiv.textContent = "";
         return;
     }
@@ -3607,7 +4051,9 @@ const DRAW_REASON_DISPLAY = {
     no_progress_5: "draw_reason_np5",
     no_progress_30: "draw_reason_np30",
     no_progress_60: "draw_reason_np60",
-    long_road_5: "draw_reason_longroad"
+    long_road_5: "draw_reason_longroad",
+    repetition: "draw_reason_it_repetition",
+    forty_moves: "draw_reason_it_forty"
 };
 
 // Возвращает { header, subtext } для текущего ничейного исхода.
@@ -3734,6 +4180,7 @@ function applyEndGameVisualMood() {
 function renderEndGameModal() {
     applyEndGameVisualMood();
     if (currentState && currentState.winner) {
+        const italianOnlinePresentation = isItalianOnlineAuthoritativeState(currentState);
         if (currentState.winner === "draw") {
             const drawText = buildDrawResultText(currentState.winReason);
             endGameText.textContent = drawText.header;
@@ -3805,10 +4252,15 @@ function renderEndGameModal() {
 
         if (!isModalLogicallyOpen(endGameModal)) openModal(endGameModal, { returnFocus: false });
         
-        // Настраиваем кнопки: зритель видит только "В меню", игрок видит обе
+        // Italian-online end-game mutation lifecycle is not wired yet.
+        // Keep the result presentation read-only: hide both legacy action
+        // controls instead of exposing rematch/cleanup capabilities.
         const buttonsRow = endGameModal.querySelector(".modal-buttons");
         if (buttonsRow) {
-            if (isSpectator) {
+            if (italianOnlinePresentation) {
+                btnNewGame.classList.add("hidden");
+                btnCloseGame.classList.add("hidden");
+            } else if (isSpectator) {
                 btnNewGame.classList.add("hidden");
                 btnCloseGame.classList.remove("hidden");
                 btnCloseGame.textContent = t("btn_to_menu");
@@ -3847,7 +4299,19 @@ function renderEndGameModal() {
             playEndGameOutcomeSound();
             endGameShownForRoom = marker;
         }
-        if (isBotGame && !localOnlyBotGame) {
+        // Italian-online presentation is being enabled boundary-by-boundary.
+        // A finished authoritative Italian state may render the modal, but it
+        // must not enter the legacy Russian result/statistics pipeline until
+        // that lifecycle is explicitly wired for Italian online.
+        if (italianOnlinePresentation) {
+            return;
+        }
+
+        if (isItalianLocalBotGame()) {
+            // Этап 3: итальянский бот пишет статистику в отдельный узел statsBotItalian;
+            // русский путь (recordGameResult/statsBot) сюда не заходит.
+            maybeRecordItalianBotResult();
+        } else if (isBotGame && !localOnlyBotGame) {
             // Bot-ветка: НЕ ставим statsRecordedForRoom заранее — только
             // после того, как Firebase реально подтвердил результат (успех
             // ИЛИ committed:false из-за уже засчитанного matchId — оба это
@@ -3858,8 +4322,9 @@ function renderEndGameModal() {
                 statsInFlightForRoom = currentBotMatchId;
                 recordGameResult();
             }
-        } else if (statsRecordedForRoom !== marker && statsInFlightOnlineMarker !== marker) {
-            // Online-ветка: маркер "записано" ставится ТОЛЬКО после подтверждения
+        } else if (!localOnlyBotGame && statsRecordedForRoom !== marker && statsInFlightOnlineMarker !== marker) {
+            // Online/non-local ветка: local-only games must never enter Firebase stats.
+            // Маркер "записано" ставится ТОЛЬКО после подтверждения
             // Firebase (см. recordGameResult). Раньше он ставился здесь, до
             // вызова, и любой сбой записи означал НАВСЕГДА потерянный результат
             // в этой сессии — повторный render уже не пытался. Теперь на время
@@ -4460,15 +4925,23 @@ function handleClick(row, col) {
     // ход с СЕРВЕРНЫМИ turn и mustContinueFrom и отменяется), но игрок увидел бы
     // необъяснимый прыжок доски. Проще и честнее не пускать второй ход вовсе:
     // ожидание всё равно снимается ответом сервера или восстановлением.
-    if (isOnlineGame && isMoveAwaitingConfirmation()) return;
+    if (isOnlineGame &&
+        (isMoveAwaitingConfirmation() || italianOnlineMoveTransportInFlight)) return;
     if (isBotGame && state.turn === botColor) return; 
 
     const selectableColor = isOnlineGame ? myColor : (isBotGame ? myColor : state.turn);
-    const pieceHere = pieceAt(state.pieces, row, col);
+    const pieceHere = localGameplayPieceAt(state, row, col);
 
     if (pieceHere && pieceHere.color === state.turn && pieceHere.color === selectableColor) {
         if (state.mustContinueFrom) return;
-        if (hasMandatoryCapture(state.pieces, state.turn) && !canCaptureAt(state.pieces, row, col, state.turn, !!pieceHere.king)) return;
+        if (isItalianLocalBotGame() || isItalianOnlineAuthoritativeState(state)) {
+            const canSelect = getItalianLocalMoves(state, state.turn).some(function (move) {
+                return move.fromRow === row && move.fromCol === col;
+            });
+            if (!canSelect) return;
+        } else if (hasMandatoryCapture(state.pieces, state.turn) && !canCaptureAt(state.pieces, row, col, state.turn, !!pieceHere.king)) {
+            return;
+        }
 
         const oldSel = selectedFrom;
         let newSel;
@@ -4479,6 +4952,16 @@ function handleClick(row, col) {
         }
         updateSelectionDom(oldSel, newSel);
         selectedFrom = newSel;
+        return;
+    }
+
+    // Italian online destination execution is enabled only from the same exact
+    // retained authoritative state used for selection. performMove() repeats
+    // the authority checks before preparation and again before write capability.
+    if (isItalianOnlineAuthoritativeState(state)) {
+        if (selectedFrom) {
+            performMove(selectedFrom.row, selectedFrom.col, row, col);
+        }
         return;
     }
 
@@ -4498,11 +4981,41 @@ let pendingSyncChain = Promise.resolve();
 // пробрасывается наверх, чтобы вызывающий показал «Повторить».
 // Поведение существующих вызовов без аргумента не меняется.
 function forceResyncFromServer(silent) {
-    if (!roomCode) return Promise.resolve();
-    attachRoomSpectatorsListener(roomCode);
-    return database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
+    const italianFailedMoveMarker = arguments.length > 1 ? arguments[1] : null;
+    const italianRecoveryReadAttempt = arguments.length > 2 ? arguments[2] : null;
+    if (!roomCode) return Promise.resolve(false);
+    const targetRoomCode = roomCode;
+    const targetRulesetSourceToken = onlineRulesetMoveSourceToken;
+    attachRoomSpectatorsListener(targetRoomCode);
+    return database.ref("rooms/" + targetRoomCode).once("value").then(function(snapshot) {
+        // A one-shot response belongs only to the authoritative room/lifecycle
+        // that started it. Ignore it after detach, room switch or re-listen.
+        if (roomCode !== targetRoomCode ||
+            onlineRulesetMoveSourceToken !== targetRulesetSourceToken) return false;
+        // A timed-out Firebase once() may resolve AFTER the player already
+        // started another recovery read in this exact same room/token. Its
+        // response must never reach lifecycle.replace/currentState/render.
+        if (italianRecoveryReadAttempt &&
+            (italianOnlineMoveRecoveryReadAttempt !== italianRecoveryReadAttempt ||
+             italianRecoveryReadAttempt.marker !== italianFailedMoveMarker ||
+             italianOnlineMoveTransportInFlight !== italianFailedMoveMarker)) {
+            return false;
+        }
         const room = snapshot.val();
-        if (!room || !room.pieces) return;
+        if (!room || !room.pieces) return false;
+
+        // A failed Italian transaction may already have published speculative
+        // local gameplay through Firebase before the server rejects it. A
+        // recovery read for the SAME active marker/room/token must be allowed
+        // to roll that speculative progress back; ordinary resync calls keep
+        // the existing stale-state protections unchanged.
+        const allowItalianFailedMoveRollback =
+            !!italianFailedMoveMarker &&
+            italianOnlineMoveTransportInFlight === italianFailedMoveMarker &&
+            italianFailedMoveMarker.phase === "transaction" &&
+            targetRoomCode === italianFailedMoveMarker.roomCode &&
+            targetRulesetSourceToken === italianFailedMoveMarker.token &&
+            isItalianOnlineAuthoritativeState(currentState);
         const newState = {
             pieces: room.pieces,
             turn: room.turn,
@@ -4548,13 +5061,84 @@ function forceResyncFromServer(silent) {
         // с опозданием вернул ход 5) — полностью игнорируем этот ответ.
         if (newState.moveCount < lastSeenMoveCount) {
             // Если мы НЕ в оптимистичном состоянии — это реальное устаревшее эхо, игнорируем.
-            if (!isLocalStateOptimistic) {
+            if (!isLocalStateOptimistic && !allowItalianFailedMoveRollback) {
                 console.log("Force resync ignored stale state.");
-                return;
+                return false;
             }
             // Если мы В оптимистичном состоянии, но сервер вернул старый ход —
             // значит наш ход провалился. Мы ОБЯЗАНЫ откатиться назад.
             console.log("Force resync rolling back optimistic move...");
+        }
+
+        // A successful authoritative resync must refresh the retained ruleset
+        // source from the SAME room snapshot before currentState adopts it.
+        // The current lifecycle token makes a late resync harmless after a
+        // detach/room switch: replace() rejects a stale token.
+        if (targetRulesetSourceToken) {
+            // Snapshot the current exact-authority Italian state BEFORE replace().
+            // replace() intentionally invalidates the old retained object, so a
+            // same-moveCount stale resync must be rejected before that boundary.
+            const priorItalianAuthoritativeState =
+                isItalianOnlineAuthoritativeState(currentState) ? currentState : null;
+            const capturedRulesetMoveSource = OnlineRulesetMoveSource.capture(room);
+
+            if (!allowItalianFailedMoveRollback &&
+                priorItalianAuthoritativeState &&
+                capturedRulesetMoveSource.ruleset === "italian" &&
+                capturedRulesetMoveSource.source &&
+                capturedRulesetMoveSource.source.state &&
+                isOlderItalianCaptureProgress(
+                    priorItalianAuthoritativeState,
+                    capturedRulesetMoveSource.source.state
+                )) {
+                console.log("Force resync ignored stale Italian capture progress.");
+                return false;
+            }
+
+            const retainedRulesetMoveSource = onlineRulesetMoveSourceLifecycle.replace(
+                targetRulesetSourceToken,
+                capturedRulesetMoveSource
+            );
+            onlineRulesetMoveSourceRuleset = capturedRulesetMoveSource.ruleset;
+
+            // Adopt only the detached, validated state retained by this exact
+            // resync token. PR-63 allows presentation refresh only after the
+            // new retained object proves exact current authority.
+            if (onlineRulesetMoveSourceRuleset === "italian") {
+                if (!retainedRulesetMoveSource ||
+                    retainedRulesetMoveSource.ruleset !== "italian" ||
+                    retainedRulesetMoveSource.mode !== "italian_move_source_stored" ||
+                    !retainedRulesetMoveSource.state) {
+                    throw new Error("invalid_italian_online_resync_source");
+                }
+
+                currentState = retainedRulesetMoveSource.state;
+                isLocalStateOptimistic = false;
+
+                if (!isItalianOnlineAuthoritativeState(currentState)) {
+                    throw new Error("invalid_italian_online_resync_render_source");
+                }
+
+                settleItalianOnlineMoveTransportFromAuthoritativeState(currentState);
+
+                const italianPresentationSignature =
+                    computeItalianOnlinePresentationSignature(currentState);
+                lastSeenMoveCount = currentState.moveCount;
+
+                // Match the player-listener presentation contract: changed
+                // gameplay/presentation gets a full render; an equal signature
+                // refreshes presence only and preserves the current selection.
+                if (italianPresentationSignature !== lastRenderedSignature) {
+                    selectedFrom = currentState.turn === myColor && currentState.mustContinueFrom
+                        ? { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col }
+                        : null;
+                    lastRenderedSignature = italianPresentationSignature;
+                    renderBoard();
+                } else {
+                    updatePresenceOnly();
+                }
+                return true;
+            }
         }
 
         currentState = newState;
@@ -4571,10 +5155,12 @@ function forceResyncFromServer(silent) {
         }
         lastRenderedSignature = computeGameSignature(currentState);
         renderBoard();
+        return true;
     }).catch(function(err) {
         console.error("Resync error", err);
         if (silent) throw err;
         showInfoModal(t("err_resync_failed"), false);
+        return false;
     });
 }
 
@@ -4763,10 +5349,337 @@ function canMutateRatedGameplay() {
     return registeredMatchIdForState(currentState, roomCode) !== null;
 }
 
+function performItalianLocalMove(fromRow, fromCol, toRow, toCol) {
+    const adapter = getItalianLocalAdapter();
+    const before = currentState;
+    const movingBefore = adapter.pieceAt(before, fromRow, fromCol);
+    const result = adapter.attemptMove(before, fromRow, fromCol, toRow, toCol, before.turn);
+    if (!result || !result.ok) return false;
+
+    const wasContinuation = !!before.mustContinueFrom;
+    const previousPath = wasContinuation && Array.isArray(before.lastMovePath)
+        ? before.lastMovePath.slice()
+        : [{ row: fromRow, col: fromCol }];
+    previousPath.push({ row: toRow, col: toCol });
+
+    const previousCaptured = wasContinuation && Array.isArray(before.lastCapturedSquares)
+        ? before.lastCapturedSquares.slice()
+        : [];
+    const transitionCaptured = result.transition && Array.isArray(result.transition.capturedSquares)
+        ? result.transition.capturedSquares
+        : [];
+
+    const next = result.state;
+    // Keep the Italian engine's moveCount semantics intact: it counts completed
+    // turns, not individual jumps inside one mandatory capture chain. The UI
+    // still needs a per-hop serial so every visible jump can animate.
+    const previousVisualSerial = (typeof before.localMoveVisualSerial === "number")
+        ? before.localMoveVisualSerial
+        : (before.moveCount || 0);
+    next.localMoveVisualSerial = previousVisualSerial + 1;
+    next.lastMove = { from: { row: fromRow, col: fromCol }, to: { row: toRow, col: toCol } };
+    next.lastMovePath = previousPath;
+    next.lastCapturedSquares = previousCaptured.concat(transitionCaptured);
+    next.moveType = result.transition && result.transition.promoted
+        ? "king"
+        : (result.transition && result.transition.capture ? "capture" : "move");
+
+    currentState = next;
+    selectedFrom = next.mustContinueFrom
+        ? { row: next.mustContinueFrom.row, col: next.mustContinueFrom.col }
+        : null;
+
+    playSoundForMoveType(next.moveType, !!(movingBefore && movingBefore.king), kingPromotionSoundDelayMs());
+    renderBoard();
+    return true;
+}
+
+function computeItalianOnlineMoveGameplaySignature(state) {
+    if (!state || typeof state !== "object") return null;
+    return JSON.stringify([
+        state.pieces || [],
+        state.turn || "",
+        state.mustContinueFrom || null,
+        state.pendingRemovals || [],
+        state.capturedDark || 0,
+        state.capturedLight || 0,
+        state.moveCount || 0,
+        state.winner || null,
+        state.winReason || null
+    ]);
+}
+
+function settleItalianOnlineMoveTransportFromAuthoritativeState(state) {
+    const marker = italianOnlineMoveTransportInFlight;
+    if (!marker ||
+        marker.phase !== "await_listener" ||
+        roomCode !== marker.roomCode ||
+        onlineRulesetMoveSourceToken !== marker.token ||
+        !isItalianOnlineAuthoritativeState(state)) {
+        return false;
+    }
+
+    const authoritativeSignature =
+        computeItalianOnlineMoveGameplaySignature(state);
+    if (!authoritativeSignature ||
+        authoritativeSignature === marker.sourceGameplaySignature) {
+        return false;
+    }
+
+    if (italianOnlineMoveTransportInFlight === marker) {
+        italianOnlineMoveTransportInFlight = null;
+        return true;
+    }
+    return false;
+}
+
+function isItalianOnlineMoveTransportContextCurrent(marker) {
+    if (!marker ||
+        italianOnlineMoveTransportInFlight !== marker ||
+        roomCode !== marker.roomCode ||
+        onlineRulesetMoveSourceToken !== marker.token) {
+        return false;
+    }
+    return isItalianOnlineAuthoritativeState(currentState);
+}
+
+function recoverFailedItalianOnlineMoveTransport(marker) {
+    if (!isItalianOnlineMoveTransportContextCurrent(marker)) {
+        if (italianOnlineMoveRecoveryFailedMarker === marker) {
+            italianOnlineMoveRecoveryFailedMarker = null;
+        }
+        if (italianOnlineMoveTransportInFlight === marker) {
+            italianOnlineMoveTransportInFlight = null;
+        }
+        return Promise.resolve(false);
+    }
+    // Serialize all reads for this Italian recovery marker. A retry starts
+    // only after the prior read was completed or explicitly expired.
+    if (italianOnlineMoveRecoveryReadAttempt) return Promise.resolve(false);
+    const readAttempt = Object.freeze({
+        marker: marker,
+        startedAt: getMonotonicNow()
+    });
+    italianOnlineMoveRecoveryReadAttempt = readAttempt;
+
+    // The marker is kept locked while the authoritative rollback is read.
+    // Promise.resolve also catches synchronous SDK read exceptions.
+    return Promise.resolve().then(function () {
+        if (italianOnlineMoveRecoveryReadAttempt !== readAttempt ||
+            !isItalianOnlineMoveTransportContextCurrent(marker)) return false;
+        return forceResyncFromServer(true, marker, readAttempt);
+    }).then(function (recovered) {
+        // A timed-out read must not unlock, reset retry status or mutate a
+        // newer attempt. Its Firebase snapshot is rejected at the read boundary.
+        if (italianOnlineMoveRecoveryReadAttempt !== readAttempt) return false;
+        italianOnlineMoveRecoveryReadAttempt = null;
+        if (!isItalianOnlineMoveTransportContextCurrent(marker)) {
+            if (italianOnlineMoveRecoveryFailedMarker === marker) {
+                italianOnlineMoveRecoveryFailedMarker = null;
+            }
+            if (italianOnlineMoveTransportInFlight === marker) {
+                italianOnlineMoveTransportInFlight = null;
+            }
+            return false;
+        }
+
+        if (recovered === true) {
+            italianOnlineMoveTransportInFlight = null;
+            italianOnlineMoveRecoveryFailedMarker = null;
+        } else {
+            // Failed/missing room is NOT confirmation. Keep the board locked
+            // and expose a manual read-only retry for this same marker.
+            italianOnlineMoveRecoveryFailedMarker = marker;
+        }
+        updateTimerDisplay();
+        return false;
+    }).catch(function (err) {
+        console.error("Italian move recovery failed", err);
+        if (italianOnlineMoveRecoveryReadAttempt !== readAttempt) return false;
+        italianOnlineMoveRecoveryReadAttempt = null;
+        if (isItalianOnlineMoveTransportContextCurrent(marker)) {
+            italianOnlineMoveRecoveryFailedMarker = marker;
+            updateTimerDisplay();
+        } else {
+            if (italianOnlineMoveRecoveryFailedMarker === marker) {
+                italianOnlineMoveRecoveryFailedMarker = null;
+            }
+            if (italianOnlineMoveTransportInFlight === marker) {
+                italianOnlineMoveTransportInFlight = null;
+            }
+        }
+        return false;
+    });
+}
+
+// A stalled *read* may be abandoned, never a pending transaction. The
+// periodic game-screen tick re-exposes read-only Retry; no move is sent.
+// Invalidate the read attempt before showing Retry so any later Firebase
+// response is ignored even if the room/token/marker have not changed.
+function expireStalledItalianOnlineRecoveryRead() {
+    const readAttempt = italianOnlineMoveRecoveryReadAttempt;
+    if (!readAttempt ||
+        !isItalianOnlineMoveTransportContextCurrent(readAttempt.marker)) {
+        return false;
+    }
+    const elapsed = getMonotonicNow() - readAttempt.startedAt;
+    if (!Number.isFinite(elapsed) ||
+        elapsed < ITALIAN_RECOVERY_READ_STALL_MS) return false;
+
+    italianOnlineMoveRecoveryReadAttempt = null;
+    italianOnlineMoveRecoveryFailedMarker = readAttempt.marker;
+    updateTimerDisplay();
+    return true;
+}
+
+// The existing sync retry button may repeat ONLY the authoritative read,
+// never the failed transaction. No stale room/token or foreign marker may
+// borrow this recovery capability, and only one retry runs at a time.
+function retryFailedItalianOnlineMoveRecovery() {
+    const marker = italianOnlineMoveRecoveryFailedMarker;
+    if (!marker ||
+        marker.phase !== "transaction" ||
+        !isOnlineGame || isSpectator || isBotGame ||
+        !isFirebaseConnected ||
+        !isItalianOnlineMoveTransportContextCurrent(marker)) {
+        return false;
+    }
+    italianOnlineMoveRecoveryFailedMarker = null;
+    updateTimerDisplay();
+    recoverFailedItalianOnlineMoveTransport(marker);
+    return true;
+}
+
+function submitPreparedItalianOnlineMove(preparation) {
+    if (!preparation ||
+        preparation.ruleset !== "italian" ||
+        preparation.mode !== "italian_retained_move_prepared" ||
+        typeof preparation.transactionTransport !== "function") {
+        return Promise.resolve(false);
+    }
+    if (!roomCode ||
+        !isOnlineGame ||
+        isSpectator ||
+        isBotGame ||
+        italianOnlineMoveTransportInFlight ||
+        !isItalianOnlineAuthoritativeState(currentState)) {
+        return Promise.resolve(false);
+    }
+
+    const sourceGameplaySignature =
+        computeItalianOnlineMoveGameplaySignature(currentState);
+    if (!sourceGameplaySignature) return Promise.resolve(false);
+
+    const marker = Object.freeze({
+        roomCode: roomCode,
+        token: onlineRulesetMoveSourceToken,
+        state: currentState,
+        sourceGameplaySignature: sourceGameplaySignature,
+        startedAt: Date.now(),
+        phase: "transaction"
+    });
+    italianOnlineMoveTransportInFlight = marker;
+
+    let invocation;
+    try {
+        invocation = preparation.transactionTransport(
+            database.ref("rooms/" + marker.roomCode)
+        );
+    } catch (err) {
+        console.error("Italian move transport failed", err);
+        return recoverFailedItalianOnlineMoveTransport(marker);
+    }
+
+    if (!invocation ||
+        invocation.ruleset !== "italian" ||
+        invocation.mode !== "italian_transaction_invocation" ||
+        !invocation.result ||
+        typeof invocation.result.then !== "function") {
+        return recoverFailedItalianOnlineMoveTransport(marker);
+    }
+
+    return Promise.resolve(invocation.result).then(function (result) {
+        if (!result || result.committed !== true) {
+            return recoverFailedItalianOnlineMoveTransport(marker);
+        }
+
+        // A committed Firebase promise is not itself presentation authority.
+        // Keep clicks blocked until the exact room listener/resync publishes
+        // authoritative gameplay that differs from the move's source state.
+        // Presence-only snapshots may replace the retained object while leaving
+        // gameplay identical, so rebind the waiting marker to that current
+        // exact-authority object instead of clearing it prematurely.
+        if (italianOnlineMoveTransportInFlight === marker) {
+            if (roomCode === marker.roomCode &&
+                onlineRulesetMoveSourceToken === marker.token &&
+                isItalianOnlineAuthoritativeState(currentState) &&
+                computeItalianOnlineMoveGameplaySignature(currentState) ===
+                    marker.sourceGameplaySignature) {
+                italianOnlineMoveTransportInFlight = Object.freeze({
+                    roomCode: marker.roomCode,
+                    token: marker.token,
+                    state: currentState,
+                    sourceGameplaySignature: marker.sourceGameplaySignature,
+                    startedAt: marker.startedAt,
+                    phase: "await_listener"
+                });
+            } else {
+                italianOnlineMoveTransportInFlight = null;
+            }
+        }
+        return true;
+    }).catch(function (err) {
+        console.error("Italian move transaction failed", err);
+        return recoverFailedItalianOnlineMoveTransport(marker);
+    });
+}
+
 function performMove(fromRow, fromCol, toRow, toCol) {
+    if (!isOnlineGame && isItalianLocalBotGame()) {
+        performItalianLocalMove(fromRow, fromCol, toRow, toCol);
+        return;
+    }
     if (isOnlineGame && !canUseFirebase()) { showInfoModal(t("err_auth_required"), false); return; }
     if (!canMutateRatedGameplay()) return;
     if (isOnlineGame) {
+        // Italian online move execution stays bound to the exact retained
+        // listener source. PR-67 wires only the already-audited transaction
+        // transport; the UI destination gate remains closed until a later PR.
+        const retainedRulesetMoveSource = onlineRulesetMoveSourceToken
+            ? onlineRulesetMoveSourceLifecycle.get(onlineRulesetMoveSourceToken)
+            : null;
+        if (onlineRulesetMoveSourceRuleset === "italian") {
+            if (isSpectator ||
+                isBotGame ||
+                italianOnlineMoveTransportInFlight ||
+                !retainedRulesetMoveSource ||
+                retainedRulesetMoveSource.ruleset !== "italian" ||
+                retainedRulesetMoveSource.mode !== "italian_move_source_stored" ||
+                !retainedRulesetMoveSource.state ||
+                !isItalianOnlineAuthoritativeState(currentState)) {
+                return;
+            }
+
+            const retainedItalianPreparation = OnlineRulesetRetainedMovePreparation.prepare(
+                retainedRulesetMoveSource,
+                fromRow, fromCol, toRow, toCol, myColor
+            );
+            if (!retainedItalianPreparation ||
+                typeof retainedItalianPreparation.transactionTransport !== "function") {
+                return;
+            }
+
+            // Preparation is synchronous but revalidate authority before the
+            // first real write capability. No optimistic adoption/render occurs:
+            // the room listener remains the sole source of visible Italian state.
+            if (!isItalianOnlineAuthoritativeState(currentState)) return;
+            submitPreparedItalianOnlineMove(retainedItalianPreparation);
+            return;
+        }
+        if (onlineRulesetMoveSourceRuleset !== "russian" || retainedRulesetMoveSource !== null) {
+            return;
+        }
+
         const optimisticResult = attemptMove(currentState, fromRow, fromCol, toRow, toCol, myColor);
         if (!optimisticResult) return;
 
@@ -4986,6 +5899,46 @@ function computeGameSignature(state) {
         + "_" + ratedMatchIdPart + "_" + ratingsAtStartPart + "_" + statusPart;
 }
 
+// Italian capture chains do not increment moveCount until the whole sequence
+// finishes. Therefore the legacy Russian signature is not sufficient for the
+// Italian player listener: a continuation leg can change the board while all
+// legacy signature fields stay identical. Keep this helper Italian-only so the
+// established Russian listener semantics remain byte-for-byte unchanged.
+// Presence is intentionally excluded so heartbeat-only snapshots still avoid a
+// full render and preserve the user's current board selection.
+function computeItalianOnlinePresentationSignature(state) {
+    return computeGameSignature(state) + "|" + JSON.stringify([
+        state.pieces || null,
+        state.turn || "",
+        state.mustContinueFrom || null,
+        state.pendingRemovals || [],
+        state.capturedDark || 0,
+        state.capturedLight || 0,
+        state.lastMove || null,
+        state.lastMovePath || null,
+        state.lastCapturedSquares || null,
+        state.moveType || null,
+        state.timeControlSeconds || 0
+    ]);
+}
+
+// Italian moveCount advances only when a whole capture sequence finishes.
+// A one-shot resync can therefore race behind the room listener while both
+// snapshots still share the same moveCount. Within a live Italian capture
+// chain, pendingRemovals grows monotonically by one per accepted leg, so a
+// same-moveCount candidate with fewer pending captures is provably older.
+// Keep this comparator Italian-only; Russian stale handling remains unchanged.
+function isOlderItalianCaptureProgress(currentState, candidateState) {
+    if (!currentState || !candidateState) return false;
+    if (candidateState.moveCount !== currentState.moveCount) return false;
+    if (!currentState.mustContinueFrom) return false;
+    const currentPending = Array.isArray(currentState.pendingRemovals)
+        ? currentState.pendingRemovals.length : 0;
+    const candidatePending = Array.isArray(candidateState.pendingRemovals)
+        ? candidateState.pendingRemovals.length : 0;
+    return candidatePending < currentPending;
+}
+
 function startOnlineGame() {
     isBotGame = false; 
     isOnlineGame = true;
@@ -5034,6 +5987,8 @@ function startOnlineGame() {
     // больше не нужен и был убран как источник избыточной сложности.
 
     detachRoomListener();
+    // Fresh token belongs only to the room listener installed below.
+    const myRulesetSourceToken = beginOnlineRulesetMoveSourceLifecycle();
     // Новая подписка на комнату — прежние доказательства свежести больше не
     // действуют: они относились к другой комнате/другому listener'у.
     const myListenerGen = listenerGeneration;
@@ -5058,12 +6013,68 @@ function startOnlineGame() {
             detachMyPresence();
             isOnlineGame = false;
             roomCode = null;
-            showScreen(menuScreen);
+            // Комнату удалил соперник (закрыл завершённую партию, отменил реванш
+            // или вышел): партия окончена, возвращаемся на второй экран русских шашек.
+            showModeScreenAfterGame("russian");
             loadActiveRooms();
             // Показываем сообщение, только если игра ещё не была завершена нормально, 
             // либо если мы ждали реванша. Если игра завершена и мы не ждём реванша — просто выходим.
+            // Третий аргумент false: мы уже на втором экране, «ОК» не должен уводить на первый.
             if (!currentState || !currentState.winner || currentState.rematchProposal) {
-                showInfoModal(t("err_opponent_left"), false);
+                showInfoModal(t("err_opponent_left"), false, false);
+            }
+            return;
+        }
+
+        // Capture only after the listener-generation guard and room validity check.
+        // The lifecycle token belongs to this exact listener installation.
+        const capturedRulesetMoveSource = OnlineRulesetMoveSource.capture(room);
+        const retainedRulesetMoveSource = onlineRulesetMoveSourceLifecycle.replace(
+            myRulesetSourceToken,
+            capturedRulesetMoveSource
+        );
+        if (onlineRulesetMoveSourceToken !== myRulesetSourceToken) return;
+        onlineRulesetMoveSourceRuleset = capturedRulesetMoveSource.ruleset;
+
+        // Adopt only the detached, validated state retained by the exact
+        // lifecycle token. Italian move writes are transaction-gated elsewhere;
+        // this listener remains the sole source of visible authoritative state.
+        if (onlineRulesetMoveSourceRuleset === "italian") {
+            if (!retainedRulesetMoveSource ||
+                retainedRulesetMoveSource.ruleset !== "italian" ||
+                retainedRulesetMoveSource.mode !== "italian_move_source_stored" ||
+                !retainedRulesetMoveSource.state) {
+                throw new Error("invalid_italian_online_listener_source");
+            }
+
+            const italianPresentationSignature =
+                computeItalianOnlinePresentationSignature(retainedRulesetMoveSource.state);
+            currentState = retainedRulesetMoveSource.state;
+            isLocalStateOptimistic = false;
+
+            // Rendering is allowed only while currentState is still the exact
+            // object retained by the current lifecycle token. This keeps the
+            // presentation capability bound to the same identity proof used
+            // by every audited Italian-online render helper.
+            if (!isItalianOnlineAuthoritativeState(currentState)) {
+                throw new Error("invalid_italian_online_render_source");
+            }
+
+            settleItalianOnlineMoveTransportFromAuthoritativeState(currentState);
+
+            // Mirror the established Russian listener split: gameplay/presentation
+            // changes get a full render, while presence-only snapshots update
+            // only statuses. Besides avoiding needless work, this preserves the
+            // user's current Italian piece selection across heartbeat snapshots.
+            if (italianPresentationSignature !== lastRenderedSignature) {
+                lastSeenMoveCount = currentState.moveCount;
+                selectedFrom = currentState.turn === myColor && currentState.mustContinueFrom
+                    ? { row: currentState.mustContinueFrom.row, col: currentState.mustContinueFrom.col }
+                    : null;
+                lastRenderedSignature = italianPresentationSignature;
+                renderBoard();
+            } else {
+                updatePresenceOnly();
             }
             return;
         }
@@ -5636,6 +6647,133 @@ function recordBotGameResultIdempotent(matchId, didIWin, level) {
     });
 }
 
+// ===== ЭТАП 3: СТАТИСТИКА ИТАЛЬЯНСКОГО БОТА (узел statsBotItalian/<uid>) =====
+// Отдельно от русской statsBot: русский код и русские данные не затрагиваются.
+// Лёгкий уровень не записывается. Средний/тяжёлый — отдельно: wins/losses/draws.
+// Итальянская локальная партия намеренно держит общий Firebase-шлюз закрытым
+// (canUseFirebase() == false при localOnlyBotGame), поэтому запись идёт НЕ через него, а
+// напрямую по подтверждённому входу (auth.currentUser с uid tg_<id>) — одна транзакция в конце
+// партии, без слушателей и присутствия. Идемпотентность: matchId в recentMatchIds внутри
+// транзакции (повторный вызов и конкурентные попытки не удваивают результат); результат,
+// который не удалось записать, ждёт в очереди localStorage и дописывается при следующем случае.
+const ITALIAN_BOT_STATS_NODE = "statsBotItalian";
+const ITALIAN_BOT_STATS_QUEUE_KEY = "shashki_it_bot_stats_pending";
+let italianBotStatsRecordedFor = null;
+let italianBotStatsInFlightFor = null;
+let italianBotStatsFlushing = false;
+
+function italianBotStatsIdentity() {
+    const user = (typeof auth !== "undefined" && auth) ? auth.currentUser : null;
+    if (!user || typeof user.uid !== "string" || !/^tg_\d+$/.test(user.uid)) return null;
+    let name = "";
+    if (myTelegramId === user.uid && myTelegramName) name = myTelegramName;
+    else if (pendingFirebaseIdentity && pendingFirebaseIdentity.id === user.uid) name = pendingFirebaseIdentity.name || "";
+    if (!name) name = "Игрок";
+    return { uid: user.uid, name: String(name).slice(0, 49) };
+}
+
+function normalizeItalianBotStats(current, name) {
+    function num(v) { return (typeof v === "number" && isFinite(v) && v >= 0) ? v : 0; }
+    function level(src) {
+        const s = (src && typeof src === "object") ? src : {};
+        return { wins: num(s.wins), losses: num(s.losses), draws: num(s.draws) };
+    }
+    const cur = (current && typeof current === "object") ? current : {};
+    const byLevel = { medium: level(cur.byLevel && cur.byLevel.medium), hard: level(cur.byLevel && cur.byLevel.hard) };
+    return {
+        name: name,
+        wins: byLevel.medium.wins + byLevel.hard.wins,
+        losses: byLevel.medium.losses + byLevel.hard.losses,
+        draws: byLevel.medium.draws + byLevel.hard.draws,
+        byLevel: byLevel,
+        recentMatchIds: normalizeRecentMatchIds(cur.recentMatchIds)
+    };
+}
+
+function recordItalianBotGameResultIdempotent(matchId, outcome, level) {
+    if (level !== "medium" && level !== "hard") return Promise.resolve({ committed: false, skipped: "level" });
+    if (outcome !== "win" && outcome !== "loss" && outcome !== "draw") return Promise.resolve({ committed: false, skipped: "outcome" });
+    if (typeof matchId !== "string" || !matchId) return Promise.resolve({ committed: false, skipped: "matchId" });
+    const who = italianBotStatsIdentity();
+    if (!who || typeof database === "undefined" || !database) return Promise.reject(new Error("italian_stats_no_identity"));
+    return database.ref(ITALIAN_BOT_STATS_NODE + "/" + who.uid).transaction(function (current) {
+        const result = normalizeItalianBotStats(current, who.name);
+        if (result.recentMatchIds.indexOf(matchId) !== -1) return; // уже засчитано — транзакция отменяется
+        const bucket = result.byLevel[level];
+        if (outcome === "win") { bucket.wins += 1; result.wins += 1; }
+        else if (outcome === "loss") { bucket.losses += 1; result.losses += 1; }
+        else { bucket.draws += 1; result.draws += 1; }
+        const newRecent = result.recentMatchIds.concat([matchId]);
+        while (newRecent.length > STATS_RECENT_MATCH_IDS_LIMIT) newRecent.shift();
+        result.recentMatchIds = newRecent;
+        return result;
+    }).then(function (res) { return { committed: !!(res && res.committed) }; });
+}
+
+function readItalianBotStatsQueue() {
+    try {
+        const list = JSON.parse(localStorage.getItem(ITALIAN_BOT_STATS_QUEUE_KEY) || "[]");
+        if (!Array.isArray(list)) return [];
+        return list.filter(function (x) {
+            return x && typeof x.matchId === "string" && x.matchId &&
+                (x.level === "medium" || x.level === "hard") &&
+                (x.outcome === "win" || x.outcome === "loss" || x.outcome === "draw");
+        });
+    } catch (e) { return []; }
+}
+function writeItalianBotStatsQueue(list) {
+    try { localStorage.setItem(ITALIAN_BOT_STATS_QUEUE_KEY, JSON.stringify(list.slice(-20))); } catch (e) { /* хранилище недоступно — результат останется только в памяти */ }
+}
+function enqueueItalianBotStats(item) {
+    const list = readItalianBotStatsQueue();
+    if (list.some(function (x) { return x.matchId === item.matchId; })) return;
+    list.push(item);
+    writeItalianBotStatsQueue(list);
+}
+function dequeueItalianBotStats(matchId) {
+    writeItalianBotStatsQueue(readItalianBotStatsQueue().filter(function (x) { return x.matchId !== matchId; }));
+}
+
+function flushItalianBotStatsQueue() {
+    if (italianBotStatsFlushing) return Promise.resolve();
+    const who = italianBotStatsIdentity();
+    if (!who) return Promise.resolve();
+    const items = readItalianBotStatsQueue().filter(function (x) { return !x.uid || x.uid === who.uid; });
+    if (!items.length) return Promise.resolve();
+    italianBotStatsFlushing = true;
+    return items.reduce(function (chain, item) {
+        return chain.then(function () {
+            return recordItalianBotGameResultIdempotent(item.matchId, item.outcome, item.level)
+                .then(function () { dequeueItalianBotStats(item.matchId); })
+                .catch(function () { /* останется в очереди до следующей попытки */ });
+        });
+    }, Promise.resolve()).then(function () { italianBotStatsFlushing = false; }, function () { italianBotStatsFlushing = false; });
+}
+
+function maybeRecordItalianBotResult() {
+    if (!isItalianLocalBotGame()) return;
+    if (botDifficulty !== "medium" && botDifficulty !== "hard") return; // лёгкий не учитывается
+    if (!currentState || !currentState.winner) return;
+    const matchId = currentBotMatchId;
+    if (!matchId) return;
+    if (italianBotStatsRecordedFor === matchId || italianBotStatsInFlightFor === matchId) return;
+    const winner = currentState.winner;
+    const outcome = winner === "draw" ? "draw" : (winner === myColor ? "win" : "loss");
+    const who = italianBotStatsIdentity();
+    const item = { matchId: matchId, outcome: outcome, level: botDifficulty, uid: who ? who.uid : "" };
+    italianBotStatsInFlightFor = matchId;
+    recordItalianBotGameResultIdempotent(matchId, outcome, botDifficulty).then(function () {
+        italianBotStatsRecordedFor = matchId;
+        italianBotStatsInFlightFor = null;
+        dequeueItalianBotStats(matchId);
+        flushItalianBotStatsQueue();
+    }).catch(function (error) {
+        console.warn("Italian bot stats write deferred:", error && error.message);
+        italianBotStatsInFlightFor = null;
+        enqueueItalianBotStats(item);
+    });
+}
+
 // --- Единственная точка, пишущая/обновляющая публичную spectate room из
 // committed owner state. Вызывается тем устройством, чья owner-транзакция
 // только что реально закоммитилась — оно уже держит свежий snapshot.
@@ -6000,6 +7138,10 @@ function getMaxDepthForDifficulty(difficulty) {
 // партия стартует только после выбора одной из трёх кнопок; ничего не
 // сохраняется между вызовами — botDifficulty выставляется заново каждый раз.
 function promptBotDifficultyThenStart() {
+    updateGameTitle();
+    // Italian bot is intentionally local-only. Do not even read the shared
+    // Russian bot session from Firebase before the difficulty choice.
+    if (localOnlyBotGame) { pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null; openModal(botDifficultyModal); return; }
     if (!canUseFirebase()) { pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null; openModal(botDifficultyModal); return; }
     // Перед показом выбора уровня — проверяем, нет ли уже АКТИВНОЙ общей
     // сессии (например, партия начата на другом устройстве). Молча
@@ -6049,7 +7191,7 @@ btnStartNewSession.addEventListener("click", function () {
 btnContinueOrNewBack.addEventListener("click", function () {
     closeModal(continueOrNewModal);
     pendingExistingSessionForResume = null;
-    showScreen(menuScreen);
+    showMenuAfterCancel();
     loadActiveRooms();
 });
 
@@ -6067,6 +7209,10 @@ btnDifficultyHard.addEventListener("click", function () {
 });
 btnDifficultyBack.addEventListener("click", function () {
     closeModal(botDifficultyModal);
+    const wasLocalOnly = localOnlyBotGame;
+    localBotRuleset = "russian";
+    localOnlyBotGame = false;
+    if (wasLocalOnly) activatePendingFirebaseFlows();
     isBotGame = false;
     // Отменённый flow не должен переживать себя: если пользователь дошёл
     // сюда через "Начать новую" (pendingReplaceExistingSession уже
@@ -6077,13 +7223,14 @@ btnDifficultyBack.addEventListener("click", function () {
     pendingReplaceExistingSession = null;
     pendingExistingSessionForResume = null;
     pendingOldSpectateCodeForCleanup = null;
-    showScreen(menuScreen);
+    showMenuAfterCancel();
     loadActiveRooms();
 });
 
 // --- Единая точка запуска новой bot-серии (и с чистого места, и как явная
 // замена уже существующей активной сессии после подтверждения). ---
 function startOwnerBotGameWithDifficulty(chosenDifficulty) {
+    if (localBotRuleset === "italian") localOnlyBotGame = true;
     if (localOnlyBotGame || !canUseFirebase()) {
         pendingExistingSessionForResume = null; pendingReplaceExistingSession = null; pendingOldSpectateCodeForCleanup = null;
         localOnlyBotGame = true; ownerSessionAttached = false; botDifficulty = chosenDifficulty; isOnlineGame = false; isSpectator = false; isBotGame = true;
@@ -6263,7 +7410,23 @@ function startOfflineGame() {
     const existingSpectators = (currentState && currentState.spectators) ? currentState.spectators : null;
     
     const botName = isBotGame ? "Компьютер" : "Игрок 2";
-    currentState = {
+
+    if (isBotGame && localOnlyBotGame && localBotRuleset === "italian") {
+        currentState = getItalianLocalAdapter().createInitialState();
+        currentState.localMoveVisualSerial = 0;
+        currentState.lastMove = null;
+        currentState.lastMovePath = null;
+        currentState.lastCapturedSquares = null;
+        currentState.moveType = null;
+        currentState.players = {
+            light: { name: botColor === "light" ? botName : (myTelegramName || "Игрок") },
+            dark: { name: botColor === "dark" ? botName : (myTelegramName || "Игрок") }
+        };
+        currentState.timeControlSeconds = 0;
+        currentState.turnStartedAt = null;
+        currentState.spectators = {}; // Italian local games never inherit synced/legacy spectators.
+    } else {
+        currentState = {
         pieces: createInitialPieces(),
         turn: "light", // Белые всегда ходят первыми!
         mustContinueFrom: null,
@@ -6288,7 +7451,8 @@ function startOfflineGame() {
         winner: null,
         winReason: null,
         spectators: existingSpectators // Переносим зрителей в новую партию
-    };
+        };
+    }
     renderBoard();
 
     if (isBotGame) {
@@ -6338,6 +7502,56 @@ function loadActiveRooms() {
                 pending--;
                 if (!canUseFirebase()) return;
                 const room = roomSnap.val();
+                const roomUsesRussianRuntime = !room || canUseRussianOnlineRuntime(room);
+
+                // Unsupported/future rulesets are not Russian "My games" entries.
+                // Skip them non-destructively: a client that cannot run the room
+                // must never delete its user index merely because of that.
+                if (room && !roomUsesRussianRuntime) {
+                    if (pending === 0) {
+                        listEl.innerHTML = "";
+                        if (items.length === 0) {
+                            sectionEl.classList.add("hidden");
+                            noGameText.classList.remove("hidden");
+                        } else {
+                            sectionEl.classList.remove("hidden");
+                            noGameText.classList.add("hidden");
+                            items.forEach(function (item) {
+                                const row = document.createElement("div");
+                                row.className = "room-item-row";
+
+                                const btn = document.createElement("button");
+                                btn.className = "menu-button room-item-button";
+                                btn.textContent = t("game_against") + " " + item.opponent;
+                                btn.addEventListener("click", function () {
+                                    roomCode = item.code;
+                                    myColor = item.color;
+                                    isOnlineGame = true;
+                                    showScreen(gameScreen);
+                                    startOnlineGame();
+                                });
+
+                                const removeBtn = document.createElement("button");
+                                removeBtn.className = "room-item-remove";
+                                removeBtn.textContent = "✕";
+                                removeBtn.title = t("remove_from_list");
+                                removeBtn.addEventListener("click", function (e) {
+                                    e.stopPropagation();
+                                    database.ref("users/" + myTelegramId + "/rooms/" + item.code).remove().then(function () {
+                                        loadActiveRooms();
+                                    }).catch(function (error) {
+                                        console.log("Remove from list failed:", error && error.message);
+                                    });
+                                });
+
+                                row.appendChild(btn);
+                                row.appendChild(removeBtn);
+                                listEl.appendChild(row);
+                            });
+                        }
+                    }
+                    return;
+                }
 
                 const lightP = room && room.players && room.players.light;
                 const darkP = room && room.players && room.players.dark;
@@ -6479,6 +7693,7 @@ function createOnlineRoom() {
 
         const initialState = {
             status: "waiting",
+            ruleset: "russian",
             turn: "light",
             mustContinueFrom: null,
             capturedDark: 0,
@@ -6652,6 +7867,22 @@ btnPlayOnline.addEventListener("click", function () {
 });
 
 btnPlayFriend.addEventListener("click", async function () {
+    // Итальянские правила: прежний вход в итальянский онлайн (его собственные гейты
+    // и проверки тестеров не меняются) -- через скрытую совместимую кнопку.
+    if (selectedRuleset === "italian") {
+        // STEP K3: the same user scenario as the Russian game: first the time-control screen (the same six choices), the room is created only after the choice.
+        const italianUi = window.ItalianOnlineTwoPlayerUI;
+        const italianScreen = document.getElementById("it86-screen");
+        if (italianScreen && !italianScreen.classList.contains("hidden")) return;   // the Italian screen is already open: repeated presses change nothing (as before K3)
+        if (btnItalianOnlineEntry && italianUi && typeof italianUi.setTimeControl === "function") {
+            showScreen(timeControlScreen);
+            italianTimeChoicePending = true;   // after showScreen: showScreen clears the flag for every other screen
+        } else if (btnItalianOnlineEntry) {
+            btnItalianOnlineEntry.click();
+        }
+        return;
+    }
+    italianTimeChoicePending = false;
     if (!(await requireFirebaseAuthAsync())) return;
     isBotGame = false;
     showScreen(timeControlScreen);
@@ -6660,6 +7891,16 @@ btnPlayFriend.addEventListener("click", async function () {
 const timeOptionButtons = document.querySelectorAll(".time-option");
 timeOptionButtons.forEach(function (btn) {
     btn.addEventListener("click", function () {
+        if (italianTimeChoicePending) {
+            // STEP K3: Italian rules. The choice goes to the Italian online screen, which creates the room (its own gates and server protocol).
+            italianTimeChoicePending = false;
+            window.ItalianOnlineTwoPlayerUI.setTimeControl(parseInt(btn.dataset.seconds));
+            showModeScreenAfterGame("italian");   // the screen under the Italian overlay is the mode screen again (as before K3): leaving the Italian screen never lands on the time screen
+            if (btnItalianOnlineEntry) btnItalianOnlineEntry.click();
+            return;
+        }
+        // STEP K3: a repeated tap on a time button (the choice was already taken) must never fall through to the RUSSIAN room creation under the Italian rules.
+        if (selectedRuleset === "italian") return;
         pendingTimeControlSeconds = parseInt(btn.dataset.seconds);
         createRoomAndShowWaiting();
     });
@@ -6669,7 +7910,11 @@ const btnBackFromWaiting = document.getElementById("btn-back-from-waiting");
 const btnBackFromTimeControl = document.getElementById("btn-back-from-time-control");
 if (btnBackFromTimeControl) {
     btnBackFromTimeControl.addEventListener("click", function() {
-        showScreen(menuScreen);
+        // Выбор времени существует только в потоке «Играть с другом» (русские).
+        // STEP K3: из итальянского входа «Назад» возвращает на второй экран итальянских шашек.
+        const fromItalian = italianTimeChoicePending;
+        italianTimeChoicePending = false;
+        showModeScreenAfterGame(fromItalian ? "italian" : "russian");
     });
 }
 
@@ -6858,6 +8103,7 @@ function createRoomAndShowWaiting() {
 
     const initialState = {
         status: "waiting",
+        ruleset: "russian",
         turn: "light",
         mustContinueFrom: null,
         capturedDark: 0,
@@ -6943,10 +8189,49 @@ if (btnCopyLink) {
     btnCopyLink.addEventListener("click", copyPendingFriendInviteLink);
 }
 
+function launchBotForSelectedRuleset(ruleset) {
+    if (ruleset === "italian") {
+        localBotRuleset = "italian";
+        localOnlyBotGame = true;
+    } else {
+        localBotRuleset = "russian";
+        localOnlyBotGame = false;
+    }
+    promptBotDifficultyThenStart();
+}
+
 btnPlayBot.addEventListener("click", function () {
     isBotGame = true;
     showScreen(gameScreen);
+    // Правила уже выбраны на первом экране -- окно выбора правил не нужно.
+    const chosen = normalizeSelectableRuleset(selectedRuleset);
+    if (chosen) { launchBotForSelectedRuleset(chosen); return; }
+    openModal(botRulesetModal);
+});
+
+btnRulesetRussian.addEventListener("click", function () {
+    closeModal(botRulesetModal);
+    localBotRuleset = "russian";
+    localOnlyBotGame = false;
     promptBotDifficultyThenStart();
+});
+
+btnRulesetItalian.addEventListener("click", function () {
+    closeModal(botRulesetModal);
+    localBotRuleset = "italian";
+    localOnlyBotGame = true;
+    promptBotDifficultyThenStart();
+});
+
+btnRulesetBack.addEventListener("click", function () {
+    closeModal(botRulesetModal);
+    const wasLocalOnly = localOnlyBotGame;
+    localBotRuleset = "russian";
+    localOnlyBotGame = false;
+    if (wasLocalOnly) activatePendingFirebaseFlows();
+    isBotGame = false;
+    showScreen(menuScreen);
+    loadActiveRooms();
 });
 
 // ===== СДАТЬСЯ =====
@@ -6969,7 +8254,17 @@ if (btnBackBotNo) {
         if (backConfirmModal) closeModal(backConfirmModal);
     });
 }
-function finishLocalOnlyBotSeries() { const wasLocalOnly = localOnlyBotGame; localOnlyBotGame = false; if (wasLocalOnly) activatePendingFirebaseFlows(); }
+function finishLocalOnlyBotSeries() {
+    const wasLocalOnly = localOnlyBotGame;
+    setTimeout(updateGameTitle, 0);
+    // Leaving a bot series returns the menu flow to its neutral default.
+    // Without resetting localBotRuleset, an Italian session could leak its
+    // ruleset into a later unrelated bot launch even though local-only was
+    // already cleared.
+    localBotRuleset = "russian";
+    localOnlyBotGame = false;
+    if (wasLocalOnly) activatePendingFirebaseFlows();
+}
 
 if (btnBackBotYes) {
     btnBackBotYes.addEventListener("click", function() {
@@ -6990,9 +8285,11 @@ if (btnBackBotYes) {
         } else {
             stopBotSpectateRoom(); // Удаляем фантомную комнату
         }
+        // Правила партии запоминаем ДО finishLocalOnlyBotSeries(): он сбрасывает localBotRuleset.
+        const leftBotRuleset = localBotRuleset;
         isBotGame = false;
         finishLocalOnlyBotSeries();
-        showScreen(menuScreen);
+        showModeScreenAfterGame(leftBotRuleset);
         loadActiveRooms();
     });
 }
@@ -7201,6 +8498,11 @@ function triggerEmojiBurst(emoji) {
 }
 
 function checkDrawProposal() {
+    // Same presentation boundary for the legacy Russian draw-proposal UI.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        closeModal(drawOfferModal);
+        return;
+    }
     if (!drawOfferModal) return;
     if (isSpectator) { closeModal(drawOfferModal); return; }
     if (!isOnlineGame || !currentState || currentState.winner) {
@@ -7322,11 +8624,16 @@ function leaveFinishedOnlineAndReturnToLobby() {
     isOnlineGame = false;
     roomCode = null;
     currentState = null;
-    showScreen(menuScreen);
+    // Русская онлайн-партия завершена: возвращаемся на второй экран русских шашек.
+    showModeScreenAfterGame("russian");
     loadActiveRooms();
 }
 
 btnCloseGame.addEventListener("click", function () {
+    // Defense in depth: even a stale/programmatic click on a previously
+    // visible legacy button must not enter Russian cleanup/settlement paths.
+    if (isItalianOnlineAuthoritativeState(currentState)) return;
+
     // Если мы зритель — просто отписываемся от комнаты и выходим в меню.
     if (isSpectator) {
         closeModal(endGameModal);
@@ -7345,7 +8652,7 @@ btnCloseGame.addEventListener("click", function () {
     if (!isOnlineGame && !isBotGame && currentState && currentState.winner && !roomCode) {
         closeModal(endGameModal);
         currentState = null;
-        showScreen(menuScreen);
+        showModeScreenAfterGame("russian");
         loadActiveRooms();
         return;
     }
@@ -7393,7 +8700,9 @@ btnCloseGame.addEventListener("click", function () {
     }
 
     closeModal(endGameModal);
-    markMyselfLeftExplicitly();
+    // Italian bot is deliberately local-only. Avoid even the generic
+    // presence cleanup path before the bot-specific local cleanup below.
+    if (!localOnlyBotGame) markMyselfLeftExplicitly();
 
     if (isOnlineGame) {
         cleanupFinishedRoom();
@@ -7409,9 +8718,11 @@ btnCloseGame.addEventListener("click", function () {
         } else {
             stopBotSpectateRoom();
         }
+        // Правила партии запоминаем ДО finishLocalOnlyBotSeries(): он сбрасывает localBotRuleset.
+        const endedBotRuleset = localBotRuleset;
         isBotGame = false;
         finishLocalOnlyBotSeries();
-        showScreen(menuScreen);
+        showModeScreenAfterGame(endedBotRuleset);
         return;
     }
     if (window.Telegram && window.Telegram.WebApp) Telegram.WebApp.close();
@@ -7443,6 +8754,8 @@ function cleanupFinishedRoom() {
 }
 
 btnNewGame.addEventListener("click", function () {
+    // Italian-online rematch transport is not wired yet.
+    if (isItalianOnlineAuthoritativeState(currentState)) return;
     if (isSpectator) return;
     if (isOnlineGame) {
         if (!requireFirebaseAuth()) return;
@@ -7573,6 +8886,13 @@ function performRematchReset(expectedGenerationKey) {
 }
 
 function checkRematchProposal() {
+    // Italian-online proposal lifecycle is not wired yet. Keep renderBoard()
+    // from projecting legacy Russian rematch state/modals for the exact
+    // authoritative Italian source while preserving every existing path.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        closeModal(rematchRequestModal);
+        return;
+    }
     if (!rematchRequestModal) return;
     if (isSpectator) { closeModal(rematchRequestModal); return; }
     if (!isOnlineGame || !currentState) {
@@ -7753,13 +9073,26 @@ function renderSyncRetryButton(show) {
         syncRetryButton = null;
         return;
     }
-    if (syncRetryButton) return;
+    if (syncRetryButton) {
+        // A one-second timer refresh replaces textContent and detaches child
+        // buttons. Reattach the SAME Retry button for either ruleset; do not
+        // register a second click handler or change either recovery path.
+        if (syncRetryButton.parentNode !== turnTimerDiv) {
+            turnTimerDiv.appendChild(syncRetryButton);
+        }
+        return;
+    }
     syncRetryButton = document.createElement("button");
     syncRetryButton.className = "reaction-btn";
     syncRetryButton.id = "btn-sync-retry";
     syncRetryButton.textContent = t("btn_sync_retry");
     syncRetryButton.addEventListener("click", function () {
-        // Только повторная синхронизация. Шашечный ход НЕ переотправляется.
+        // Retry is read-only for both rulesets. A failed Italian transaction
+        // keeps its marker until this exact room/token resync succeeds.
+        if (italianOnlineMoveRecoveryFailedMarker) {
+            retryFailedItalianOnlineMoveRecovery();
+            return;
+        }
         syncRecoveryFailed = false;
         runSyncRecovery(true);
     });
@@ -7774,7 +9107,20 @@ function renderSyncRetryButton(show) {
 // законченная партия и выход из комнаты сюда не попадают.
 function computeSyncStatus() {
     if (!isOnlineGame || isBotGame || isSpectator) return null;
-    if (!roomCode || !currentState || currentState.winner) return null;
+    if (!roomCode || !currentState) return null;
+    // Italian uses its own exact marker. Only a FAILED rollback read offers
+    // a manual read-only retry; pending transaction/commit never exposes one.
+    if (isItalianOnlineAuthoritativeState(currentState)) {
+        if (!italianOnlineMoveTransportInFlight) return null;
+        if (!isFirebaseConnected) {
+            return { key: "sync_no_connection", showRetry: false };
+        }
+        if (italianOnlineMoveRecoveryFailedMarker === italianOnlineMoveTransportInFlight) {
+            return { key: "sync_failed", showRetry: true };
+        }
+        return { key: "sync_sending_move", showRetry: false };
+    }
+    if (currentState.winner) return null;
 
     // Восстановление не удалось — единственное состояние с кнопкой.
     if (syncRecoveryFailed) return { key: "sync_failed", showRetry: true };
@@ -7798,6 +9144,9 @@ function computeSyncStatus() {
 function runSyncRecovery(isManual) {
     if (syncRecoveryInFlight) return; // ровно одно восстановление за раз
     if (!roomCode || !isOnlineGame || isSpectator) return;
+    // Defense in depth: both manual retry and the periodic stall path must
+    // fail closed even if stale legacy pending-move flags survive a mode switch.
+    if (isItalianOnlineAuthoritativeState(currentState)) return;
     syncRecoveryInFlight = true;
     forceResyncFromServer(true).then(function () {
         syncRecoveryFailed = false;
@@ -7824,12 +9173,14 @@ function runSyncRecovery(isManual) {
 
 setInterval(function () {
     if (isScreenLogicallyActive(gameScreen)) {
+        expireStalledItalianOnlineRecoveryRead();
         updateTimerDisplay();
         checkTimeout();
         updatePresenceOnly();
         // Автоматическое восстановление — только при живой связи: без неё
         // чтение всё равно не пройдёт, а ход и так уедет сам при реконнекте.
-        if (isMoveAwaitingConfirmation() && isFirebaseConnected &&
+        if (!isItalianOnlineAuthoritativeState(currentState) &&
+            isMoveAwaitingConfirmation() && isFirebaseConnected &&
             !syncRecoveryInFlight && !syncRecoveryFailed &&
             Date.now() - pendingMoveStartedAt >= MOVE_CONFIRM_STALL_MS) {
             runSyncRecovery(false);
@@ -7857,19 +9208,161 @@ function checkSpectatorGameInterrupted() {
     }
 }
 
+// ===== STAGING-ONLY ДИАГНОСТИКА: почему не идёт отсчёт ухода соперника / не пишется технический результат =====
+// ТОЛЬКО ЧТЕНИЕ. Ничего не пишет в Firebase, не вызывает Worker, не меняет ни одно игровое решение и ни одну
+// переменную состояния. Включается ТОЛЬКО если одновременно выполнены два независимых признака STAGING-сборки:
+// BUILD_ENVIRONMENT === "staging" (подменяет только STAGING-сборщик) И projectId содержит "-stg-". В production и в
+// приватных исходниках диагностика выключена целиком: ни интервала, ни DOM, ни журнала, ни консоли. В журнал попадают только короткие коды и числа
+// (секунды, флаги) -- без имён, id игроков, кода комнаты, токенов и без объектов Firebase.
+function absenceDiagGate(buildEnvironment, projectId) {
+    return buildEnvironment === "staging" && typeof projectId === "string" && /-stg-/.test(projectId);
+}
+const ABSENCE_DIAG_ENABLED = absenceDiagGate(BUILD_ENVIRONMENT, firebaseConfig.projectId);
+const ABSENCE_DIAG_LOG_LIMIT = 60;
+const ABSENCE_DIAG_REPEAT_MS = 30000;
+let absenceDiagLastKey = null;
+let absenceDiagLastAt = 0;
+let absenceDiagRoom = null;
+let absenceDiagSince = 0;
+
+// Чистая функция: первое по порядку условие, которое сейчас мешает. Порядок повторяет statusForColor() и
+// writeTechnicalResult(). Возвращает { code, ...числа } или null, если диагностировать нечего.
+function absenceDiagCompute() {
+    if (!isOnlineGame || isBotGame || isSpectator || !currentState || !roomCode) return null;
+    if (currentState.winner || currentState.result) return { code: "result_recorded" };
+    const oppColor = myColor === "light" ? "dark" : "light";
+    const presence = currentState.presence || {};
+    const opp = presence[oppColor] || null;
+    const me = presence[myColor] || null;
+    // --- ворота статуса «Подключение…» (statusForColor) ---
+    if (!opp) return { code: "opponent_presence_missing" };
+    if (!isFirebaseConnected) return { code: "self_not_connected" };
+    if (!serverTimeOffsetReady) return { code: "server_time_not_ready" };
+    if (!roomSnapshotSeenSinceConnect) {
+        return { code: "room_snapshot_not_fresh", ack: !!serverAckSinceConnect, settleS: connectedSinceMono === null ? null : Math.round((getMonotonicNow() - connectedSinceMono) / 1000) };
+    }
+    const now = getEstimatedServerNow();
+    if (opp.online !== false) {
+        const silentS = (typeof opp.lastSeen === "number") ? Math.round((now - opp.lastSeen) / 1000) : null;
+        if (silentS !== null && silentS > Math.round(PRESENCE_STALE_WARNING_MS / 1000)) {
+            // сервер не отметил уход (onDisconnect не сработал / не взведён), правила результат не разрешат
+            return { code: "opponent_online_flag_but_silent", silentS: silentS };
+        }
+        return { code: "opponent_present", silentS: silentS };
+    }
+    if (typeof opp.absentSince !== "number") return { code: "opponent_offline_without_absentSince" };
+    const absentS = Math.round((now - opp.absentSince) / 1000);
+    if (absentS * 1000 < RECONNECT_GRACE_MS) return { code: "absence_countdown", absentS: absentS };
+    // --- минута прошла: что мешает записать результат (canTrustAbsenceForCleanup / writeTechnicalResult) ---
+    const settleS = connectedSinceMono === null ? null : Math.round((getMonotonicNow() - connectedSinceMono) / 1000);
+    if (connectedSinceMono === null || (getMonotonicNow() - connectedSinceMono) < CONNECTION_SETTLE_MS) return { code: "connection_not_settled", settleS: settleS };
+    if (!serverAckSinceConnect) return { code: "no_server_ack_since_connect" };
+    if (!currentState.players || !currentState.players.light || !currentState.players.dark) return { code: "players_missing" };
+    if (!me) return { code: "my_presence_missing" };
+    if (me.online !== true) return { code: "my_presence_not_online" };
+    if (typeof me.onlineSince !== "number") return { code: "my_onlineSince_missing" };
+    const mineS = Math.round((now - me.onlineSince) / 1000);
+    if (mineS * 1000 < RECONNECT_GRACE_MS) return { code: "my_online_session_under_60s", mineS: mineS };
+    if (currentState.ratedMatchId) {
+        return { code: opponentAbsenceHandled ? "rated_claim_sent_waiting" : "rated_claim_ready", absentS: absentS };
+    }
+    if (technicalResultInFlight) return { code: "result_write_in_flight", absentS: absentS };
+    if (opponentAbsenceHandled) return { code: "result_requested_waiting_for_state", absentS: absentS };
+    return { code: "ready_to_write", absentS: absentS };
+}
+
+// Сброс «жизни» диагностики и скрытие подписи: выход из партии, меню, смена комнаты, отсутствие данных.
+// Подпись никогда не показывает код от прошлой партии.
+function absenceDiagReset() {
+    absenceDiagLastKey = null;
+    absenceDiagLastAt = 0;
+    absenceDiagShowBadge("");
+}
+
+function absenceDiagTick() {
+    if (!ABSENCE_DIAG_ENABLED) return;
+    try {
+        if (absenceDiagRoom !== roomCode) {
+            absenceDiagReset();
+            absenceDiagRoom = roomCode;
+            absenceDiagSince = Date.now();
+            if (roomCode && window.__absenceDiagLog) window.__absenceDiagLog.push("room_changed");
+        }
+        const d = absenceDiagCompute();
+        if (!d) { absenceDiagReset(); return; }
+        const code = d.code;
+        const t = Date.now();
+        const blocking = code !== "opponent_present" && code !== "absence_countdown" && code !== "result_recorded";
+        if (code === absenceDiagLastKey && !(blocking && t - absenceDiagLastAt >= ABSENCE_DIAG_REPEAT_MS)) return;
+        absenceDiagLastKey = code;
+        absenceDiagLastAt = t;
+        const parts = [];
+        for (const k in d) { if (k !== "code") parts.push(k + "=" + d[k]); }
+        const line = "+" + Math.round((t - absenceDiagSince) / 1000) + "s " + code + (parts.length ? " " + parts.join(" ") : "");
+        console.log("[absence-diag] " + line);
+        if (!window.__absenceDiagLog) window.__absenceDiagLog = [];
+        window.__absenceDiagLog.push(line);
+        if (window.__absenceDiagLog.length > ABSENCE_DIAG_LOG_LIMIT) window.__absenceDiagLog.shift();
+        absenceDiagShowBadge(blocking ? line : "");
+    } catch (e) { /* диагностика никогда не должна влиять на игру */ }
+}
+
+// Сторож жизненного цикла (только STAGING, раз в секунду, только чтение): updatePresenceOnly() вызывается лишь
+// пока открыт экран партии, поэтому при выходе в меню он молчит и сам подпись убрать не может. Сторож убирает подпись
+// не позже чем через секунду после того, как партия перестала быть активной онлайн-партией игрока на экране.
+function absenceDiagWatchdog() {
+    try {
+        const playing = isOnlineGame && !!roomCode && !isBotGame && !isSpectator && !!currentState && isScreenLogicallyActive(gameScreen);
+        if (!playing) {
+            if (absenceDiagRoom !== null || absenceDiagLastKey !== null) {
+                absenceDiagReset();
+                absenceDiagRoom = null;
+            } else {
+                absenceDiagShowBadge("");
+            }
+        }
+    } catch (e) { /* диагностика никогда не должна влиять на игру */ }
+}
+if (ABSENCE_DIAG_ENABLED) setInterval(absenceDiagWatchdog, 1000);
+
+// Маленькая серая подпись внизу экрана (только STAGING): код причины, чтобы его можно было прислать скриншотом.
+function absenceDiagShowBadge(text) {
+    let el = document.getElementById("absence-diag-badge");
+    if (!text) { if (el) el.style.display = "none"; return; }
+    if (!el) {
+        el = document.createElement("div");
+        el.id = "absence-diag-badge";
+        el.setAttribute("aria-hidden", "true");
+        el.style.cssText = "position:fixed;left:6px;bottom:4px;z-index:2147483000;max-width:92vw;font:10px/1.2 monospace;color:rgba(255,255,255,.55);background:rgba(0,0,0,.35);padding:1px 4px;border-radius:4px;pointer-events:none";
+        document.body.appendChild(el);
+    }
+    el.textContent = "diag " + text;
+    el.style.display = "block";
+}
+
 function updatePresenceOnly() {
     if (!isOnlineGame || !currentState) return;
+    // Italian-online presence mutation/lifecycle is not wired yet. The retained
+    // authoritative snapshot may still drive presentation, but the periodic
+    // legacy presence path must not enter opponent-absence room side effects.
+    const italianOnlinePresentation = isItalianOnlineAuthoritativeState(currentState);
     const topColor = flipped ? "light" : "dark";
     const bottomColor = flipped ? "dark" : "light";
     applyStatusToElement(playerTopStatus, playerTopPanel, statusForColor(topColor));
     applyStatusToElement(playerBottomStatus, playerBottomPanel, statusForColor(bottomColor));
-    checkOpponentAbsence();
-    if (isSpectator) checkSpectatorGameInterrupted();
+    if (!italianOnlinePresentation) {
+        checkOpponentAbsence();
+        absenceDiagTick();
+    }
+    if (isSpectator && !italianOnlinePresentation) checkSpectatorGameInterrupted();
 }
 
 function checkTimeout() {
     if (isSpectator) return;
     if (!isOnlineGame || !currentState || currentState.winner) return;
+    // Timeout settlement still belongs to the legacy Russian room mutation
+    // pipeline. Authoritative Italian-online state is presentation-only here.
+    if (isItalianOnlineAuthoritativeState(currentState)) return;
     if (!canUseFirebase()) return;
     if (!currentState.timeControlSeconds || !currentState.turnStartedAt) return;
 
@@ -7961,6 +9454,7 @@ function showInfoModal(text, offerNewGame, navigateToMenu) {
 function checkForInviteLink() {
     // Без подтверждённого входа НИ ОДНОЙ записи в Firebase.
     // Локальная игра при этом продолжает работать.
+    typeof itDiag === "function" && itDiag("checkForInviteLink.called", function () { const D = window.ItalianOnlineDiag; D.ctx("checkForInviteLink"); return { canUseFirebase: canUseFirebase(), uid: D.maskUid(myTelegramId) }; });
     if (!canUseFirebase()) return false;
     let startParam = null;
 
@@ -7971,7 +9465,29 @@ function checkForInviteLink() {
         startParam = Telegram.WebApp.initDataUnsafe.start_param;
     }
 
+    typeof itDiag === "function" && itDiag("checkForInviteLink.param", function () { return { usedStartParam: window.ItalianOnlineDiag.describeParam(startParam), source: "Telegram.WebApp.initDataUnsafe.start_param" }; });
     if (!startParam) return false;
+
+    // PR-75 review: a mode-qualified Italian invite must NEVER reach /rooms,
+    // even if a malicious client created a Russian room with that exact code.
+    // Reject valid, malformed and mixed-case "it_" prefixes before ANY room
+    // read, timeout, presence, or legacy Russian join side effect. The Italian
+    // create/join lifecycle is not enabled yet: do not claim it can be played.
+    if (typeof startParam === "string" && /^it_/i.test(startParam)) {
+        roomCode = null;
+        typeof itDiag === "function" && itDiag("checkForInviteLink.branch", function () { return { italianUI: window.ItalianOnlineTwoPlayerUI && typeof window.ItalianOnlineTwoPlayerUI.openInvite === "function" ? "present: the Italian invite path is taken, openInvite is called next" : "MISSING: the unavailable message is shown" }; });
+        if (window.ItalianOnlineTwoPlayerUI &&
+            typeof window.ItalianOnlineTwoPlayerUI.openInvite === "function") {
+            // Итальянское приглашение открывается поверх второго экрана итальянских шашек:
+            // после партии и закрытия окна игрок попадает именно туда, а не на первый экран.
+            if (!showModeScreen("italian")) showScreen(menuScreen);
+            window.ItalianOnlineTwoPlayerUI.openInvite(startParam);
+        } else {
+            showScreen(menuScreen);
+            showInfoModal(t("err_italian_online_unavailable"), false);
+        }
+        return true; // handled: NEVER read the Russian /rooms namespace
+    }
 
     roomCode = startParam;
     waitingInvitePrompt.classList.add("hidden");
@@ -8010,7 +9526,7 @@ function checkForInviteLink() {
         // сегодня отказывается открывать завершённую партию: сообщение и
         // возврат в меню те же, новых текстов не вводим.
         if (!room || !room.pieces || room.status === "finished" || room.winner ||
-            isRoomAbandonedNow(room)) {
+            (typeof canUseRussianOnlineRuntime === "function" && !canUseRussianOnlineRuntime(room)) || isRoomAbandonedNow(room)) {
             settled = true;
             clearTimeout(timeoutId);
             roomCode = null;
@@ -8332,7 +9848,7 @@ btnCloseAfterLeave.addEventListener("click", function () {
     } else {
         roomCode = null;
         currentState = null;
-        showScreen(menuScreen);
+        showModeScreenAfterGame("russian");
         loadActiveRooms();
     }
 });
@@ -8470,7 +9986,7 @@ function renderOnlineStatsRow(rank, name, wins, losses, draws, rating, isSelf) {
 // у старых партий его нет, и это нормально), строка кликабельна и по
 // нажатию раскрывает компактную панель разбивки. Easy никогда не пишет
 // byLevel и здесь не появляется.
-function renderBotStatsRow(rank, name, wins, losses, byLevel, isSelf) {
+function renderBotStatsRow(rank, name, wins, losses, byLevel, isSelf, italianExtra) {
     const row = document.createElement("div");
     row.className = "stats-row stats-row-expandable";
     if (rank >= 1 && rank <= 3) {
@@ -8482,7 +9998,9 @@ function renderBotStatsRow(rank, name, wins, losses, byLevel, isSelf) {
 
     const infoSpan = document.createElement("span");
     infoSpan.className = "stats-info-block stats-info-bot";
-    const total = wins + losses;
+    const draws = italianExtra ? (italianExtra.draws || 0) : 0;
+    if (italianExtra) infoSpan.classList.add("stats-info-bot-italian");
+    const total = wins + losses + draws;
     // ЭТАП 2: 🪙 здесь больше НЕ показываем. Раньше в этой строке стоял общий
     // Старую колонку внутренней валюты здесь больше не показываем,
     // хотя таковым не был — цифра вводила в заблуждение. Общий баланс остаётся
@@ -8490,7 +10008,8 @@ function renderBotStatsRow(rank, name, wins, losses, byLevel, isSelf) {
     // панели рядом с именем игрока.
     // Каждый показатель — отдельная grid-ячейка (см. renderOnlineStatsRow):
     // 🏆/❌/🎮 у всех строк стоят на одних и тех же вертикалях.
-    ["🏆" + wins, "❌" + losses, "🎮" + total].forEach(function (text) {
+    (italianExtra ? ["🏆" + wins, "❌" + losses, "🤝" + draws, "🎮" + total]
+                  : ["🏆" + wins, "❌" + losses, "🎮" + total]).forEach(function (text) {
         const cell = document.createElement("span");
         cell.className = "stats-stat";
         cell.textContent = text;
@@ -8506,7 +10025,7 @@ function renderBotStatsRow(rank, name, wins, losses, byLevel, isSelf) {
         if (event.target && event.target.classList && event.target.classList.contains("stats-user-link")) {
             return; // клик именно по ссылке-нику — она сама ведёт в Telegram
         }
-        openBotDetailsModal(name, wins, losses, byLevel);
+        openBotDetailsModal(name, wins, losses, byLevel, italianExtra);
     });
 
     return row;
@@ -8516,7 +10035,7 @@ function renderBotStatsRow(rank, name, wins, losses, byLevel, isSelf) {
 // загруженные вместе с leaderboard (entry.byLevel из statsBot) — ни одного
 // дополнительного Firebase-чтения здесь нет. Easy отдельно в statsBot не
 // хранится, поэтому и не показывается — только Всего / Средний / Тяжёлый.
-function openBotDetailsModal(name, wins, losses, byLevel) {
+function openBotDetailsModal(name, wins, losses, byLevel, italianExtra) {
     const modal = document.getElementById("bot-details-modal");
     const title = document.getElementById("bot-details-title");
     const body = document.getElementById("bot-details-body");
@@ -8530,10 +10049,12 @@ function openBotDetailsModal(name, wins, losses, byLevel) {
     const hard = levels.hard || {};
     // games = wins + losses для каждой строки, включая "Всего" (общие
     // wins/losses берём из тех же данных leaderboard, что и сама таблица).
+    const italian = !!italianExtra;
+    if (italian) body.classList.add("bot-details-body-italian"); else body.classList.remove("bot-details-body-italian");
     const rows = [
-        { label: t("bot_details_total"), w: wins || 0, l: losses || 0 },
-        { label: t("btn_difficulty_medium"), w: medium.wins || 0, l: medium.losses || 0 },
-        { label: t("btn_difficulty_hard"), w: hard.wins || 0, l: hard.losses || 0 }
+        { label: t("bot_details_total"), w: wins || 0, l: losses || 0, d: italian ? (italianExtra.draws || 0) : 0 },
+        { label: t("btn_difficulty_medium"), w: medium.wins || 0, l: medium.losses || 0, d: medium.draws || 0 },
+        { label: t("btn_difficulty_hard"), w: hard.wins || 0, l: hard.losses || 0, d: hard.draws || 0 }
     ];
 
     rows.forEach(function (lvl) {
@@ -8542,7 +10063,9 @@ function openBotDetailsModal(name, wins, losses, byLevel) {
         labelCell.textContent = lvl.label;
         body.appendChild(labelCell);
 
-        ["🏆 " + lvl.w, "❌ " + lvl.l, "🎮 " + (lvl.w + lvl.l)].forEach(function (text) {
+        const total = lvl.w + lvl.l + (italian ? lvl.d : 0);
+        (italian ? ["🏆 " + lvl.w, "❌ " + lvl.l, "🤝 " + lvl.d, "🎮 " + total]
+                 : ["🏆 " + lvl.w, "❌ " + lvl.l, "🎮 " + total]).forEach(function (text) {
             const cell = document.createElement("span");
             cell.className = "bot-details-stat";
             cell.textContent = text;
@@ -8584,6 +10107,9 @@ function openStatsModal() {
 
     const statsLeaderboardBot = document.getElementById("stats-leaderboard-bot");
     if (statsLeaderboardBot) statsLeaderboardBot.innerHTML = "";
+
+    // Экран открывается на «Русские» — прежнее поведение; итальянские данные грузятся при переключении.
+    if (typeof setStatsRulesetView === "function") setStatsRulesetView("russian");
 
     openModal(statsModal);
 
@@ -8785,6 +10311,123 @@ if (statsTabOnline && statsTabBot && statsViewOnline && statsViewBot) {
     });
 }
 
+// ===== Переключатель «Русские / Итальянские» на общем экране статистики (этап 3) =====
+const statsRulesRu = document.getElementById("stats-rules-ru");
+const statsRulesIt = document.getElementById("stats-rules-it");
+const statsTabsRussian = document.getElementById("stats-tabs-russian");
+const statsViewItalian = document.getElementById("stats-view-italian");
+const statsTitleItalian = document.getElementById("stats-title-italian");
+let statsRulesetView = "russian";
+
+function setStatsRulesetView(which) {
+    if (!statsRulesRu || !statsRulesIt || !statsViewItalian) return;
+    statsRulesetView = which === "italian" ? "italian" : "russian";
+    const italian = statsRulesetView === "italian";
+    statsRulesRu.classList.toggle("stats-tab-active", !italian);
+    statsRulesIt.classList.toggle("stats-tab-active", italian);
+    const botTabActive = !!(statsTabBot && statsTabBot.classList.contains("stats-tab-active"));
+    if (statsTabsRussian) statsTabsRussian.classList.toggle("hidden", italian);
+    if (statsViewOnline) statsViewOnline.classList.toggle("hidden", italian || botTabActive);
+    if (statsViewBot) statsViewBot.classList.toggle("hidden", italian || !botTabActive);
+    if (statsTitleOnline) statsTitleOnline.classList.toggle("hidden", italian || botTabActive);
+    if (statsTitleBot) statsTitleBot.classList.toggle("hidden", italian || !botTabActive);
+    statsViewItalian.classList.toggle("hidden", !italian);
+    if (statsTabsItalian) statsTabsItalian.classList.toggle("hidden", !italian);
+    applyItalianStatsSubView(italian);
+    if (italian) { loadItalianOnlineStats(); loadItalianBotStats(); }
+}
+
+// B2R34: внутри «Итальянские» две отдельные таблицы: «Онлайн» (statsItalianOnline, пишет только сервер) и «С ботом» (statsBotItalian).
+// Русские таблицы и данные не затрагиваются; друг с другом итальянские таблицы не смешиваются.
+const statsTabsItalian = document.getElementById("stats-tabs-italian");
+const statsItTabOnline = document.getElementById("stats-it-tab-online");
+const statsItTabBot = document.getElementById("stats-it-tab-bot");
+const statsItViewOnline = document.getElementById("stats-it-view-online");
+const statsItViewBot = document.getElementById("stats-it-view-bot");
+const statsTitleItalianOnline = document.getElementById("stats-title-italian-online");
+let italianStatsSub = "online";
+function applyItalianStatsSubView(italian) {
+    const online = italianStatsSub !== "bot";
+    if (statsItTabOnline) statsItTabOnline.classList.toggle("stats-tab-active", online);
+    if (statsItTabBot) statsItTabBot.classList.toggle("stats-tab-active", !online);
+    if (statsItViewOnline) statsItViewOnline.classList.toggle("hidden", !(italian && online));
+    if (statsItViewBot) statsItViewBot.classList.toggle("hidden", !(italian && !online));
+    if (statsTitleItalianOnline) statsTitleItalianOnline.classList.toggle("hidden", !(italian && online));
+    if (statsTitleItalian) statsTitleItalian.classList.toggle("hidden", !(italian && !online));
+    if (italian) statsModal.setAttribute("aria-labelledby", online ? "stats-title-italian-online" : "stats-title-italian");
+}
+function loadItalianOnlineStats() {
+    const box = document.getElementById("stats-leaderboard-italian-online");
+    const rankLine = document.getElementById("stats-italian-your-rank");
+    if (!box) return Promise.resolve();
+    box.innerHTML = "";
+    if (rankLine) rankLine.textContent = "";
+    return database.ref("statsItalianOnline").once("value").then(function (snapshot) {
+        if (statsRulesetView !== "italian") return;
+        const data = snapshot.val();
+        box.innerHTML = "";
+        const keys = data ? Object.keys(data) : [];
+        if (!keys.length) { box.textContent = t("stats_no_italian_online_games"); return; }
+        const entries = keys.map(function (key) {
+            const d = data[key] || {};
+            return { id: key, name: d.name || "Игрок", wins: d.wins || 0, losses: d.losses || 0, draws: d.draws || 0, rating: d.rating };
+        });
+        entries.sort(compareLeaderboardEntries);
+        entries.forEach(function (entry, index) {
+            box.appendChild(renderOnlineStatsRow(index + 1, entry.name, entry.wins, entry.losses, entry.draws, entry.rating, entry.id === myTelegramId));
+        });
+        if (rankLine) {
+            let mine = -1;
+            for (let i = 0; i < entries.length; i++) { if (entries[i].id === myTelegramId) { mine = i; break; } }
+            rankLine.textContent = mine >= 0 ? (t("stats_your_rank") + ": №" + (mine + 1) + " " + t("stats_rank_of") + " " + entries.length) : "";
+        }
+    }).catch(function () {
+        box.textContent = t("stats_load_error");
+    });
+}
+if (statsItTabOnline && statsItTabBot) {
+    statsItTabOnline.addEventListener("click", function () { italianStatsSub = "online"; applyItalianStatsSubView(statsRulesetView === "italian"); });
+    statsItTabBot.addEventListener("click", function () { italianStatsSub = "bot"; applyItalianStatsSubView(statsRulesetView === "italian"); });
+}
+
+function loadItalianBotStats() {
+    const box = document.getElementById("stats-leaderboard-italian");
+    if (!box) return Promise.resolve();
+    box.innerHTML = "";
+    // Сначала дописываем отложенные результаты, чтобы своя последняя партия попала в таблицу.
+    return flushItalianBotStatsQueue().then(function () {
+        return database.ref(ITALIAN_BOT_STATS_NODE).once("value");
+    }).then(function (snapshot) {
+        if (statsRulesetView !== "italian") return;
+        const data = snapshot.val();
+        box.innerHTML = "";
+        if (!data) { box.textContent = t("stats_no_italian_bot_games"); return; }
+        const entries = Object.keys(data).map(function (key) {
+            const d = data[key] || {};
+            return {
+                id: key,
+                name: d.name || "Игрок",
+                wins: d.wins || 0,
+                losses: d.losses || 0,
+                draws: d.draws || 0,
+                byLevel: d.byLevel || null
+            };
+        });
+        entries.sort(compareLeaderboardEntries);
+        entries.forEach(function (entry, index) {
+            box.appendChild(renderBotStatsRow(index + 1, entry.name, entry.wins, entry.losses,
+                entry.byLevel, entry.id === myTelegramId, { draws: entry.draws }));
+        });
+    }).catch(function () {
+        box.textContent = t("stats_load_error");
+    });
+}
+
+if (statsRulesRu && statsRulesIt) {
+    statsRulesRu.addEventListener("click", function () { setStatsRulesetView("russian"); });
+    statsRulesIt.addEventListener("click", function () { setStatsRulesetView("italian"); });
+}
+
 if (btnStatsClose) {
     btnStatsClose.addEventListener("click", function () {
         closeModal(statsModal);
@@ -8899,8 +10542,27 @@ function getOpeningBookMove(state, color) {
     return isLegal ? candidate : null;
 }
 
+// Итальянский локальный бот (этап 2): уровни и поиск живут в shared/italian-bot.js и
+// shared/draughts-search.js, подключаются через реестр shared/ruleset-modules.js.
+// Здесь только вызов: русский бот (findBestMove) и итальянский онлайн не затрагиваются.
+function chooseItalianLocalBotMove(state, color) {
+    const adapter = getItalianLocalAdapter();
+    if (window.RulesetModules && window.RulesetModules.has("italian")) {
+        return window.RulesetModules.chooseBotMove("italian", state, color, botDifficulty);
+    }
+    // Запасной путь, если модуль не загрузился: допустимый случайный ход (никогда не нелегальный).
+    const moves = adapter.getLegalMoves(state, color);
+    return moves.length ? moves[Math.floor(Math.random() * moves.length)] : null;
+}
+
 function triggerBotMove() {
     if (!isBotGame || !currentState || currentState.turn !== botColor || currentState.winner) return;
+
+    if (isItalianLocalBotGame()) {
+        const move = chooseItalianLocalBotMove(currentState, botColor);
+        if (move) performMove(move.fromRow, move.fromCol, move.toRow, move.toCol);
+        return;
+    }
 
     if (ownerSessionAttached) {
         triggerOwnerSyncedBotMove();
@@ -9561,8 +11223,8 @@ function startApp() {
 }
 
 function startFirebaseFlows(me) {
-    if (!me || typeof me.id !== "string" || !/^tg_\d+$/.test(me.id)) return false;
-    if (!auth.currentUser || auth.currentUser.uid !== me.id) return false;
+    if (!me || typeof me.id !== "string" || !/^tg_\d+$/.test(me.id)) { typeof itDiag === "function" && itDiag("auth.flows", { started: false, why: "no verified identity" }); return false; }
+    if (!auth.currentUser || auth.currentUser.uid !== me.id) { typeof itDiag === "function" && itDiag("auth.flows", { started: false, why: "Firebase user missing or different from the verified identity" }); return false; }
     if (localOnlyBotGame) { pendingFirebaseIdentity = me; firebaseAuthReady = false; return false; }
     myTelegramId = me.id; myTelegramName = me.name; myTelegramPhotoUrl = (typeof me.photoUrl === "string") ? me.photoUrl : ""; myTelegramUsername = normalizedTelegramUsername(me.username); firebaseAuthReady = true; firebaseFlowsStarted = true; pendingFirebaseIdentity = null;
 
@@ -9581,6 +11243,7 @@ function startFirebaseFlows(me) {
 
     const greetingNameSpan = document.getElementById("user-greeting-name");
     if (greetingNameSpan) { let displayName = myTelegramName.length > 15 ? myTelegramName.substring(0, 15) + "..." : myTelegramName; greetingNameSpan.textContent = displayName; }
+    typeof itDiag === "function" && itDiag("auth.flows", function () { const D = window.ItalianOnlineDiag; return { started: true, uid: D.maskUid(auth.currentUser.uid), canUseFirebase: canUseFirebase(), serverClockReady: serverTimeOffsetReady }; });
     const joinedViaLink = checkForInviteLink();
     if (!joinedViaLink) loadActiveRooms();
     return true;
@@ -9593,6 +11256,14 @@ function activatePendingFirebaseFlows() {
     if (localOnlyBotGame || !pendingFirebaseIdentity) return false;
     const me = pendingFirebaseIdentity;
     if (!auth.currentUser || auth.currentUser.uid !== me.id) { pendingFirebaseIdentity = null; firebaseAuthReady = false; return false; }
+    // A token refresh during an Italian local game may temporarily close the
+    // Firebase gate even though these flows were already started. Re-open only
+    // the gate here; do not replay startup-only effects such as invite handling.
+    if (firebaseFlowsStarted && myTelegramId === me.id) {
+        pendingFirebaseIdentity = null;
+        firebaseAuthReady = true;
+        return true;
+    }
     return startFirebaseFlows(me);
 }
 
@@ -9608,6 +11279,7 @@ function resumeOwnActiveRoom(code) {
         if (!room ||
             !room.pieces ||
             room.status !== "active" ||
+            (typeof canUseRussianOnlineRuntime === "function" && !canUseRussianOnlineRuntime(room)) ||
             room.winner ||
             !room.players) {
             return false;
@@ -9651,6 +11323,20 @@ function resumeOwnActiveRoom(code) {
         console.error("Resume own room failed:", error);
         return false;
     });
+}
+
+// PR-4 online room contract. Legacy rooms created before the discriminator
+// are Russian. Explicit unknown/malformed values are never allowed to fall
+// through into the Russian runtime.
+function normalizeOnlineRoomRuleset(room) {
+    if (!room || typeof room !== "object") return null;
+    if (!Object.prototype.hasOwnProperty.call(room, "ruleset")) return "russian";
+    if (room.ruleset === "russian" || room.ruleset === "italian") return room.ruleset;
+    return null;
+}
+
+function canUseRussianOnlineRuntime(room) {
+    return normalizeOnlineRoomRuleset(room) === "russian";
 }
 
 // ===== ЛОББИ ГРУППЫ (Список комнат) =====
@@ -9959,6 +11645,110 @@ function scheduleLobbyRender() {
     });
 }
 
+// ===== Итальянская часть общего списка «Кто играет?» (Step B) =====
+// Показываются ТОЛЬКО идущие партии (status=active, два игрока). Waiting-комнаты
+// (приглашения) сюда не попадают ни по Rules, ни по этой проверке. Как в русском списке: у своей партии
+// «Продолжить» (итальянская панель), у чужой «Смотреть» (итальянская панель в режиме зрителя, только чтение).
+// Партия, где ОБА игрока не в сети >= 60 с (тот же предикат, что isRoomAbandonedNow), не показывается.
+function isItalianLobbyRoom(room) {
+    if (!room || typeof room !== "object") return false;
+    if (room.ruleset !== "italian" || room.status !== "active" || room.winner) return false;
+    const p = room.players;
+    const light = p && p.light, dark = p && p.dark;
+    return !!light && !!dark &&
+        typeof light.id === "string" && typeof dark.id === "string" &&
+        /^tg_[0-9]+$/.test(light.id) && /^tg_[0-9]+$/.test(dark.id) && light.id !== dark.id;
+}
+
+// Сигнатура только того, что видно в строке (имена/участники), как у русского списка:
+// обычный ход не перерисовывает DOM.
+function computeItalianLobbySignature(room) {
+    if (!isItalianLobbyRoom(room)) return "hidden";
+    return [room.players.light.id, room.players.light.name || "", room.players.dark.id, room.players.dark.name || ""].join("|");
+}
+
+function lobbyKindBadgeHtml(kind) {
+    const key = kind === "italian" ? "lobby_kind_italian" : "lobby_kind_russian";
+    const flag = kind === "italian" ? "🇮🇹" : "🇷🇺";
+    return '<span class="group-room-kind" role="img" aria-label="' + escapeHtml(t(key)) + '">' + flag + '</span>';
+}
+
+// Тот же предикат, что русский isRoomAbandonedNow (общая реализация -- shared/italian-online-presence.js,
+// паритет проверяет tests/italian-online-presence.test.js). Без смещения серверного времени и без presence -- false.
+// «Не показывать» = брошена обоими >= 60 с (isRoomAbandonedNow) ИЛИ присутствие ещё не прочитано. В русском списке присутствие лежит в самой комнате,
+// поэтому строка с первого кадра верна; здесь оно отдельный узел -- строку не рисуем до его первого ответа (ответ null = «записи нет», тогда строка
+// показывается как раньше: нет данных != брошена), иначе партия мигала в списке и пропадала.
+function isItalianLobbyRoomAbandoned(code) {
+    const P = window.ItalianOnlinePresence;
+    if (!P || typeof P.isAbandoned !== "function") return false;
+    if (!(code in lobbyItalianPresenceByCode)) { typeof itDiag === "function" && itDiag("lobby.verdict", function () { return { code: window.ItalianOnlineDiag.maskCode(code), hidden: true, why: "presence not read yet (row hidden until the first answer)" }; }, code, "unread"); return true; }
+    const abandoned = P.isAbandoned(lobbyItalianRoomsByCode[code], lobbyItalianPresenceByCode[code], getEstimatedServerNow(), serverTimeOffsetReady);
+    typeof itDiag === "function" && itDiag("lobby.verdict", function () { const D = window.ItalianOnlineDiag; return Object.assign({ code: D.maskCode(code), hidden: abandoned }, D.explainPresence(lobbyItalianRoomsByCode[code], lobbyItalianPresenceByCode[code], getEstimatedServerNow(), serverTimeOffsetReady)); }, code, abandoned);
+    return abandoned;
+}
+
+function buildItalianLobbyActiveHtml() {
+    let html = "";
+    for (const code in lobbyItalianRoomsByCode) {
+        const room = lobbyItalianRoomsByCode[code];
+        if (!isItalianLobbyRoom(room)) continue;
+        if (isItalianLobbyRoomAbandoned(code)) continue;
+        const itLight = room.players.light, itDark = room.players.dark;
+        const itLightLabel = itLight.name || t("waiting_for_opponent");
+        const itDarkLabel = itDark.name || t("waiting_for_opponent");
+        const itLightAvatar = buildLobbyAvatarMarkup(itLight, itLightLabel);
+        const itDarkAvatar = buildLobbyAvatarMarkup(itDark, itDarkLabel);
+        const itLightText = escapeHtml(itLightLabel);
+        const itDarkText = escapeHtml(itDarkLabel);
+        const codeAttr = escapeHtml(code);
+        const isMine = itLight.id === myTelegramId || itDark.id === myTelegramId;
+        html += `
+                    <div class="group-room-card group-room-card-italian">
+                        <div class="group-room-info active">
+                            <span class="group-room-player group-room-player-light">${itLightAvatar}<span class="group-room-piece" aria-hidden="true">⚫</span><span class="group-room-name">${itLightText}</span></span>
+                            <span class="group-room-vs">vs${lobbyKindBadgeHtml("italian")}</span>
+                            <span class="group-room-player group-room-player-dark"><span class="group-room-name">${itDarkText}</span><span class="group-room-piece" aria-hidden="true">⚪</span>${itDarkAvatar}</span>
+                        </div>
+                        ${isMine
+                            ? `<button class="group-italian-resume-btn group-resume-btn" data-code="${codeAttr}">${t("btn_continue")}</button>`
+                            : `<button class="group-italian-watch-btn group-watch-btn" data-code="${codeAttr}">Смотреть</button>`}
+                    </div>
+                `;
+    }
+    return html;
+}
+
+// Общий вход из лобби в итальянскую панель: закрывает слушатели лобби, открывает второй экран ИТАЛЬЯНСКИХ шашек
+// и передаёт панели действие. Ни записей в Firebase, ни русских обработчиков здесь нет.
+function openItalianPanelFromLobby(action) {
+    stopGroupLobbyListening();
+    if (!showModeScreen("italian")) showScreen(menuScreen);
+    const ui = window.ItalianOnlineTwoPlayerUI;
+    if (ui && typeof ui[action.method] === "function") {
+        ui[action.method](action.arg);
+    } else {
+        showInfoModal(t("err_italian_online_unavailable"), false);
+    }
+}
+
+// «Продолжить» свою итальянскую партию: тот же путь, что у приглашения it_<код> --
+// итальянская панель сама читает комнату и входит в неё, только если я её участник.
+function resumeItalianOnlineFromLobby(code) {
+    typeof itDiag === "function" && itDiag("lobby.continue.tapped", function () { return { code: window.ItalianOnlineDiag.maskCode(code), viaOpenInvite: "it_<code> (same path as the link)" }; });
+    openItalianPanelFromLobby({ method: "openInvite", arg: "it_" + code });
+}
+
+// «Смотреть» чужую итальянскую партию: итальянская панель в режиме зрителя (только чтение). Записей игры нет;
+// единственная запись -- собственная отметка зрителя roomSpectatorsItalian/<код>/<uid> с onDisconnect.remove().
+function watchItalianOnlineFromLobby(code) {
+    if (isItalianLobbyRoomAbandoned(code)) {
+        showInfoModal(t("err_no_active_game"), false);
+        scheduleLobbyRender();
+        return;
+    }
+    openItalianPanelFromLobby({ method: "spectate", arg: code });
+}
+
 // --- Полный рендер списка ИЗ УЖЕ ЗАГРУЖЕННОГО ЛОКАЛЬНОГО КЕША — никаких
 // Firebase-чтений здесь нет вообще, это чистая клиентская операция. Не
 // вызывать напрямую из lobby event-flow — использовать scheduleLobbyRender()
@@ -9976,6 +11766,10 @@ function renderLobbyListFromCache() {
     for (const code in lobbyRoomsByCode) {
         const room = lobbyRoomsByCode[code];
         if (!room) continue;
+        if (!canUseRussianOnlineRuntime(room)) continue;
+        // Foundation stage: Italian has no online runtime yet. Legacy/missing
+        // rooms remain Russian; Italian and unknown rooms stay out of the
+        // existing Russian lobby/runtime until their own path is wired.
 
         // Не показываем завершенные игры
         if (room.status === "finished" || room.winner) continue;
@@ -10067,7 +11861,7 @@ function renderLobbyListFromCache() {
                     <div class="group-room-card">
                         <div class="group-room-info active">
                             <span class="group-room-player group-room-player-light">${lightAvatar}<span class="group-room-piece" aria-hidden="true">⚫</span><span class="group-room-name">${lightName}</span></span>
-                            <span class="group-room-vs">vs</span>
+                            <span class="group-room-vs">vs${lobbyKindBadgeHtml("russian")}</span>
                             <span class="group-room-player group-room-player-dark"><span class="group-room-name">${darkName}</span><span class="group-room-piece" aria-hidden="true">⚪</span>${darkAvatar}</span>
                         </div>
                         <button class="group-resume-btn" data-code="${codeAttr}">${t("btn_continue")}</button>
@@ -10078,7 +11872,7 @@ function renderLobbyListFromCache() {
                     <div class="group-room-card">
                         <div class="group-room-info active">
                             <span class="group-room-player group-room-player-light">${lightAvatar}<span class="group-room-piece" aria-hidden="true">⚫</span><span class="group-room-name">${lightName}</span></span>
-                            <span class="group-room-vs">vs</span>
+                            <span class="group-room-vs">vs${lobbyKindBadgeHtml("russian")}</span>
                             <span class="group-room-player group-room-player-dark"><span class="group-room-name">${darkName}</span><span class="group-room-piece" aria-hidden="true">⚪</span>${darkAvatar}</span>
                         </div>
                         <button class="group-watch-btn" data-code="${codeAttr}">Смотреть</button>
@@ -10088,6 +11882,9 @@ function renderLobbyListFromCache() {
         }
     }
 
+    // Итальянские активные партии (если есть доступ): тот же раздел «Идут игры», у каждой карточки свой флаг.
+    activeHtml += buildItalianLobbyActiveHtml();
+
     let finalHtml = "";
     if (waitingHtml) {
         finalHtml += '<p class="section-title">' + t("lobby_waiting") + '</p>' + waitingHtml;
@@ -10096,7 +11893,10 @@ function renderLobbyListFromCache() {
         finalHtml += '<p class="section-title" style="margin-top: 15px;">' + t("lobby_active") + '</p>' + activeHtml;
     }
     if (!finalHtml) {
-        finalHtml = '<p class="section-title lobby-empty-state">' + t("lobby_empty") + '</p>';
+        // Итальянская часть ещё загружается: пустой список не объявляем (иначе «никто не играет» мигает перед появлением партий).
+        finalHtml = (typeof isItalianLobbyLoading === "function" && isItalianLobbyLoading())
+            ? '<p class="section-title lobby-empty-state">' + t("loading") + '</p>'
+            : '<p class="section-title lobby-empty-state">' + t("lobby_empty") + '</p>';
     }
     groupRoomsList.innerHTML = finalHtml;
 
@@ -10113,13 +11913,25 @@ function renderLobbyListFromCache() {
         });
     });
 
-    groupRoomsList.querySelectorAll('.group-watch-btn').forEach(btn => {
+    groupRoomsList.querySelectorAll('.group-watch-btn:not(.group-italian-watch-btn)').forEach(btn => {
         btn.addEventListener('click', function() {
             watchGroupRoom(this.getAttribute('data-code'));
         });
     });
 
-    groupRoomsList.querySelectorAll('.group-resume-btn').forEach(btn => {
+    groupRoomsList.querySelectorAll('.group-italian-watch-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            watchItalianOnlineFromLobby(this.getAttribute('data-code'));
+        });
+    });
+
+    groupRoomsList.querySelectorAll('.group-italian-resume-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            resumeItalianOnlineFromLobby(this.getAttribute('data-code'));
+        });
+    });
+
+    groupRoomsList.querySelectorAll('.group-resume-btn:not(.group-italian-resume-btn)').forEach(btn => {
         btn.addEventListener('click', function() {
             const code = this.getAttribute('data-code');
             resumeOwnActiveRoom(code).then(function (resumed) {
@@ -10153,6 +11965,10 @@ function runLobbyStaleSweep() {
     for (const code in lobbyRoomsByCode) {
         const room = lobbyRoomsByCode[code];
         if (!room) continue;
+
+        // This sweep performs destructive Russian-room cleanup. Unsupported or
+        // future rulesets must be left untouched by a client that cannot run them.
+        if (!canUseRussianOnlineRuntime(room)) continue;
 
         // АВТО-ЧИСТКА: зависшее предложение реванша.
         //
@@ -10288,6 +12104,141 @@ function stopGroupLobbyListening() {
     }
     lobbyRoomsByCode = {};
     lobbySignatureByCode = {};
+    stopItalianLobbyListening();
+}
+
+// Снимает итальянский слушатель, чистит кеш и инвалидирует незавершённую проверку тестера.
+function stopItalianLobbyListening() {
+    lobbyItalianSession++;
+    if (lobbyItalianQuery) {
+        lobbyItalianQuery.off();
+        lobbyItalianQuery = null;
+    }
+    for (const code in lobbyItalianPresenceWatch) detachItalianPresenceWatch(code);
+    if (lobbyItalianSweepTimer !== null) {
+        clearInterval(lobbyItalianSweepTimer);
+        lobbyItalianSweepTimer = null;
+    }
+    lobbyItalianRoomsByCode = {};
+    lobbyItalianSignatureByCode = {};
+    lobbyItalianPresenceByCode = {};
+    lobbyItalianAbandonedByCode = {};
+    lobbyItalianStatus = "off";
+    lobbyItalianListRead = false;
+    lobbyItalianLoadGaveUp = false;
+    if (lobbyItalianLoadTimer !== null) {
+        clearTimeout(lobbyItalianLoadTimer);
+        lobbyItalianLoadTimer = null;
+    }
+}
+
+// Один слушатель presence на карточку (только пока партия в списке). Ошибка чтения -- это «неизвестно», не «брошена».
+function attachItalianPresenceWatch(code, session) {
+    if (lobbyItalianPresenceWatch[code]) return;
+    const ref = database.ref("roomsItalianPresence/" + code);
+    const listener = function (snapshot) {
+        if (session !== lobbyItalianSession) return;
+        lobbyItalianPresenceByCode[code] = snapshot.val();
+        recomputeItalianAbandoned();
+    };
+    lobbyItalianPresenceWatch[code] = { ref: ref, listener: listener };
+    // Ошибка чтения presence = «неизвестно», не «брошена»: строка показывается (как при ответе null), ожидание не бесконечно.
+    ref.on("value", listener, function () {
+        if (session !== lobbyItalianSession || !lobbyItalianPresenceWatch[code] || (code in lobbyItalianPresenceByCode)) return;
+        lobbyItalianPresenceByCode[code] = null;
+        recomputeItalianAbandoned();
+        scheduleLobbyRender();
+    });
+}
+
+function detachItalianPresenceWatch(code) {
+    const w = lobbyItalianPresenceWatch[code];
+    if (!w) return;
+    try { w.ref.off("value", w.listener); } catch (_) {}
+    delete lobbyItalianPresenceWatch[code];
+    delete lobbyItalianPresenceByCode[code];
+    delete lobbyItalianAbandonedByCode[code];
+}
+
+// Перерисовка нужна, только если у какой-то карточки изменился признак «брошена» (в том числе просто от времени).
+function recomputeItalianAbandoned() {
+    let flipped = false;
+    for (const code in lobbyItalianRoomsByCode) {
+        const now = isItalianLobbyRoomAbandoned(code);
+        if (now !== (lobbyItalianAbandonedByCode[code] === true)) {
+            lobbyItalianAbandonedByCode[code] = now;
+            flipped = true;
+        }
+    }
+    if (flipped) scheduleLobbyRender();
+}
+
+// Итальянская часть списка. Ничего не пишет. Не тестер -- запроса нет вообще.
+function startItalianLobbyListening() {
+    stopItalianLobbyListening();
+    const session = lobbyItalianSession;
+    if (!canUseFirebase() || typeof myTelegramId !== "string" || !/^tg_[0-9]+$/.test(myTelegramId)) return;
+    lobbyItalianStatus = "checking";
+    lobbyItalianLoadTimer = setTimeout(function () {
+        lobbyItalianLoadTimer = null;
+        if (session !== lobbyItalianSession) return;
+        lobbyItalianLoadGaveUp = true;
+        scheduleLobbyRender();
+    }, ITALIAN_LOBBY_LOAD_MAX_MS);
+    database.ref("italianOnlineControl/testers/" + myTelegramId).once("value").then(function (snapshot) {
+        if (session !== lobbyItalianSession || !canUseFirebase()) return;
+        if (snapshot.val() !== true) {
+            lobbyItalianStatus = "off";
+            scheduleLobbyRender();
+            return;
+        }
+        const query = database.ref("roomsItalian").orderByChild("status").equalTo("active").limitToFirst(ITALIAN_LOBBY_LIMIT);
+        lobbyItalianQuery = query;
+        lobbyItalianStatus = "live";
+        lobbyItalianSweepTimer = setInterval(recomputeItalianAbandoned, ITALIAN_LOBBY_SWEEP_MS);
+        const failed = function (error) {
+            if (session !== lobbyItalianSession) return;
+            // Нет доступа (например, Rules ещё не обновлены) или сбой: итальянская часть отключается,
+            // русский список не затрагивается.
+            console.log("Italian lobby unavailable:", error && error.code ? error.code : "error");
+            stopItalianLobbyListening();
+            lobbyItalianStatus = "unavailable";
+            scheduleLobbyRender();
+        };
+        query.on("child_added", function (child) {
+            if (session !== lobbyItalianSession) return;
+            lobbyItalianRoomsByCode[child.key] = child.val();
+            lobbyItalianSignatureByCode[child.key] = computeItalianLobbySignature(child.val());
+            lobbyItalianAbandonedByCode[child.key] = true; // присутствие ещё не прочитано: строки нет; его приход перерисует список
+            attachItalianPresenceWatch(child.key, session);
+            scheduleLobbyRender();
+        }, failed);
+        query.on("child_changed", function (child) {
+            if (session !== lobbyItalianSession) return;
+            const signature = computeItalianLobbySignature(child.val());
+            lobbyItalianRoomsByCode[child.key] = child.val();
+            if (signature === lobbyItalianSignatureByCode[child.key]) return;
+            lobbyItalianSignatureByCode[child.key] = signature;
+            scheduleLobbyRender();
+        }, failed);
+        query.once("value").then(function () {
+            if (session !== lobbyItalianSession) return;
+            lobbyItalianListRead = true;   // child_added всех комнат уже доставлены
+            scheduleLobbyRender();
+        }, failed);
+        query.on("child_removed", function (child) {
+            if (session !== lobbyItalianSession) return;
+            detachItalianPresenceWatch(child.key);
+            delete lobbyItalianRoomsByCode[child.key];
+            delete lobbyItalianSignatureByCode[child.key];
+            scheduleLobbyRender();
+        }, failed);
+    }).catch(function (error) {
+        if (session !== lobbyItalianSession) return;
+        console.log("Italian lobby access check failed:", error && error.code ? error.code : "error");
+        lobbyItalianStatus = "unavailable";
+        scheduleLobbyRender();
+    });
 }
 
 function showGroupLobby() {
@@ -10368,6 +12319,9 @@ function showGroupLobby() {
         lobbyStaleCheckTimer = setInterval(runLobbyStaleSweep, LOBBY_STALE_CHECK_INTERVAL_MS);
     }
 
+    // Итальянская часть единого списка (Step B): отдельный слушатель, только для тестеров.
+    startItalianLobbyListening();
+
     // ПЕРВЫЙ sweep — отдельно, с коротким timeout, НЕ дожидаясь первого
     // тика интервала (8с). Реальный сценарий бага: пользователь открывает
     // "Кто играет" и почти сразу кликает "Смотреть" — это останавливает
@@ -10393,7 +12347,7 @@ function joinGroupRoom(code) {
     database.ref("rooms/" + roomCode).once("value").then(function(snapshot) {
         if (!canUseFirebase()) return;
         const room = snapshot.val();
-        if (!room || room.status !== "waiting") {
+        if (!room || room.status !== "waiting" || !canUseRussianOnlineRuntime(room)) {
             showInfoModal(t("err_room_taken"), false);
             return;
         }
@@ -10533,6 +12487,8 @@ function watchGroupRoomAsSpectator(code) {
     
     // Запускаем слушатель игры без установки Presence
     detachRoomListener();
+    // Fresh token belongs only to the room listener installed below.
+    const myRulesetSourceToken = beginOnlineRulesetMoveSourceLifecycle();
     // Новая подписка на комнату — прежние доказательства свежести больше не
     // действуют: они относились к другой комнате/другому listener'у.
     resetRoomFreshnessProof();
@@ -10544,7 +12500,7 @@ function watchGroupRoomAsSpectator(code) {
         // подтверждать для текущей комнаты.
         if (myListenerGen !== listenerGeneration) return;
         const room = snapshot.val();
-        if (!room || !room.pieces) {
+        if (!room || !room.pieces || !canUseRussianOnlineRuntime(room)) {
             detachRoomListener();
             if (myCurrentSpectatorRef) { if (canUseFirebase()) myCurrentSpectatorRef.remove(); myCurrentSpectatorRef = null; }
             showScreen(menuScreen);
@@ -10655,7 +12611,21 @@ function armPresenceReauthWatcher() {
             stopPresenceHeartbeat(); stopOwnerPresenceHeartbeat(); stopOwnerBotMoveRetryTimer();
             return;
         }
-        if (localOnlyBotGame) { firebaseAuthReady = false; return; }
+        if (localOnlyBotGame) {
+            // A valid token refresh may happen while Firebase is intentionally gated
+            // for an Italian local game. Preserve the verified identity so leaving
+            // local-only mode can restore the already-started Firebase flows.
+            if (!pendingFirebaseIdentity && firebaseFlowsStarted && myTelegramId === user.uid) {
+                pendingFirebaseIdentity = {
+                    id: user.uid,
+                    name: myTelegramName || "Игрок",
+                    photoUrl: myTelegramPhotoUrl || "",
+                    username: myTelegramUsername || ""
+                };
+            }
+            firebaseAuthReady = false;
+            return;
+        }
         if (firebaseFlowsStarted && myTelegramId === user.uid) firebaseAuthReady = true;
         if (!canUseFirebase() || !isOnlineGame || !roomCode || isSpectator) return;
         if (typeof revivePresenceAfterReconnect === "function") revivePresenceAfterReconnect();
@@ -10692,6 +12662,7 @@ async function bootstrapApp() {
         // normal minimum timer. Для обычного запуска запускаем независимый
         // visual timer и ждём auth параллельно.
         const inviteLaunch = hasInviteIntent();
+        typeof itDiag === "function" && itDiag("bootstrap.after100ms", function () { const D = window.ItalianOnlineDiag; D.ctx("after-100ms"); return { hasInviteIntent: inviteLaunch }; });
         let normalMinElapsed = false;
         let normalAppReady = false;
 
@@ -10730,6 +12701,7 @@ async function bootstrapApp() {
         authPhase = "ready";
     } catch (error) {
         console.error("Telegram auth failed:", error);
+        typeof itDiag === "function" && itDiag("auth.failed", function () { return { err: window.ItalianOnlineDiag.errCode(error) }; });
         try { await auth.signOut(); } catch (e) {}
         firebaseAuthReady = false;
         pendingFirebaseIdentity = null;

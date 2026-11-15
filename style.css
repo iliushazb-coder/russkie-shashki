@@ -143,6 +143,7 @@
    overlay или второго читаемого меню. Анимация принадлежит ТОЛЬКО новому
    экрану и занимает 180ms. Game/Firebase не ждут анимацию. */
 #menu-screen:not(.hidden),
+#mode-screen:not(.hidden),
 #time-control-screen:not(.hidden),
 #group-lobby-screen:not(.hidden),
 #waiting-screen:not(.hidden),
@@ -190,6 +191,7 @@ body {
 /* WIDE: главное меню + lobby — широкий молочно-золотой свет в центральной
    сцене и два более слабых боковых/нижних акцента. */
 body:has(:where(#menu-screen:not(.hidden))),
+body:has(:where(#mode-screen:not(.hidden))),
 body:has(:where(#group-lobby-screen:not(.hidden))) {
     --theme-ambient-primary-x: 50%;
     --theme-ambient-primary-y: 31%;
@@ -273,7 +275,7 @@ h1 {
     text-shadow: 0 2px 14px rgba(0,0,0,0.6), 0 0 26px rgba(255, 195, 100, 0.35);
 }
 
-#menu-screen, #waiting-screen, #time-control-screen {
+#menu-screen, #mode-screen, #waiting-screen, #time-control-screen {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -2114,6 +2116,16 @@ button.danger-button.button-press-flash::after {
     white-space: nowrap;
 }
 
+/* ===== Этап 3: статистика итальянского бота (+ничьи) ===== */
+.stats-info-bot.stats-info-bot-italian { grid-template-columns: repeat(4, 1fr); }
+.bot-details-body.bot-details-body-italian { grid-template-columns: minmax(0, 2fr) repeat(4, 1fr); font-size: 12.5px; }
+.bot-details-body.bot-details-body-italian > * { padding-left: 3px; padding-right: 3px; }
+.bot-details-body.bot-details-body-italian > :nth-child(-n+4),
+.bot-details-body.bot-details-body-italian > :nth-last-child(-n+4) { background: none; border-bottom: 1px solid rgba(255, 215, 148, 0.09); }
+.bot-details-body.bot-details-body-italian > :nth-child(-n+5) { background: rgba(255, 215, 148, 0.055); }
+.bot-details-body.bot-details-body-italian > :nth-last-child(-n+5) { border-bottom: 0; }
+#stats-rules-switch { margin-bottom: 6px; }
+
 @media (max-width: 360px) {
     .stats-modal-box {
         width: 95vw;
@@ -2467,6 +2479,16 @@ button.danger-button.button-press-flash::after {
     text-transform: uppercase;
 }
 
+/* Флаг разновидности шашек в карточке общего списка «Кто играет?» (Step B). */
+.group-room-kind {
+    display: block;
+    margin-top: 2px;
+    font-size: 13px;
+    line-height: 1;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
 .group-room-spectators {
     font-size: 12px;
     color: #b8a888;
@@ -2685,7 +2707,10 @@ button.danger-button.button-press-flash::after {
     backdrop-filter: blur(10px) saturate(120%);
     -webkit-backdrop-filter: blur(10px) saturate(120%);
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    animation: fadeInOverlay 0.15s ease;
+    /* Сплошная подложка под полупрозрачными слоями токена: заставка непрозрачна с самого
+       первого кадра. Fade-in убран намеренно: он стартовал с opacity 0 и на мгновение
+       открывал главное меню под заставкой при холодном запуске. */
+    background-color: #170705;
 }
 
 /* №8: две шашки вращаются вокруг общей оси. Сам механизм остаётся
@@ -2960,6 +2985,7 @@ button.danger-button.button-press-flash::after {
     /* Экранный переход полностью отключён. JS при reduce сразу
        прячет old screen; CSS дополнительно гасит enter. */
     #menu-screen:not(.hidden),
+    #mode-screen:not(.hidden),
     #time-control-screen:not(.hidden),
     #group-lobby-screen:not(.hidden),
     #waiting-screen:not(.hidden),

@@ -1,0 +1,470 @@
+/* theme-premium.css -- единая «премиальная» тема (лакированное дерево, золото, бордовые глянцевые кнопки).
+   ЭТАП 1: оформляется ТОЛЬКО второй экран #mode-screen (после «Играть»). Глобальные .menu-button, style.css, main-menu.css,
+   игровые экраны и модальные окна НЕ затрагиваются: все правила привязаны к #mode-screen / .pm-bg.
+   Подключается после main-menu.css. Только визуальный слой: ни JS, ни разметка экрана, ни обработчики не меняются.
+   Фон .pm-bg-board -- готовые картинки GPT-6 assets/bg-wood-plain-390x844.webp (по умолчанию) и assets/bg-wood-plain-320x568.webp (пропорции от 52/100). */
+:root {
+    --pm-serif: "Playfair Display", "Georgia", "Times New Roman", serif;
+    --pm-gold: #f6d27c;
+    --pm-gold-line: #e8bd72;
+    --pm-burgundy-1: #9a382e;
+    --pm-burgundy-2: #64200f;
+    --pm-burgundy-3: #3b110a;
+    --pm-wood-dark: #2a1208;
+}
+
+/* ---- фон внутренних экранов: fixed-слой без нажатий, шашек и дамки на нём нет ---- */
+.pm-bg {
+    display: none;
+    position: fixed;
+    inset: 0;
+    height: 100%;
+    height: 100svh;
+    bottom: auto;
+    z-index: -2;
+    overflow: hidden;
+    pointer-events: none;
+}
+body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-screen, #game-screen, #it86-screen):not(.hidden)) > .pm-bg { display: block; }
+.pm-bg-board {
+    position: absolute;
+    inset: 0;
+    /* готовая графика GPT-6: рамка и шахматные края внутри картинки, пропорции сохранены (cover), без шашек */
+    background: var(--pm-wood-dark) url("assets/bg-wood-plain-390x844.webp?v=1") 50% 50% / cover no-repeat;
+}
+@media (min-aspect-ratio: 52/100) { .pm-bg-board { background-image: url("assets/bg-wood-plain-320x568.webp?v=1"); } }
+body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-screen):not(.hidden)) > h1 { display: none; }
+
+/* ---- сам экран ---- */
+#mode-screen {
+    max-width: 340px;
+    margin-left: auto;
+    margin-right: auto;
+    gap: 16px;
+    padding: 0 20px;
+    box-sizing: border-box;
+    min-height: calc(100svh - 80px);
+    justify-content: center;
+}
+#mode-screen .section-title {
+    font-family: var(--pm-serif);
+    font-size: clamp(26px, 8.4vw, 36px);
+    font-weight: 800;
+    line-height: 1.15;
+    letter-spacing: 0;
+    text-transform: none;
+    text-align: center;
+    margin: 0 0 14px;
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .7), 0 0 14px rgba(255, 180, 80, .25);
+}
+#mode-screen .section-title::after {      /* золотая линия-разделитель под заголовком */
+    content: "";
+    display: block;
+    width: 62%;
+    height: 2px;
+    margin: 12px auto 0;
+    background: linear-gradient(90deg, transparent, var(--pm-gold-line) 22%, var(--pm-gold-line) 78%, transparent);
+    opacity: .85;
+}
+/* Кнопки -- как в главном меню B2R8: «Играть с другом»/«Играть с ботом» = золотая кнопка «Играть» (.mm-play), «Назад» = нижние кнопки (.mm-dock-btn) */
+#mode-screen .menu-button {
+    position: relative;
+    max-width: 320px;
+    height: 56px;
+    padding: 0 44px;
+    border: 0;
+    border-radius: 30px;
+    font-family: var(--pm-serif);
+    font-size: 22px;
+    font-weight: 800;
+    line-height: 1.1;
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .65);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(180deg, rgba(255, 214, 190, .22) 0%, rgba(255, 214, 190, .05) 42%, rgba(255, 214, 190, 0) 50%), linear-gradient(180deg, #9a382e 0%, #64200f 58%, #3b110a 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .4), inset 0 -4px 8px rgba(0, 0, 0, .4), 0 0 0 3px #3a130d, 0 0 0 4.5px #e8bd72, 0 10px 22px rgba(0, 0, 0, .55), 0 0 26px rgba(255, 190, 90, .14);
+    transition: filter .12s ease;
+}
+#mode-screen .menu-button::before,
+#mode-screen .menu-button::after {          /* золотые завитки по краям, как у «Играть» */
+    content: "";
+    position: absolute;
+    inset: auto;
+    top: 50%;
+    width: 26px;
+    height: 18px;
+    margin-top: -9px;
+    border-radius: 0;
+    opacity: .9;
+    pointer-events: none;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='18' viewBox='0 0 26 18'%3E%3Cg fill='none' stroke='%23efc777' stroke-width='1.300' stroke-linecap='round'%3E%3Cpath d='M1 9h7M18 9h7'/%3E%3Cpath d='M13 2.500l2.600 6.500-2.600 6.500-2.600-6.500z' fill='%23efc777'/%3E%3Cpath d='M8.500 9c0-3 1.500-5 3.500-5.500M8.500 9c0 3 1.500 5 3.500 5.500M17.500 9c0-3-1.500-5-3.500-5.500M17.500 9c0 3-1.500 5-3.500 5.500'/%3E%3C/g%3E%3C/svg%3E") 50% 50% / contain no-repeat;
+}
+#mode-screen .menu-button::before { left: 18px; }
+#mode-screen .menu-button::after { right: 18px; left: auto; transition: none; }
+#mode-screen .menu-button:active { transform: none; filter: brightness(1.08); }
+/* «Назад»: как «Кто играет?» / «Статистика» главного меню */
+#mode-screen .danger-button {
+    max-width: 200px;
+    height: 50px;
+    margin-top: 12px;
+    padding: 0 8px;
+    border: 1.5px solid rgba(224, 176, 112, .9);
+    border-radius: 26px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff3d6;
+    text-shadow: none;
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+#mode-screen .danger-button::before,
+#mode-screen .danger-button::after { display: none; }
+@media (max-height: 640px) {
+    #mode-screen { gap: 12px; }
+    #mode-screen .menu-button { height: 52px; font-size: 20px; }
+    #mode-screen .danger-button { height: 46px; }
+}
+@media (max-width: 340px) {
+    #mode-screen .menu-button { padding: 0 38px; font-size: 18px; white-space: nowrap; }
+    #mode-screen .menu-button::before { left: 12px; }
+    #mode-screen .menu-button::after { right: 12px; }
+}
+
+/* ================= ЭТАП 2: маленькие окна (единый шаблон для всех стран и вариантов) =================
+   Фон -- чистый деревянный фрагмент (assets/modal-wood-center-b2r8.webp), без клеток, шашек и дамки; золотая рамка.
+   Размеры шаблона ОДИНАКОВЫ во всех языках и вариантах шашек (русские/итальянские окна используют одни и те же классы):
+   ширина min(88vw, 320px), минимальная высота 230px (два действия) / 300px (три действия); текст переносится внутри шаблона, шаблон не растёт под язык.
+   Только оформление: кнопки, id, обработчики, тексты и JS не меняются. */
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .modal-box {
+    box-sizing: border-box;
+    width: min(88vw, 320px);
+    max-width: none;
+    min-height: 270px;
+    padding: 26px 22px 24px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    border: 0;
+    border-radius: 26px;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background:
+        linear-gradient(180deg, rgba(24, 8, 3, .52) 0%, rgba(24, 8, 3, .66) 100%),
+        #2a1208 url("assets/modal-wood-center-b2r8.webp?v=1") 50% 50% / cover no-repeat;
+    box-shadow: inset 0 0 0 2px rgba(247, 201, 121, .92), inset 0 0 0 4px rgba(52, 19, 8, .85), inset 0 0 14px rgba(255, 204, 115, .30), 0 0 20px rgba(255, 174, 60, .30), 0 18px 40px rgba(0, 0, 0, .6);
+}
+:is(#continue-or-new-modal, #offline-opponent-modal) .modal-box { min-height: 300px; }
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .modal-box::before { display: none; }
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .modal-box > p {
+    margin: 0 0 6px;
+    font-family: var(--pm-serif);
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1.25;
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .75);
+}
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .modal-buttons {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    margin-top: 12px;
+}
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .menu-button {
+    width: 100%;
+    max-width: none;
+    height: 48px;
+    padding: 0 14px;
+    border: 1.5px solid rgba(224, 176, 112, .9);
+    border-radius: 26px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff3d6;
+    text-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .danger-button {
+    background: linear-gradient(180deg, #5a2a24 0%, #3a1712 60%, #250d09 100%);
+    color: #ecd196;
+}
+:is(#resign-confirm-modal, #it86-resign-confirm, #draw-offer-modal, #it86-draw-offer, #rematch-request-modal, #opponent-left-modal, #offline-opponent-modal, #continue-or-new-modal, #back-confirm-modal, #it86-back-confirm, #end-game-modal, #it86-end, #info-modal, #spectator-interrupted-modal, #bot-details-modal, #bot-ruleset-modal, #bot-difficulty-modal) .menu-button::after { display: none; }
+/* ================= ЭТАП 3: «Статистика» как полноэкранный экран ================= */
+/* Минимально рискованный способ: окно остаётся тем же #stats-modal (те же id, JS, открытие/закрытие, вкладки, загрузка);
+   меняется только CSS -- оверлей получает фон GPT-6, а .stats-modal-box растягивается на весь экран без собственного фона. */
+#stats-modal.modal-overlay {
+    align-items: stretch;
+    justify-content: stretch;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: #2a1208 url("assets/bg-wood-plain-390x844.webp?v=1") 50% 50% / cover no-repeat;
+}
+@media (min-aspect-ratio: 52/100) { #stats-modal.modal-overlay { background-image: url("assets/bg-wood-plain-320x568.webp?v=1"); } }
+#stats-modal .stats-modal-box {
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    padding: calc(26px + env(safe-area-inset-top, 0px)) 26px calc(26px + env(safe-area-inset-bottom, 0px));
+    gap: 10px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    animation: none;
+}
+#stats-modal .stats-modal-box::before { display: none; }
+/* шапка: вкладки + заголовок на тёмной стеклянной планке (читается поверх шахматных клеток) */
+#stats-modal .stats-modal-header {
+    margin: 0;
+    padding: 10px 10px 8px;
+    border: 1px solid rgba(232, 189, 114, .55);
+    border-radius: 18px;
+    background: rgba(24, 8, 3, .72);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .18), 0 6px 16px rgba(0, 0, 0, .45);
+}
+#stats-modal .stats-section-title {
+    font-family: var(--pm-serif);
+    font-size: 17px;
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .7);
+}
+#stats-modal .stats-tab-btn { font-size: 14px; }
+/* список: внутренняя прокрутка на тёмной панели */
+#stats-modal .stats-modal-body {
+    padding: 8px 8px 8px;
+    border: 1px solid rgba(232, 189, 114, .45);
+    border-radius: 18px;
+    background: rgba(24, 8, 3, .68);
+    box-shadow: inset 0 0 18px rgba(0, 0, 0, .35);
+}
+/* «Назад» -- бордово-золотая, закреплена снизу */
+#stats-modal .stats-modal-footer { margin-top: 2px; }
+#stats-modal .stats-modal-footer .menu-button {
+    max-width: 300px;
+    height: 50px;
+    margin: 0 auto;
+    border: 1.5px solid rgba(224, 176, 112, .9);
+    border-radius: 26px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff3d6;
+    text-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+#stats-modal .stats-modal-footer .menu-button::after { display: none; }
+@media (max-height: 640px) {
+    #stats-modal .stats-modal-box { padding: calc(18px + env(safe-area-inset-top, 0px)) 22px calc(18px + env(safe-area-inset-bottom, 0px)); gap: 8px; }
+    #stats-modal .stats-modal-footer .menu-button { height: 46px; }
+}
+
+/* ================= ЭТАП 3: время партии, ожидание соперника, лобби «Кто играет?» ================= */
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) {
+    box-sizing: border-box;
+    max-width: 340px;
+    margin-left: auto;
+    margin-right: auto;
+    padding: 18px 22px 18px;
+    gap: 12px;
+    min-height: calc(100svh - 80px);
+    justify-content: center;
+}
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) .menu-button {
+    max-width: 300px;
+    height: 48px;
+    padding: 0 14px;
+    border: 1.5px solid rgba(224, 176, 112, .9);
+    border-radius: 26px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    color: #fff3d6;
+    text-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) .menu-button::after { display: none; }
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) .danger-button {
+    background: linear-gradient(180deg, #5a2a24 0%, #3a1712 60%, #250d09 100%);
+    color: #ecd196;
+    margin-top: 6px !important;
+}
+/* заголовки: золотой шрифт с тенью на тёмной планке */
+#time-control-screen > p,
+#group-lobby-screen > h2,
+#waiting-invite-prompt,
+#waiting-text {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0 0 4px;
+    padding: 10px 12px;
+    border: 1px solid rgba(232, 189, 114, .5);
+    border-radius: 18px;
+    background: rgba(24, 8, 3, .72);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .18), 0 6px 16px rgba(0, 0, 0, .45);
+    font-family: var(--pm-serif);
+    font-size: 20px;
+    font-weight: 800;
+    line-height: 1.25;
+    text-align: center;
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .7);
+}
+#waiting-text, #waiting-invite-prompt { font-size: 17px; }
+/* «Ожидание»: панель-обёртка без стекла -- блоки сами на тёмных планках */
+#waiting-screen {
+    border: 0;
+    background: none;
+    box-shadow: none;
+}
+/* «Кто играет?»: список и карточки комнат на тёмных планках */
+#group-rooms-list { margin-bottom: 8px; }
+#group-lobby-screen .group-room-card {
+    background: rgba(24, 8, 3, .72);
+    border: 1px solid rgba(232, 189, 114, .5);
+}
+@media (max-height: 640px) {
+    :is(#time-control-screen, #group-lobby-screen, #waiting-screen) { gap: 9px; padding-top: 10px; padding-bottom: 10px; }
+    :is(#time-control-screen, #group-lobby-screen, #waiting-screen) .menu-button { height: 42px; }
+    #time-control-screen > p, #group-lobby-screen > h2 { font-size: 17px; padding: 8px 10px; }
+}
+
+/* ================= ЭТАП 4: остальные окна (итог партии, информация, зритель, сложность бота, правила бота, подробности бота) ================= */
+/* типы шаблонов (одинаковы для всех языков и RuleSet): сообщение/подтверждение 270 px; три действия 300 px; четыре действия 360 px; все шириной 320 px */
+:is(#bot-details-modal, #bot-ruleset-modal) .modal-box { min-height: 300px; }
+/* окно итога вмещает заголовок, причину, рейтинг, строку про реванш и кнопки на любом языке: один шаблон 370 px */
+:is(#end-game-modal, #it86-end) .modal-box { min-height: 370px; }
+#bot-difficulty-modal .modal-box { min-height: 360px; }
+/* окна итога: цвет настроения (победа/поражение/ничья) остаётся только в цвете заголовка, фон и рамка -- общие */
+:is(#end-game-modal, #it86-end).modal-overlay .modal-box {
+    background:
+        linear-gradient(180deg, rgba(24, 8, 3, .52) 0%, rgba(24, 8, 3, .66) 100%),
+        #2a1208 url("assets/modal-wood-center-b2r8.webp?v=1") 50% 50% / cover no-repeat;
+    border: 0;
+    box-shadow: inset 0 0 0 2px rgba(247, 201, 121, .92), inset 0 0 0 4px rgba(52, 19, 8, .85), inset 0 0 14px rgba(255, 204, 115, .30), 0 0 20px rgba(255, 174, 60, .30), 0 18px 40px rgba(0, 0, 0, .6);
+}
+:is(#end-game-modal, #it86-end).modal-overlay .modal-box::before { display: none; }
+/* вторичные строки окон (причина, рейтинг, ожидание реванша): мельче и светлее заголовка */
+:is(#end-game-modal, #it86-end, #info-modal) .modal-box > p:not(.end-game-text) {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+    color: rgba(255, 243, 214, .88);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .7);
+}
+:is(#end-game-modal, #it86-end) .rematch-wait-note { color: rgba(255, 243, 214, .88); text-shadow: 0 1px 2px rgba(0, 0, 0, .7); }
+:is(#end-game-modal, #it86-end) .end-game-text { text-shadow: 0 2px 3px rgba(0, 0, 0, .75); }
+/* подробности бота: тёмная панель с разбивкой по уровням */
+#bot-details-modal .bot-details-body {
+    border: 1px solid rgba(232, 189, 114, .45);
+    border-radius: 14px;
+    background: rgba(24, 8, 3, .6);
+    color: #fff3d6;
+}
+
+/* ================= ЭТАП 5: игровой экран (один для всех RuleSet: русские, итальянские и будущие) =================
+   Фон -- тот же .pm-bg (assets/bg-wood-plain*.webp), позади интерфейса (z-index -2, без нажатий), не перекрывает доску и кнопки.
+   Доска, клетки, шашки, дамки, подсветки, анимации и JS НЕ ТРОГАЮТСЯ: меняются только цвета панелей игроков, кнопки и заголовок. */
+/* заголовок: золотой, как в меню; на низких экранах (320x568 и т.п.) скрыт, чтобы доска, панели и кнопки поместились без прокрутки */
+body:has(#game-screen:not(.hidden)) > h1 {
+    font-family: var(--pm-serif);
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .7), 0 0 14px rgba(255, 180, 80, .25);
+}
+@media (max-height: 700px) { body:has(#game-screen:not(.hidden)) > h1 { display: none; } }
+/* панели игроков: тёмное стекло с золотой кромкой (состояния .turn-active/.turn-inactive/.turn-cue остаются старыми и перекрывают эти цвета) */
+#game-screen .player-panel {
+    background: linear-gradient(180deg, rgba(60, 20, 12, .82), rgba(24, 8, 3, .82));
+    border-color: rgba(232, 189, 114, .55);
+}
+/* кнопки «Ничья», «Сдаться», «Назад» -- бордово-золотые, как в меню (размеры и раскладка прежние) */
+#game-screen .menu-button {
+    border: 1.5px solid rgba(224, 176, 112, .9);
+    color: #fff3d6;
+    text-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+#game-screen .danger-button {
+    background: linear-gradient(180deg, #5a2a24 0%, #3a1712 60%, #250d09 100%);
+    color: #ecd196;
+}
+/* круглые кнопки реакций: бордовое стекло с золотой кромкой */
+#game-screen .reaction-btn {
+    border: 1.5px solid rgba(224, 176, 112, .85);
+    background: linear-gradient(180deg, #6e2a22 0%, #3b130e 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .30), 0 4px 10px rgba(0, 0, 0, .5);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+/* ================= ЭТАП 6: итальянский онлайн-экран #it86-screen = тот же вид, что у русского игрового экрана =================
+   Расположение доски, панелей, реакций и вся логика (italian-online.css, shared/*.js) НЕ меняются: только фон (тот же .pm-bg), цвета панелей, кнопок и заголовка. */
+#it86-screen:not(.hidden) { background: transparent; color: #fff3d6; }
+#it86-screen > h2 {
+    font-family: var(--pm-serif);
+    color: var(--pm-gold);
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .7), 0 0 14px rgba(255, 180, 80, .25);
+}
+/* в активной партии на низких экранах заголовок скрыт (как на русском игровом экране), чтобы всё поместилось без прокрутки */
+@media (max-height: 700px) { #it86-screen[data-it86-playing="1"] > h2 { display: none; } }
+#it86-screen .player-panel {
+    background: linear-gradient(180deg, rgba(60, 20, 12, .82), rgba(24, 8, 3, .82));
+    border-color: rgba(232, 189, 114, .55);
+}
+#it86-screen .menu-button {
+    border: 1.5px solid rgba(224, 176, 112, .9);
+    color: #fff3d6;
+    text-shadow: none;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+#it86-screen .danger-button {
+    background: linear-gradient(180deg, #5a2a24 0%, #3a1712 60%, #250d09 100%);
+    color: #ecd196;
+}
+#it86-screen .reaction-btn {
+    border: 1.5px solid rgba(224, 176, 112, .85);
+    background: linear-gradient(180deg, #6e2a22 0%, #3b130e 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .30), 0 4px 10px rgba(0, 0, 0, .5);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+#it86-screen input {
+    background: rgba(24, 8, 3, .75);
+    border: 1.5px solid rgba(224, 176, 112, .8);
+    color: #fff3d6;
+}
+#it86-screen #it86-status, #it86-screen #it86-waiting-prompt, #it86-screen #it86-waiting-text { color: #f1dcae; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); }
+/* пока открыт итальянский онлайн-экран (он теперь прозрачный и показывает общий фон), экраны под ним не должны просвечивать (только видимость, состояние и логика не меняются) */
+body:has(#it86-screen:not(.hidden)) > :is(h1, #menu-screen, #mode-screen, #time-control-screen, #group-lobby-screen, #waiting-screen, #game-screen) { visibility: hidden; }
+
+/* ================= ЭТАП 7: фон ВСЕХ игровых экранов (русские, итальянские с ботом, итальянский онлайн) =================
+   Утверждённый графический эталон checkers-game-background-chestnut-glass-approved.webp (711x1536): каштановое дерево, приглушённые шахматные края, глянец и золотая рамка уже ВНУТРИ картинки,
+   поэтому второй рамки и фоновых слоёв нет. Картинка растягивается ровно на экран (100% 100%), чтобы рамка не обрезалась на любых пропорциях.
+   Правила действуют ТОЛЬКО при видимом #game-screen / #it86-screen; остальные экраны и статистика не затронуты. Слой .pm-bg без нажатий (pointer-events: none). */
+body:has(:is(#game-screen, #it86-screen):not(.hidden)) > .pm-bg > .pm-bg-board {
+    background: #0b0503 url("assets/checkers-game-background-chestnut-glass-approved.webp?v=1") 0 0 / 100% 100% no-repeat;
+}
+/* на экране итальянского приглашения строка «Разработчик» показывается один раз (общая внизу экрана) */
+body:has(#it86-screen[data-it86-wait="1"]:not(.hidden)) #it86-credit { display: none; }

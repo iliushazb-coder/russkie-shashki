@@ -1,0 +1,372 @@
+/* PR-86 PRIVATE tester screen: separate from the Russian game layout. */
+#it86-screen:not(.hidden){position:fixed;inset:0;z-index:100000;overflow-y:auto;
+  background:#11151b;color:#f6f0e5;padding:12px;display:flex;flex-direction:column;
+  align-items:center;gap:9px;box-sizing:border-box}
+#it86-screen.hidden{display:none!important}
+#it86-screen h2{font-size:1.3rem;margin:5px}
+#it86-screen .it86-controls{display:flex;flex-wrap:wrap;gap:7px;max-width:520px;justify-content:center}
+#it86-screen input{max-width:290px;width:90%;padding:11px;font-size:1rem;
+  border:1px solid #a69872;background:#242a32;color:#fff;border-radius:9px}
+/* Stage 6A2: buttons are the Russian .menu-button (style.css); only the layout inside this screen is local. */
+#it86-screen .it86-controls .menu-button{flex:0 1 270px}
+#it86-screen button:disabled{opacity:.5;cursor:not-allowed}
+
+/* ---- Stage 6A2: the frame of the Russian board ------------------------------------------------------------------------
+   style.css styles the Russian board through the IDs #board-wrapper and #board (and everything inside through CLASSES: .labels,
+   .label, .square, .piece, .move-hint, .player-panel ...). The classes are shared by the Italian screen as they are. The two ID
+   rules cannot be reused from another id, so they are repeated here DECLARATION FOR DECLARATION (a test compares them with
+   style.css, so they cannot drift apart). The sizes come from the same :root variables (--cell-size, --coord-size ...). */
+#it86-board-wrapper{max-width:100%;display:grid;
+  grid-template-columns:var(--coord-size) repeat(8,var(--cell-size)) var(--coord-size);
+  grid-template-rows:var(--coord-size) repeat(8,var(--cell-size)) var(--coord-size);
+  border-radius:14px;padding:12px;
+  background:radial-gradient(circle at 30% 10%,rgba(255,200,140,0.12),transparent 55%),
+    repeating-linear-gradient(100deg,rgba(0,0,0,0.10) 0px,transparent 3px,transparent 7px),
+    linear-gradient(155deg,#9a2818 0%,#6a160e 55%,#3e0a06 100%);
+  border:2px solid #d4a94f;
+  box-shadow:0 22px 50px rgba(0,0,0,0.65),inset 0 0 0 1px rgba(255,215,150,0.35),inset 0 3px 4px rgba(255,215,150,0.2),
+    inset 0 -6px 14px rgba(0,0,0,0.5),0 0 30px rgba(255,150,70,0.08)}
+#it86-board{grid-column:2 / span 8;grid-row:2 / span 8;display:grid;
+  grid-template-columns:repeat(8,var(--cell-size));grid-template-rows:repeat(8,var(--cell-size));
+  border-radius:3px;overflow:hidden;outline:1px solid #d4a94f;outline-offset:-1px;position:relative;
+  box-shadow:0 8px 30px rgba(0,0,0,0.65),inset 0 0 0 1px rgba(255,225,170,0.15);
+  /* Fallback if assets/board.png does not load: the same pattern as the Italian layout (dark square top-left). */
+  background:repeating-conic-gradient(#e8d5a8 0 25%,#6b4226 0 50%) 0 0/25% 25%}
+/* Stage 6A. The Russian board photo (assets/board.png), mirrored: its pattern starts with a light square in the
+   top-left corner, while the Italian orientation (see render() in italian-online-two-player-ui.js) always shows a dark
+   square there. The mirror is on the layer only; cells, coordinates and game data are untouched. */
+#it86-board::before{content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
+  background:url('assets/board.png?v=1') 0 0/100% 100% no-repeat;transform:scaleX(-1)}
+/* Cells are <button class="square dark|light"> (accessibility, keyboard) and pieces <span class="piece piece-light|piece-dark [king] [selected]">:
+   the discs, the king, the lift of the selected piece and the green dot of a possible move (.move-hint) are drawn by the Russian
+   rules of style.css. Only the browser's default button look is removed, the glyph stays in the DOM (tests, accessibility) but is not painted. */
+#it86-board .it86-cell{border:0;padding:0;margin:0;min-width:0;min-height:0;border-radius:0;cursor:pointer;
+  position:relative;z-index:1;-webkit-tap-highlight-color:transparent}
+#it86-board .it86-cell:disabled{opacity:1;cursor:default}
+#it86-board .it86-cell:focus-visible{outline:3px solid #fff;outline-offset:-4px}
+#it86-board .it86-piece{font-size:0!important;line-height:0;color:transparent!important;text-shadow:none!important}
+/* The board is redrawn as a whole on every state change: the "appear" pop-in of .piece would replay on every redraw, so it is switched off for this board only.
+   Stage 6E: the three turning-crown overlays (.king-promotion-flip*) keep the Russian animation (a rule with an id would otherwise beat their class rules). */
+#it86-board .piece:not(.king-promotion-flip):not(.king-promotion-flip-back):not(.king-promotion-flip-king){animation:none}
+
+/* ---- Stage 6A2: the screen itself and the order of its parts while a game is shown -------------------------------------
+   The background is the one of <body> (the Russian screens are drawn on it). During a game the order is the Russian one:
+   spectators / top panel / framed board / bottom panel, then the service parts. Without a game nothing is reordered. */
+#it86-screen:not(.hidden){background:var(--theme-screen-ambient,none),var(--theme-app-bg,#11151b);color:#fdeecd}
+/* Stage 6C: while no game is shown (the room waits for the friend, or nothing is open) the empty board frame is not drawn: the invitation is the content,
+   and the invitation button stays on the first screen. The frame comes back with the first game state (data-it86-playing="1"). */
+#it86-screen:not([data-it86-playing="1"]) #it86-board-wrapper{display:none}
+/* The title looks like the <h1> of the Russian pages (same declarations as h1 in style.css) and the whole stack is centred vertically (margin:auto keeps the top reachable when it is taller than the screen). */
+#it86-screen[data-it86-playing="1"]>h2,#it86-screen[data-it86-wait="1"]>h2{order:0;font-size:clamp(24px,6vw,34px);font-weight:800;text-align:center;margin:auto 0 14px;color:#fff3d6;
+  text-shadow:0 2px 14px rgba(0,0,0,0.6),0 0 26px rgba(255,195,100,0.35)}
+/* the title keeps the 6px / 14px margins of the Russian <h1>; the free height is shared above and below the column (like the body of the Russian page, which centres its content) */
+#it86-screen[data-it86-playing="1"]>h2{margin:6px 0 14px}
+#it86-screen[data-it86-playing="1"]::before{content:"";order:-1;margin-top:auto}
+#it86-screen[data-it86-playing="1"]>#it86-spectators{order:1;font-size:12px;color:#b3a184;margin:0}
+/* Stage K1B: the list of viewers for the players is at most two short lines (the page never grows wider, the board and the panels do not move beyond that) */
+#it86-spectators{flex:none;max-width:92vw;box-sizing:border-box;text-align:center;overflow-wrap:anywhere;word-break:break-word;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden}
+#it86-screen[data-it86-playing="1"]>#it86-panel-top{order:2}
+#it86-screen[data-it86-playing="1"]>#it86-board-wrapper{order:3}
+#it86-screen[data-it86-playing="1"]>#it86-panel-bottom{order:4}
+/* Stage G (mobile UI = the Russian online screen). The reactions / «Ничья» / «Сдаться» block is part of the same flex column as the panels and the board, so it needs its OWN
+   place in the order: without an `order` it kept the default 0 and was drawn right under the title, ABOVE the top player (the defect found in the staging build 48669f7).
+   The Russian order: title, spectators, top panel, board, bottom panel, reactions + draw + resign. Then the service parts: status line, «Check room», «Back». */
+#it86-screen[data-it86-playing="1"]>#it86-reactions-row{order:5;padding-bottom:0}
+#it86-screen[data-it86-playing="1"]>#it86-status{order:6;margin:6px 0 0}
+#it86-screen[data-it86-playing="1"]>#it86-opponent{order:7}
+/* Service parts while a game is shown: «Check room» and «Back to menu» come right under the panels (the messages of this screen ask the player to press «Check room»);
+   the pre-game controls (create / code / join / invite) are kept - their removal changes the invite flow and belongs to the next stage - but they go to the very end. */
+#it86-screen[data-it86-playing="1"]>.it86-controls{display:contents}
+/* with display:contents the buttons become children of the COLUMN screen, where the row basis (flex:0 1 270px) would be a HEIGHT of 270px: the Back button must stay as tall as the Russian one. */
+#it86-screen[data-it86-playing="1"]>.it86-controls .menu-button{flex:0 0 auto}
+#it86-screen[data-it86-playing="1"] #it86-check{order:8;margin-top:8px}
+#it86-screen[data-it86-playing="1"] #it86-exit{order:9;margin-top:10px}
+#it86-screen[data-it86-playing="1"] #it86-create,#it86-screen[data-it86-playing="1"] #it86-code,#it86-screen[data-it86-playing="1"] #it86-join,
+#it86-screen[data-it86-playing="1"] #it86-share,#it86-screen[data-it86-playing="1"]>#it86-link{order:20}
+#it86-screen[data-it86-playing="1"]::after{content:"";order:99;margin-top:auto}
+/* The screen while a game is shown is the body of the Russian game page: 14px padding (plus the safe areas of the phone and of the Telegram WebView), no gap between the parts
+   (the Russian parts keep apart by their own margins: panels 4px, reactions 8px). */
+#it86-screen[data-it86-playing="1"]:not(.hidden){gap:0;
+  padding:max(14px,env(safe-area-inset-top,0px),calc(var(--tg-content-safe-area-inset-top,0px) + var(--tg-safe-area-inset-top,0px)))
+    max(14px,env(safe-area-inset-right,0px),var(--tg-safe-area-inset-right,0px))
+    max(14px,env(safe-area-inset-bottom,0px),calc(var(--tg-content-safe-area-inset-bottom,0px) + var(--tg-safe-area-inset-bottom,0px)))
+    max(14px,env(safe-area-inset-left,0px),var(--tg-safe-area-inset-left,0px))}
+
+/* ---- Stage G (owner test on a real phone): the board is the RUSSIAN board ---------------------------------------------------------------------
+   The cell size is the Russian one (--cell-size / --board-total of :root in style.css: the width only). The board is NOT made smaller to fit the service parts: when the column
+   is taller than the WebView, the screen scrolls (overflow-y:auto) and the status line and «Назад» are reached by scrolling. The safe areas stay in the padding above. */
+/* The messages that only say that everything is fine («Твой ход», «Сервер подтвердил ход…») are not drawn in an active game (the Russian screen shows the turn by the lit panel);
+   they stay in the DOM for screen readers, like #it86-players. Errors, warnings and reconnect messages are not marked and stay visible. */
+#it86-screen[data-it86-playing="1"]>#it86-status[data-it86-quiet]{position:absolute;width:1px;height:1px;min-height:0;margin:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+/* The two panels say who is who (name + colour dot): the plain "Light — X / Dark — Y" line stays for screen readers only. */
+#it86-screen[data-it86-playing="1"]>#it86-players{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+#it86-link{font-size:.75rem;overflow-wrap:anywhere;max-width:92vw}
+#it86-status{min-height:1.5em;text-align:center;font-weight:600}
+/* Stage 3 / Step B: spectator mode hides the create/join/check/share controls (attribute set by the panel). */
+#it86-screen [hidden]{display:none !important;}
+#it86-opponent:empty,#it86-spectators:empty{display:none;}
+
+/* ---- Stage 6D: the invitation card = the Russian waiting screen ("Приглашение готово / Ожидание подключения друга") ----------------------
+   What is SHARED as it is (not copied): the pieces and the bridge with their breathing animation (.waiting-visual / .waiting-piece-* / .waiting-bridge and
+   @keyframes waitingVisualBreath), the buttons (.menu-button, .danger-button), @keyframes screenEnter, the theme variables (--theme-neutral-*), the texts
+   (same words as script.js, a test compares them). What cannot be shared from another id: style.css draws the card, the prompt, the status line, the ambient
+   light and the credit line through the IDS #waiting-screen / #waiting-invite-prompt / #waiting-text / #credit-footer. Those rules are repeated below
+   DECLARATION FOR DECLARATION (extracted from style.css, comments kept); tests/italian-online-waiting-parity.test.js compares every one of them with style.css, so
+   they cannot drift apart, and the browser suite compares the computed styles and the pixels with the live Russian screen. Proposed clean variant (needs a
+   decision, style.css is not changed here): give the Russian rules class hooks so that this block disappears. */
+/* <- style.css: #menu-screen, #mode-screen, #waiting-screen, #time-control-screen */
+#it86-waiting {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+    width: 100%;
+}
+
+/* <- style.css: #waiting-screen (the card) */
+#it86-waiting {
+    max-width: 340px;
+    box-sizing: border-box;
+    padding: 18px 14px 16px;
+    border: 1px solid var(--theme-neutral-border);
+    border-radius: 24px;
+    background: var(--theme-neutral-surface-bg);
+    box-shadow: var(--theme-neutral-shadow);
+}
+
+/* <- style.css: #waiting-invite-prompt */
+#it86-waiting-prompt {
+    margin: 0;
+    color: #d9c29a;
+    font-size: 14px;
+    line-height: 1.35;
+    text-align: center;
+}
+
+/* <- style.css: #waiting-text */
+#it86-waiting-text {
+    color: #f0d9ae;
+    font-weight: 600;
+    font-size: 18px;
+    line-height: 1.35;
+    text-align: center;
+    margin: 0;
+}
+
+/* <- style.css: body:has(:where(#waiting-screen:not(.hidden))) (the ambient light of the waiting screen) */
+body:has(:where(#it86-screen[data-it86-wait="1"])) {
+    --theme-ambient-primary-x: 50%;
+    --theme-ambient-primary-y: 50%;
+    --theme-ambient-primary-w: 74%;
+    --theme-ambient-primary-h: 84%;
+    --theme-ambient-primary-opacity: 0.20;
+
+    --theme-ambient-secondary-x: 12%;
+    --theme-ambient-secondary-y: 17%;
+    --theme-ambient-secondary-w: 58%;
+    --theme-ambient-secondary-h: 40%;
+    --theme-ambient-secondary-opacity: 0.095;
+
+    --theme-ambient-tertiary-x: 90%;
+    --theme-ambient-tertiary-y: 88%;
+    --theme-ambient-tertiary-w: 66%;
+    --theme-ambient-tertiary-h: 42%;
+    --theme-ambient-tertiary-opacity: 0.07;
+}
+
+/* <- style.css: #credit-footer */
+#it86-credit {
+    margin-top: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #b3925a;
+    text-align: center;
+    opacity: 0.75;
+    letter-spacing: 0.04em;
+}
+
+/* <- style.css: #credit-footer a */
+#it86-credit a {
+    color: #e8c98a; /* Чуть ярче основного текста */
+    text-decoration: underline;
+    text-decoration-color: rgba(232, 201, 138, 0.4); /* Полупрозрачное подчёркивание */
+    text-underline-offset: 2px;
+    transition: color 0.2s, text-decoration-color 0.2s;
+}
+
+/* <- style.css: #credit-footer a:active */
+#it86-credit a:active {
+    color: #fff3d6; /* Загорается ярко при тапе */
+    text-decoration-color: #fff3d6;
+}
+
+#it86-waiting[hidden],#it86-credit[hidden]{display:none}
+#it86-waiting:not([hidden]){animation:screenEnter 180ms cubic-bezier(.22,.61,.36,1) both}
+@media (prefers-reduced-motion:reduce){#it86-waiting:not([hidden]){animation:none!important}}
+/* Stage K1A: the creator sees the Russian «friend connected» picture for a moment before the board (style.css: #waiting-screen.waiting-connected, same values; the keyframes
+   waitingConnectedCue are used from style.css by name). The class is set by shared/italian-online-two-player-ui.js only while the hold runs. */
+#it86-waiting.it86-connected .waiting-visual{opacity:1;animation:waitingConnectedCue 440ms ease-out 1}
+#it86-waiting.it86-connected .waiting-bridge{background:linear-gradient(90deg,rgba(142,219,158,0.18),rgba(142,219,158,0.92),rgba(142,219,158,0.18));box-shadow:0 0 12px rgba(142,219,158,0.30)}
+#it86-waiting.it86-connected #it86-waiting-text{color:#d8f0dc}
+@media (prefers-reduced-motion:reduce){#it86-waiting.it86-connected .waiting-visual{animation:none!important;opacity:1;transform:none}}
+/* The composition is the one of the Russian page: title like <h1>, card, credit line, all centred (the body is a centred column with 14px padding). */
+#it86-screen[data-it86-wait="1"]{padding:14px;gap:0}
+#it86-screen[data-it86-wait="1"]::before{content:"";order:-1;margin-top:auto}
+#it86-screen[data-it86-wait="1"]::after{content:"";order:99;margin-bottom:auto}
+#it86-screen[data-it86-wait="1"]>h2{margin:6px 0 14px}
+#it86-screen[data-it86-wait="1"]>#it86-waiting{order:1}
+#it86-screen[data-it86-wait="1"]>#it86-status{order:2;margin:12px 0 0;max-width:340px;font-size:14px;color:#d9c29a}
+#it86-screen[data-it86-wait="1"]>#it86-credit{order:3}
+#it86-screen[data-it86-wait="1"]>#it86-players{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+#it86-screen[data-it86-wait="1"]>#it86-opponent:empty,#it86-screen[data-it86-wait="1"]>#it86-spectators:empty{display:none}
+
+/* ---- Stage 6E: the last-move arrow --------------------------------------------------------------------------------------------------------
+   style.css draws the Russian arrow layer through the ID #last-move-arrow-svg (two rules: the layer and its quiet level). An id cannot be reused from
+   another element, so both rules are repeated here DECLARATION FOR DECLARATION as one (tests/board-effects.test.js compares them with style.css).
+   Everything else of the effects is CLASSES of style.css, used as they are: .last-move, .last-move-capture-mark, .move-ghost-piece, .move-ghost-captured,
+   .king-promotion-*, .piece-hidden-for-ghost, .must-capture-hint. */
+#it86-last-move-svg{
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 2;
+    opacity: 0.42;
+}
+
+/* ---- Stage 6E-2: the status of each player is drawn under the name (the Russian panel); the text line about the opponent repeats it, so during a game it is only
+   read by a screen reader (like #it86-players) and the countdown is the one on the panel. -------------------------------------------------------- */
+#it86-screen[data-it86-playing="1"]>#it86-opponent{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* ---- Stage 6E-3: the result window. Its frame, text and buttons are CLASSES of style.css (.modal-overlay, .modal-box, .end-game-text, .end-game-subtext,
+   .rematch-wait-note, .modal-buttons, .menu-button); style.css draws the four moods through the ID #end-game-modal, which cannot be reused from another element,
+   so those rules are repeated here DECLARATION FOR DECLARATION (tests/italian-online-game-parity.test.js compares them with style.css). ------------------------ */
+#it86-end.end-game-mood-win .modal-box {
+    background:
+        linear-gradient(180deg, rgba(255, 229, 163, 0.18), rgba(255, 229, 163, 0.03) 34%),
+        linear-gradient(160deg, rgba(105, 65, 24, 0.90), rgba(47, 27, 11, 0.96));
+    border-color: rgba(255, 220, 138, 0.52);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.68),
+        0 0 34px rgba(255,197,92,0.18),
+        inset 0 1.5px 0 rgba(255,234,181,0.34);
+}
+#it86-end.end-game-mood-win .modal-box::before {
+    background: linear-gradient(180deg, rgba(255,238,197,0.34), transparent);
+}
+#it86-end.end-game-mood-win .end-game-text {
+    color: #fff0c7;
+    text-shadow: 0 0 18px rgba(255,205,112,0.48);
+}
+#it86-end.end-game-mood-win .end-game-subtext,
+#it86-end.end-game-mood-win .end-game-rating {
+    color: rgba(255,237,199,0.84);
+}
+
+#it86-end.end-game-mood-loss .modal-box {
+    background:
+        linear-gradient(180deg, rgba(220,196,184,0.07), rgba(220,196,184,0.01) 34%),
+        linear-gradient(160deg, rgba(72,49,47,0.92), rgba(34,27,26,0.97));
+    border-color: rgba(197,169,157,0.24);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.72),
+        0 0 20px rgba(132,100,96,0.08),
+        inset 0 1.5px 0 rgba(228,204,193,0.12);
+}
+#it86-end.end-game-mood-loss .modal-box::before {
+    background: linear-gradient(180deg, rgba(214,190,179,0.10), transparent);
+}
+#it86-end.end-game-mood-loss .end-game-text {
+    color: #eadeda;
+    text-shadow: 0 0 10px rgba(180,145,136,0.16);
+}
+#it86-end.end-game-mood-loss .end-game-subtext,
+#it86-end.end-game-mood-loss .end-game-rating {
+    color: rgba(231,215,208,0.72);
+}
+
+#it86-end.end-game-mood-draw .modal-box {
+    background:
+        linear-gradient(180deg, rgba(224,217,199,0.09), rgba(224,217,199,0.015) 34%),
+        linear-gradient(160deg, rgba(67,59,51,0.92), rgba(35,32,29,0.97));
+    border-color: rgba(219,209,186,0.28);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.70),
+        0 0 22px rgba(206,192,157,0.07),
+        inset 0 1.5px 0 rgba(231,221,199,0.14);
+}
+#it86-end.end-game-mood-draw .modal-box::before {
+    background: linear-gradient(180deg, rgba(223,214,192,0.12), transparent);
+}
+#it86-end.end-game-mood-draw .end-game-text {
+    color: #eee8dc;
+    text-shadow: 0 0 10px rgba(220,207,178,0.16);
+}
+#it86-end.end-game-mood-draw .end-game-subtext,
+#it86-end.end-game-mood-draw .end-game-rating {
+    color: rgba(232,225,210,0.74);
+}
+
+/* Зритель decisive-партии: нейтрально, без личного win/loss акцента. */
+#it86-end.end-game-mood-neutral .modal-box {
+    background:
+        linear-gradient(180deg, rgba(225,210,184,0.08), rgba(225,210,184,0.015) 34%),
+        linear-gradient(160deg, rgba(70,53,43,0.90), rgba(36,29,25,0.96));
+    border-color: rgba(215,194,159,0.24);
+    box-shadow:
+        0 24px 60px rgba(0,0,0,0.70),
+        inset 0 1.5px 0 rgba(231,211,176,0.12);
+}
+#it86-end.end-game-mood-neutral .modal-box::before {
+    background: linear-gradient(180deg, rgba(220,204,174,0.10), transparent);
+}
+#it86-end.end-game-mood-neutral .end-game-text {
+    color: #f0e5d3;
+    text-shadow: 0 0 10px rgba(214,188,147,0.14);
+}
+#it86-end.end-game-mood-neutral .end-game-subtext,
+#it86-end.end-game-mood-neutral .end-game-rating {
+    color: rgba(234,224,207,0.72);
+}
+
+/* The overlays are siblings of the screen (z-index 100000) and must be above it. */
+#it86-end,#it86-back-confirm,#it86-resign-confirm,#it86-draw-offer{z-index:100001}
+/* Stage F-A: the reactions row, the emoji burst and the two dialogs reuse the CLASSES of style.css (.reactions-wrapper, .action-row, .reaction-btn,
+   .emoji-burst-container, .burst-emoji + @keyframes emojiFloatUp, .modal-overlay, .modal-box, .modal-buttons, .danger-button): the look is the Russian one.
+   Only the stacking differs: the Italian screen is a fixed layer (z-index 100000), so the burst must lie above it, and still never block a tap. */
+#it86-emoji-burst{z-index:100002;pointer-events:none}
+#it86-reactions-row.hidden{display:none}
+
+/* ---- Stage F-A transitions: the loading cover ------------------------------------------------------------------------------
+   The cover is the Russian #startup-cover: the spinner (two turning draughts) and the text use the Russian CLASSES as they are
+   (.startup-cover-spinner, .startup-cover-text; keyframes startupCoverSpin, fadeInOverlay, prefers-reduced-motion in style.css).
+   The container rules of #startup-cover are ID rules and cannot be reused from another id, so they are repeated here declaration for
+   declaration. It lies above everything of the Italian screen (z-index 100003 > 100000-100002). While it is shown the screen below is
+   not painted at all (visibility:hidden), so no «Назад», status line, manual control or invitation card can flash behind its blur. */
+#it86-cover{position:fixed;inset:0;z-index:100003;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+  background:var(--theme-startup-bg);backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%);
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);animation:fadeInOverlay 0.15s ease}
+#it86-cover.hidden{display:none!important}
+/* The Russian rules show the "invite" text through html.invite-launch-hint and hide the normal one (style.css: html.invite-launch-hint .startup-cover-text-*).
+   The class stays on <html> after an invitation game, so here the cover decides ALONE (data-kind) and states BOTH texts explicitly: an ID rule beats those class rules. */
+#it86-cover .startup-cover-text-normal{display:block}
+#it86-cover .startup-cover-text-invite{display:none}
+#it86-cover[data-kind="invite"] .startup-cover-text-normal{display:none}
+#it86-cover[data-kind="invite"] .startup-cover-text-invite{display:block}
+#it86-screen[data-it86-loading="1"]>*{visibility:hidden}
+
+/* Russian parity: while a link / «Продолжить» is being checked, only the neutral status line is visible (no panel, no create/join controls). */
+#it86-screen.it86-veil>*:not(#it86-status){visibility:hidden}
+#it86-screen.it86-veil{justify-content:center}
+
+/* ---- STEP K3: the move timer = the Russian #turn-timer, declaration for declaration (style.css: #turn-timer / #turn-timer.timer-low; the keyframes
+   timerLowTick are the Russian ones). Own id, same place: over the player panel and the board. Shown only in a game with a time limit. ---- */
+#it86-timer{font-size:clamp(13px,3.4vw,17px);font-weight:700;color:#ffd27a;margin:4px 0;min-height:20px;text-align:center;text-shadow:0 0 16px rgba(255,190,90,0.6)}
+#it86-timer[hidden]{display:none}
+/* STEP K3: the place in the column of a running game: title(0) / spectators(1) / TIMER(2) / top panel(2, later in the DOM) / board(3) / bottom panel(4) / reactions(5) ... The Russian #turn-timer is above the player panel too. */
+#it86-screen[data-it86-playing="1"]>#it86-timer{order:2}
+#it86-timer.timer-low{color:#ff3f3f;background:rgba(115,0,0,0.28);border-radius:7px;
+  box-shadow:inset 0 0 0 1px rgba(255,85,85,0.24),0 0 18px rgba(255,35,35,0.24);
+  text-shadow:0 0 12px rgba(255,64,64,1),0 0 30px rgba(255,35,35,0.48);animation:timerLowTick 1s steps(1,end) infinite}

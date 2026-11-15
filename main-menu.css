@@ -1,0 +1,724 @@
+/* B2R4: Вариант GPT-6, референсное фото-древо из эталона владельца, без затрагивания логики.
+   Главное меню (дизайн B2R1, вариант «Просторный»): тёмное дерево, бордово-золотая гамма, две шашки-логотип сверху, крупное золотое название,
+   карусель флагов в золотых кольцах, «Правила», большая «Играть», две кнопки в ряд, декоративная доска внизу и строка разработчика.
+   Только оформление: логика карусели -- shared/main-menu-carousel.js, переходы и кнопки -- прежние обработчики. Все правила изолированы на #menu-screen
+   (и на body:has(#menu-screen:not(.hidden)), т.е. только пока открыто главное меню): остальные экраны этим файлом не меняются.
+   Ни одного нового файла: дерево -- маленький SVG-тайл прямо в CSS (растеризуется один раз), шрифт -- системный с засечками, без анимаций вне карусели. */
+
+:root {
+    --mm-serif: "Playfair Display", Georgia, "Times New Roman", serif;
+    --mm-ink: #3f1608;
+    --mm-cream: #fff3d6;
+    --mm-line: rgba(224, 176, 112, .9);
+    --mm-grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='240'%3E%3Cfilter id='n' x='0' y='0' width='1' height='1'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.012 0.55' numOctaves='3' seed='7' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .55  0 0 0 0 .24  0 0 0 0 .12  0 0 0 .42 -.12'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    --mm-wood:
+        radial-gradient(ellipse 70% 38% at 50% 41%, rgba(255, 176, 84, .20) 0%, rgba(255, 176, 84, .06) 55%, transparent 78%),
+        radial-gradient(ellipse 90% 30% at 50% 0%, rgba(255, 214, 140, .14) 0%, transparent 70%),
+        radial-gradient(ellipse 120% 70% at 50% 50%, transparent 45%, rgba(8, 2, 1, .55) 100%),
+        var(--mm-grain),
+        linear-gradient(180deg, #4a1b12 0%, #34120c 45%, #210a07 100%);
+}
+
+/* Пока открыто главное меню: заголовок страницы заменён названием правил, фон -- тёмное дерево на весь экран, строка разработчика прижата к низу. */
+body:has(#menu-screen:not(.hidden)) {
+    padding: 0;
+    justify-content: flex-start;
+    min-height: 100vh;
+    min-height: 100dvh;
+    background: #210a07;
+    background: var(--mm-wood);
+}
+body:has(#menu-screen:not(.hidden)) > h1 { display: none; }
+body:has(#menu-screen:not(.hidden)) #credit-footer {
+    position: fixed;
+    left: 50%;                     /* по ширине текста, по центру: не перекрывает углы экрана (там шашки и служебные кнопки) */
+    right: auto;
+    transform: translateX(-50%);
+    width: max-content;
+    max-width: calc(100vw - 72px);
+    bottom: calc(11px + env(safe-area-inset-bottom, 0px));
+    margin: 0;
+    z-index: 3;
+    opacity: 1;
+    font-size: 11px;
+    line-height: 1.2;
+    color: #cfae78;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, .95);
+}
+@supports (height: 100svh) {
+    /* привязка к малому окну, а не к низу изменяемой области: подпись неподвижна при свайпах */
+    body:has(#menu-screen:not(.hidden)) #credit-footer {
+        bottom: auto;
+        top: calc(100svh - 11px - env(safe-area-inset-bottom, 0px));
+        transform: translate(-50%, -100%);
+    }
+}
+body:has(#menu-screen:not(.hidden)) #credit-footer a { color: #ecd196; }
+
+/* ---- экран ----
+   Сетка: шапка / название / пружина / карусель / точки / пружина / «Правила» (скрыта) / 0 / «Играть» / фиксированный зазор / две кнопки / пружина (до подписи разработчика).
+   Три пружины равны (1fr), поэтому расстояния верх -> карусель, карусель -> кнопки и кнопки -> подпись одинаковы на любой высоте экрана; сами зоны не двигаются. */
+#menu-screen {
+    --mm-k: 1;                                   /* масштаб логотипа (на низких экранах .88) */
+    --mm-title-fs: clamp(25px, 9.4vw, 40px);     /* номинальный размер названия */
+    --mm-sub-fs: clamp(13px, 4.2vw, 16px);       /* B2R26: размер строки под названием и её отступ -- переменные, чтобы высота зоны названия считалась, а не зависела от текста */
+    --mm-sub-gap: 20px;
+    position: relative;
+    z-index: 0;
+    isolation: isolate;
+    max-width: 440px;
+    margin-top: 0;
+    gap: 0;
+    box-sizing: border-box;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto minmax(8px, 1fr) auto auto minmax(8px, 1fr) auto 0 auto clamp(10px, 2.2vh, 18px) auto minmax(8px, 1fr);
+    align-items: stretch;
+    justify-items: stretch;
+    touch-action: pan-y;           /* горизонтальные жесты на экране -- только свои (листание групп); вертикаль остаётся браузеру / Telegram */
+    overflow-x: clip;              /* выезжающее при свайпе название не должно делать страницу шире экрана: иначе мобильный браузер на миг раздвигает окно и весь низ экрана «уезжает» */
+    /* на 10px ниже высоты экрана: общая анимация появления экранов (screenEnter) сдвигает экран на translateY(10px), и ровно во весь экран он давал бы 10px прокрутки на 180 мс;
+       фон и рамка (.mm-bg) от этого не зависят -- они fixed и занимают весь экран */
+    min-height: calc(100vh - 10px);
+    min-height: calc(100dvh - 10px);
+    padding: calc(14px + env(safe-area-inset-top, 0px)) 18px calc(14px + env(safe-area-inset-bottom, 0px));   /* низ: только строка подписи разработчика; остальную высоту делят поровну три «пружины» (над каруселью, под ней, под кнопками) */
+}
+/* ---- декоративный фон: едва заметная доска на всю высоту и четыре приглушённые шашки (не настоящая доска, без нажатий) ---- */
+.mm-bg {
+    display: none;
+    position: fixed;               /* не участвует в прокручиваемой высоте страницы */
+    inset: 0;
+    height: 100%;
+    height: 100svh;                /* высота «малого» окна: не меняется, когда браузер/Telegram во время жеста меняет высоту видимой области -- низ экрана стоит на месте */
+    bottom: auto;
+    z-index: -2;
+    overflow: hidden;
+    pointer-events: none;
+}
+body:has(#menu-screen:not(.hidden)) > .mm-bg { display: block; }
+/* B2R25: золотой рамки нет (ни CSS, ни в картинке фона: файлы bg-menu-noframe-* -- те же доски без рамки). Вместо неё -- узкая мягкая чёрная виньетка по краям:
+   у центра затемнения нет, к краю плавно темнее. Один неподвижный слой (inset box-shadow), без blur/filter и анимации. */
+.mm-bg::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    /* B2R26: сильнее и заметнее (B2R25 владелец почти не видел): у самого края ~70% затемнения, к ~14% ширины экрана -- ноль; середина не затронута */
+    box-shadow: inset 0 0 clamp(52px, 15vmin, 150px) clamp(3px, 1vmin, 10px) rgba(0, 0, 0, .9), inset 0 0 clamp(16px, 4.5vmin, 48px) rgba(0, 0, 0, .6);
+}
+/* Одно неподвижное отражение света в прозрачном лаке: только композитинг, без blur, backdrop-filter, motion. */
+.mm-bg::after {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border-radius: 22px;
+    z-index: 0;
+    pointer-events: none;
+    opacity: .72;
+    background:
+        linear-gradient(113deg, transparent 9%, rgba(255, 222, 169, .18) 24%, rgba(255, 228, 184, .055) 32%, transparent 46%),
+        linear-gradient(77deg, transparent 52%, rgba(255, 226, 174, .12) 66%, rgba(255, 235, 197, .025) 72%, transparent 88%),
+        radial-gradient(ellipse 65% 24% at 50% 9%, rgba(255, 218, 150, .20), transparent 85%);
+}
+/* B2R4 (альтернативная локальная попытка): фон -- одна WebP фототекстура, подготовленная из владелецкого эталона,
+   дополненная нешумным статичным светом и крупными клетками. Исходные пиксели реального дерева, а не процедурные древесные линии.
+   Структура доски в перспективе
+   сверху и снизу, свет и блики уже в картинке. На телефоне растянута по экрану (доски всегда у верха и низа), на широких экранах -- cover. Без анимаций и фильтров. */
+.mm-bg-board {
+    position: absolute;
+    inset: 0;
+    background: #2a1208 url("assets/bg-menu-noframe-390x844.webp?v=1") 50% 50% / cover no-repeat;   /* B2R12: тот же файл и то же позиционирование, что у фона второго меню (.pm-bg-board) */
+}
+
+/* пять тёмных декоративных шашек у краёв (как на эталоне): частично уходят за рамку, ничего не перекрывают, без нажатий */
+.mm-bg-pc {
+    --s: clamp(40px, 14vw, 62px);
+    position: absolute;
+    width: var(--s);
+    height: calc(var(--s) * .74);
+    border-radius: 50%;
+    background: radial-gradient(ellipse at 42% 30%, #5a3526 0, #3a1f15 46%, #1d0e09 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 196, 140, .26), inset 0 -2px 4px rgba(0, 0, 0, .45),
+                0 calc(var(--s) * .1) 0 #1a0c07, 0 calc(var(--s) * .17) 0 #0e0603, 0 calc(var(--s) * .26) calc(var(--s) * .22) rgba(0, 0, 0, .6);
+}
+.mm-bg-pc::after { content: ""; position: absolute; inset: 16% 19%; border-radius: 50%; border: 1px solid rgba(255, 196, 140, .15); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .5), 0 1px 0 rgba(255, 196, 140, .08); }
+.mm-bg-pc-a { left: calc(var(--s) * -.42);  top: 28.4%; }
+.mm-bg-pc-b { right: calc(var(--s) * -.36); top: 29.2%; }
+.mm-bg-pc-c { right: calc(var(--s) * -.38); top: 60.6%; }
+.mm-bg-pc-d { left: calc(var(--s) * -.45);  top: 88.4%; }
+.mm-bg-pc-e { right: calc(var(--s) * -.5);  top: 90.4%; }
+
+/* ---- шапка: две шашки-логотип по центру, переключатель языка справа ---- */
+.mm-head {
+    grid-row: 1;
+    grid-column: 1;
+    position: relative;
+    z-index: 30;                   /* выпадающий список языка поверх карусели и названия */
+    height: calc(50px * var(--mm-k));
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.mm-head::before,
+.mm-head::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    width: calc(50px * var(--mm-k));
+    height: calc(36px * var(--mm-k));
+    pointer-events: none;
+}
+/* B2R4: точный силуэт двух шашек вырезан из предоставленного владельцем эталона.
+   Это одна фотографическая прозрачная WebP (5 КБ), без 3D-рендеринга на WebView. */
+.mm-head::before {
+    left: 50%;
+    top: calc(-6px * var(--mm-k));
+    width: calc(91px * var(--mm-k));
+    height: calc(68px * var(--mm-k));
+    transform: translateX(-50%);
+    z-index: 2;
+    border-radius: 0;
+    /* B2R15: готовый 3D-логотип GPT-6 из оригинальных игровых шашек (прозрачный WebP, тени и объём в самой картинке), без перерисовки CSS */
+    background: url("assets/checkers-logo-3d-pearl-v2-tight.webp?v=1") 50% 50% / contain no-repeat;
+    box-shadow: none;
+}
+.mm-head::after { content: none; }
+/* Заголовок «Выбери правила шашек» остаётся в разметке для экранных читалок и тестов, но не рисуется: название правил теперь -- крупный золотой заголовок ниже. */
+.mm-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+}
+
+/* ---- карусель: на всю ширину экрана (поля меню 18px компенсированы) ---- */
+.mm-carousel { grid-row: 4; grid-column: 1; width: auto; margin: 0 -18px; position: relative; z-index: 0; }
+.mm-track {
+    position: relative;
+    width: 100%;
+    height: calc(var(--mm-size) + 28px) !important;   /* JS ставит size+60 под подпись; подписи под флагами больше нет */
+    overflow: hidden;
+    overflow: clip visible;       /* по бокам обрезаем, сверху и снизу свечение колец не режем */
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    cursor: grab;
+    outline: none;
+    --mm-size: 96px;
+}
+.mm-track:active { cursor: grabbing; }
+.mm-slot {
+    position: absolute;
+    top: 12px;
+    left: 50%;
+    width: var(--mm-size);
+    margin-left: calc(var(--mm-size) / -2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    will-change: transform;
+}
+.mm-flag {
+    all: unset;
+    box-sizing: border-box;
+    position: relative;
+    display: block;
+    width: var(--mm-size);
+    height: var(--mm-size);
+    border-radius: 50%;
+    cursor: pointer;
+    will-change: transform, opacity;
+    -webkit-tap-highlight-color: transparent;
+}
+.mm-flag:focus-visible { outline: 2px solid #ffe3a6; outline-offset: 8px; }
+/* B2R2: светлого свечения вокруг золотого кольца больше нет (оно давало светлый ореол снаружи кольца); слой оставлен пустым */
+.mm-flag::before {
+    content: "";
+    position: absolute;
+    inset: -13px;
+    border-radius: 50%;
+    background: radial-gradient(circle closest-side, rgba(255, 176, 60, .5) 76%, rgba(255, 160, 50, .2) 88%, rgba(255, 150, 40, 0) 100%);
+    opacity: var(--mm-focus, 0);
+    will-change: opacity;
+    pointer-events: none;
+}
+.mm-disc {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    overflow: hidden;
+    box-shadow: 0 0 0 2px #3a1408, 0 10px 18px rgba(0, 0, 0, .55);
+    background: #3a110e;
+}
+.mm-disc svg { display: block; width: 100%; height: 100%; }
+/* будущие группы («Скоро») -- флаг чуть приглушён, но узнаваем */
+.mm-flag-soon .mm-disc svg { filter: saturate(.55) brightness(.8); }
+/* золотое кольцо вокруг каждого флага (объёмный градиент); у выбранного -- ярче, у соседних -- мягче */
+.mm-ring {
+    position: absolute;
+    inset: -5px;
+    border-radius: 50%;
+    background: conic-gradient(from 200deg, #fff0b8, #d99a36 22%, #fff0b8 38%, #8f5614 60%, #f6d27c 80%, #fff0b8);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4.5px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 5px), #000 calc(100% - 4.5px));
+    opacity: calc(.55 + .45 * var(--mm-focus, 0));
+    will-change: opacity;          /* то же: кольцо (градиент + маска) не перерисовывается при смене яркости */
+    pointer-events: none;
+}
+.mm-gloss {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: radial-gradient(ellipse 70% 45% at 32% 16%, rgba(255, 255, 255, .34), rgba(255, 255, 255, 0) 60%),
+                radial-gradient(circle at 50% 50%, rgba(0, 0, 0, 0) 62%, rgba(0, 0, 0, .3) 100%);
+    pointer-events: none;
+}
+/* подпись под флагом заменена названием правил над каруселью; элемент остаётся (на него опирается код карусели и экранные читалки) */
+.mm-label { display: none; }
+
+/* ---- точки ---- */
+.mm-dots {
+    grid-row: 5;
+    grid-column: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    height: 16px;
+    margin: 0;
+}
+.mm-dot {
+    box-sizing: border-box;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    /* доступная группа -- заполненная точка */
+    background: rgba(255, 236, 200, .55);
+    border: 1.5px solid rgba(255, 236, 200, .55);
+    transition: transform .2s ease, background-color .2s ease, border-color .2s ease;
+}
+/* будущая группа («Скоро») -- полая точка */
+.mm-dot-soon { background: transparent; border-color: rgba(255, 236, 200, .5); }
+/* активная: крупнее, золотая, со свечением (у «Скоро» -- золотое кольцо без заливки) */
+.mm-dot-on { background: #f2c566; border-color: #f2c566; transform: scale(1.5); box-shadow: 0 0 8px rgba(255, 190, 90, .7); }
+.mm-dot-soon.mm-dot-on { background: transparent; border-width: 2px; }
+
+/* ---- «Правила»: компактная кнопка под точками. Пока в приложении нет экрана с правилами, кнопка скрыта (атрибут hidden), место не занимает. ---- */
+.mm-rules {
+    all: unset;
+    grid-row: 7;
+    grid-column: 1;
+    justify-self: center;
+    box-sizing: border-box;
+    position: relative;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    height: 40px;
+    padding: 0 20px;
+    border-radius: 999px;
+    border: 1px solid rgba(224, 176, 112, .75);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #f6dfae;
+    background: linear-gradient(180deg, rgba(90, 32, 24, .85), rgba(48, 15, 10, .9));
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .3), 0 5px 12px rgba(0, 0, 0, .45);
+    -webkit-tap-highlight-color: transparent;
+}
+.mm-rules[hidden] { display: none; }
+.mm-rules svg { width: 20px; height: 20px; flex: 0 0 auto; }
+.mm-rules::after { content: ""; position: absolute; inset: -4px -6px; }
+.mm-rules:focus-visible { outline: 2px solid #ffe3a6; outline-offset: 3px; }
+
+/* ---- название правил и короткая строка (над каруселью) ----
+   Видимой карточки нет. Секция #mm-card не рисуется (display:contents: её дети -- название и «Играть» -- встают прямо в сетку экрана),
+   а область свайпа под «Играть» даёт пустой элемент .mm-swipe-zone внутри секции (его события всплывают к ней). */
+.mm-card {
+    display: contents;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+.mm-swipe-zone {
+    grid-row: 6 / 11;               /* B2R26: от точек до зазора под «Играть» (пустая пружина, «Правила» (скрыта), кнопка, зазор): жест в пустом месте под каруселью листает группы; точки (строка 5) и нижний ряд (строка 11) в зону не входят */
+    grid-column: 1;
+    z-index: 0;
+    touch-action: pan-y;
+}
+/* Двигается только содержимое (.mm-card-view: transform/opacity в кадре карусели); «Играть» неподвижна.
+   .mm-card-clip -- неподвижное «окно»: выезжающий текст не заходит на соседние элементы. */
+.mm-card-clip {
+    grid-row: 2;
+    grid-column: 1;
+    display: block;
+    width: 100%;
+    margin-top: 2px;
+    /* B2R26: высота зоны названия задана расчётом (две строки названия + отступ + ОДНА строка описания) и не зависит от текста, шрифта и переноса:
+       contain: size запрещает содержимому менять высоту. Раньше описание, перенесённое на две строки (другой шрифт/масштаб текста в телефоне), сдвигало «Играть» и карусель. */
+    height: calc(var(--mm-title-fs) * 2.04 + var(--mm-sub-gap) + var(--mm-sub-fs) * 1.25);
+    contain: size;
+    clip-path: inset(-24px -16px -36px -16px);
+    touch-action: pan-y;
+}
+.mm-card-view { position: relative; will-change: transform, opacity; display: flex; flex-direction: column; align-items: center; gap: 0; text-align: center; }
+/* Название -- до двух строк, высота не зависит от группы и языка (две строки резервируются всегда); JS (fitTitle) уменьшает шрифт, только если строка не влезает по ширине. */
+.mm-card-title {
+    position: relative;           /* под названием -- золотой орнамент-разделитель (::after, в отступе до строки правил) */
+    margin: 0;
+    width: 100%;
+    height: calc(var(--mm-title-fs) * 2.04);        /* от номинального размера, а не от уменьшенного JS: блок не меняет высоту при смене группы (B2R26: именно height, не min-height) */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    font-family: var(--mm-serif);
+    font-size: var(--mm-title-fs);
+    font-weight: 800;
+    line-height: 1.02;
+    letter-spacing: -.005em;
+    text-align: center;
+    color: #f6d27c;
+    background: linear-gradient(180deg, #fff3c4 0%, #f6d27c 36%, #d79a38 62%, #f3cb6c 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0 2px 0 #5a2d0c) drop-shadow(0 5px 10px rgba(0, 0, 0, .55));
+}
+.mm-card-title span { display: block; white-space: nowrap; }
+.mm-card-sub {
+    margin: var(--mm-sub-gap) 0 0;
+    max-width: 100%;
+    height: calc(var(--mm-sub-fs) * 1.25);          /* B2R26: ровно одна строка; длинное описание ужимается шрифтом (JS fitSub), не переносится */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: var(--mm-serif);
+    font-style: italic;
+    font-weight: 600;
+    font-size: var(--mm-sub-fs);
+    line-height: 1.25;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    text-align: center;
+    color: #e8cf9f;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, .6);
+}
+.mm-card-title::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 5px);
+    width: min(270px, 78vw);
+    height: 12px;
+    transform: translateX(-50%);
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='270' height='12' viewBox='0 0 270 12'%3E%3Cdefs%3E%3ClinearGradient id='l' x1='0' x2='1'%3E%3Cstop offset='0' stop-color='%23e9bd6e' stop-opacity='0'/%3E%3Cstop offset='1' stop-color='%23f3cf86'/%3E%3C/linearGradient%3E%3ClinearGradient id='r' x1='1' x2='0'%3E%3Cstop offset='0' stop-color='%23e9bd6e' stop-opacity='0'/%3E%3Cstop offset='1' stop-color='%23f3cf86'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect x='0' y='5.5' width='116' height='1' fill='url(%23l)'/%3E%3Crect x='154' y='5.5' width='116' height='1' fill='url(%23r)'/%3E%3Cg fill='none' stroke='%23f3cf86' stroke-width='1.1'%3E%3Cpath d='M135 1.2l4.8 4.8-4.8 4.8-4.8-4.8z'/%3E%3Cpath d='M130.2 6c-3-3.4-6.2-3-6.6 0 .4 3 3.600 3.400 6.600 0zM139.800 6c3-3.400 6.200-3 6.600 0-.4 3-3.600 3.400-6.600 0z'/%3E%3C/g%3E%3Ccircle cx='135' cy='6' r='1.100' fill='%23f3cf86'/%3E%3C/svg%3E") 50% 50% / 100% 100% no-repeat;
+    pointer-events: none;
+}
+/* «Скоро» -- неброская пометка прямо под строкой; из потока она вынесена, поэтому высота блока не зависит от группы (у доступных скрыта через visibility) */
+.mm-chip {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    margin-top: 5px;
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 12px;
+    border-radius: 999px;
+    border: 1px solid rgba(224, 176, 112, .6);
+    background: rgba(30, 10, 6, .5);
+    color: #f6d99f;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 16px;
+    white-space: nowrap;
+}
+.mm-chip[hidden] { display: inline-flex; visibility: hidden; }
+
+/* ---- «Играть»: большая золотая кнопка ---- */
+.mm-play,
+.mm-dock-btn {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform .12s ease, filter .12s ease;
+}
+.mm-play {
+    grid-row: 9;
+    grid-column: 1;
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    height: 56px;
+    gap: 9px;
+    touch-action: pan-y;          /* секция #mm-card без рамки (display:contents) -- touch-action у неё не действует, поэтому задан здесь: горизонтальный жест по «Играть» листает группы */
+    border-radius: 30px;
+    font-family: var(--mm-serif);
+    font-weight: 800;
+    font-size: 27px;
+    line-height: 1.1;
+    color: #f6d27c;               /* золотой текст */
+    background: linear-gradient(180deg, rgba(255, 214, 190, .22) 0%, rgba(255, 214, 190, .05) 42%, rgba(255, 214, 190, 0) 50%), linear-gradient(180deg, #9a382e 0%, #64200f 58%, #3b110a 100%);   /* глянец сверху + глубокая бордовая */
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .4), inset 0 -4px 8px rgba(0, 0, 0, .4), 0 0 0 3px #3a130d, 0 0 0 4.5px #e8bd72, 0 10px 22px rgba(0, 0, 0, .55), 0 0 26px rgba(255, 190, 90, .14);   /* золотая окантовка */
+    text-shadow: 0 2px 3px rgba(0, 0, 0, .65);
+}
+.mm-play { --mm-curl: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='18' viewBox='0 0 26 18'%3E%3Cg fill='none' stroke='%23efc777' stroke-width='1.300' stroke-linecap='round'%3E%3Cpath d='M1 9h7M18 9h7'/%3E%3Cpath d='M13 2.500l2.600 6.500-2.600 6.500-2.600-6.500z' fill='%23efc777'/%3E%3Cpath d='M8.500 9c0-3 1.500-5 3.500-5.500M8.500 9c0 3 1.500 5 3.500 5.500M17.500 9c0-3-1.500-5-3.500-5.500M17.500 9c0 3-1.500 5-3.500 5.500'/%3E%3C/g%3E%3C/svg%3E"); }
+.mm-play svg { width: 22px; height: 22px; flex: 0 0 auto; }
+/* золотые завитки по краям «Играть» (декор, без нажатий) */
+.mm-play::before,
+.mm-play::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    width: 26px;
+    height: 18px;
+    margin-top: -9px;
+    background: var(--mm-curl) 50% 50% / contain no-repeat;
+    opacity: .9;
+    pointer-events: none;
+}
+/* B2R29: общая «вспышка нажатия» (style.css, button.button-press-flash::after, inset:0 + светлый градиент + рамка) перебивала
+   декоративный завиток .mm-play::after: на 300 мс вместо завитка справа вылезал светлый прямоугольник 26x18 в левом верхнем углу кнопки.
+   Для «Играть» возвращаем завиток как есть; остальные кнопки и :active/:focus-visible не затронуты. */
+button.mm-play.button-press-flash::after {
+    inset: 50% 18px auto auto;
+    border-radius: 0;
+    box-shadow: none;
+    animation: none;
+    background: var(--mm-curl) 50% 50% / contain no-repeat;
+}
+.mm-play::before { left: 18px; }
+.mm-play::after { right: 18px; }
+.mm-play:active:not(:disabled) { filter: brightness(1.08); }   /* без сдвига: золотая кнопка неподвижна по X/Y и при касании, и при свайпе, начатом на ней */
+.mm-play:focus-visible { outline: 2px solid #fff3d6; outline-offset: 7px; }
+/* «Скоро»: та же форма, приглушённая */
+.mm-play:disabled {
+    pointer-events: none;         /* жест, начатый на неактивной кнопке, достаётся секции #mm-card (свайп работает и у «Скоро») */
+    cursor: default;
+    filter: saturate(.78) brightness(.8);   /* то же бордовое тело, просто приглушено (без серой заливки) */
+}
+
+/* ---- язык интерфейса (STEP D): флаг + стрелка в правом верхнем углу, по нажатию выпадает список (shared/language-bar.js) ----
+   Всё position:absolute внутри .mm-head: открытие/закрытие и смена языка ничего не сдвигают (карточка, карусель, «Играть», dock). */
+.lang-dd { position: absolute; top: 50%; right: 0; margin-top: -22px; z-index: 2; }
+#menu-screen .lang-toggle {
+    all: unset;
+    box-sizing: border-box;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    width: 52px;
+    height: 44px;
+    border-radius: 999px;
+    border: 1.5px solid rgba(224, 176, 112, .7);
+    background: rgba(26, 8, 6, .55);
+    color: #f6d99f;
+    -webkit-tap-highlight-color: transparent;
+}
+#menu-screen .lang-toggle[aria-expanded="true"] { border-color: #f2c261; background: rgba(60, 20, 14, .8); }
+#menu-screen .lang-toggle:focus-visible { outline: 2px solid #fff1d6; outline-offset: 2px; }
+#menu-screen .lang-toggle .lang-flag { flex: 0 0 auto; width: 28px; height: 28px; line-height: 28px; font-size: 11px; font-weight: 800; box-shadow: 0 0 0 1.5px rgba(255, 236, 200, .5); }
+.lang-caret { width: 10px; height: 6px; flex: 0 0 auto; transition: transform .15s ease; }
+#menu-screen .lang-toggle[aria-expanded="true"] .lang-caret { transform: rotate(180deg); }
+.lang-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    box-sizing: border-box;
+    min-width: 176px;
+    max-width: calc(100vw - 16px);
+    padding: 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border-radius: 16px;
+    border: 1.5px solid rgba(224, 176, 112, .85);
+    background: linear-gradient(165deg, #5d1b15 0%, #2d0e0b 100%);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 230, 185, .18);
+}
+.lang-menu[hidden] { display: none; }
+/* пункты списка -- те же кнопки .lang-btn[data-lang]: перекрываем круглый стиль из style.css */
+#menu-screen .lang-menu .lang-btn {
+    box-sizing: border-box;
+    position: static;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    width: 100%;
+    height: auto;
+    min-width: 0;
+    min-height: 48px;
+    padding: 6px 12px 6px 8px;
+    border-radius: 12px;
+    border: 1.5px solid transparent;
+    background: transparent;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+    opacity: 1;
+    transform: none;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-align: left;
+    color: #fff3d6;
+}
+#menu-screen .lang-menu .lang-btn:active { background: rgba(255, 210, 130, .12); transform: none; }
+#menu-screen .lang-menu .lang-btn.active { background: rgba(255, 210, 130, .16); border-color: #f2c261; box-shadow: none; transform: none; opacity: 1; }
+#menu-screen .lang-menu .lang-btn:focus-visible { outline: 2px solid #fff1d6; outline-offset: -2px; }
+#menu-screen .lang-menu .lang-flag { flex: 0 0 auto; width: 32px; height: 32px; line-height: 32px; font-size: 12px; font-weight: 800; box-shadow: 0 0 0 1.5px rgba(255, 236, 200, .5); }
+.lang-name { min-width: 0; white-space: nowrap; }
+.lang-flag { display: block; width: 100%; height: 100%; border-radius: 50%; overflow: hidden; line-height: 34px; text-align: center; }
+.lang-flag svg { display: block; width: 100%; height: 100%; }
+
+/* ---- «Кто играет?» и «Статистика»: две кнопки в ряд под «Играть», бордовый градиент, золотая рамка ----
+   Контейнер .mm-dock остаётся (на него и на id кнопок опираются скрипт и тесты). */
+.mm-dock {
+    grid-row: 11;
+    grid-column: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+}
+.mm-dock-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 50px;
+    padding: 0 8px;
+    gap: 8px;
+    border-radius: 26px;
+    border: 1.5px solid var(--mm-line);
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--mm-cream);
+    background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
+}
+.mm-dock-btn svg { width: 20px; height: 20px; flex: 0 0 auto; color: #f0c46e; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .45)); }
+.mm-dock-btn:active { transform: translateY(1px); filter: brightness(1.1); }
+.mm-dock-btn:focus-visible { outline: 2px solid #ffe3a6; outline-offset: 3px; }
+.mm-dock-text { min-width: 0; white-space: normal; line-height: 1.1; }
+.mm-badge {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 6px;
+    border-radius: 11px;
+    background: #5fbf6b;
+    color: #0d2a12;
+    font-size: 12.5px;
+    font-weight: 800;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+.mm-badge[hidden] { display: none; }
+
+/* ---- адаптация по высоте и ширине (то же, что в одобренном макете) ---- */
+@media (max-height: 640px) {
+    #menu-screen {
+        --mm-k: .88;
+        --mm-title-fs: clamp(24px, 8.6vw, 34px);
+        padding-top: calc(10px + env(safe-area-inset-top, 0px));
+    }
+    #menu-screen { --mm-sub-gap: 17px; }
+    .mm-play { height: 52px; font-size: 25px; }
+    .mm-dock-btn { height: 46px; }
+    .mm-rules { height: 38px; }
+}
+@media (min-height: 740px) {
+    #menu-screen { --mm-title-fs: clamp(30px, 10.2vw, 44px); --mm-sub-fs: 17px; }
+}
+@media (max-width: 340px) {
+    .mm-dock { gap: 8px; }
+    .mm-dock-btn { font-size: 13.5px; gap: 6px; }
+    .mm-dock-btn svg { width: 17px; height: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .mm-dot, .mm-play, .mm-dock-btn { transition: none; }
+}
+
+/* ---- «Русские шашки»: один круг-вид, внутри флаги стран, где играют по русским правилам (весь круг = одна кнопка) ---- */
+.mm-mosaic {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 35%, #7a2a22 0%, #34100c 78%);
+}
+.mm-mosaic i {
+    position: absolute;
+    display: block;
+    border-radius: 50%;
+    overflow: hidden;
+    box-shadow: 0 0 0 1.5px rgba(255, 241, 214, .85), 0 2px 5px rgba(0, 0, 0, .45);
+}
+.mm-mosaic i svg { display: block; width: 100%; height: 100%; }
+.mm-mosaic .mm-m-main { left: 30%; top: 30%; width: 40%; height: 40%; box-shadow: 0 0 0 2px #fff1d6, 0 3px 8px rgba(0, 0, 0, .5); }
+.mm-mosaic .mm-m-sat { width: 26%; height: 26%; }
+
+/* ---- парные группы (два флага в одном круге): диагональные половинки, весь круг = одна кнопка ---- */
+.mm-pair {
+    position: absolute;
+    inset: 0;
+    background: #3a110e;
+}
+.mm-pair i {
+    position: absolute;
+    inset: 0;
+    display: block;
+    overflow: hidden;
+}
+.mm-pair i svg { display: block; width: 100%; height: 100%; }
+.mm-pair .mm-pair-a { clip-path: polygon(0 0, 58% 0, 42% 100%, 0 100%); }
+.mm-pair .mm-pair-b { clip-path: polygon(60% 0, 100% 0, 100% 100%, 44% 100%); }
+
+/* B2R6: готовая графика GPT-6 (assets/menu-bg-final.webp, 941x1671, рамка и шашки уже в картинке, пропорции сохранены -- cover). CSS-рамка и CSS-шашки отключены. */
+.mm-bg::after { display: none; }   /* B2R25: виньетка (::before) остаётся, CSS-отражение выключено (в картинке своё) */
+
+/* B2R8: второй фон для более широких пропорций (320x568 и т.п.): рамка включена в картинку, пропорции сохранены (cover). */
+@media (min-aspect-ratio: 52/100) { .mm-bg-board { background-image: url("assets/bg-menu-noframe-320x568.webp?v=1"); } }
+/* B2R8: только малые экраны (320x568) -- логотип из двух шашек меньше, чтобы не налезать на заголовок. Остальные экраны не затронуты. */
+@media (max-width: 340px) and (max-height: 600px) {
+    .mm-head::before { top: calc(-7px * var(--mm-k)); width: calc(72px * var(--mm-k)); height: calc(54px * var(--mm-k)); }
+}
+
+/* ================= B2R16: перераспределение вертикального пространства главного меню (только компоновка) =================
+   Логотип крупнее (~+22%), название и описание чуть ниже; карусель, «Играть» и нижний ряд поднимаются ближе друг к другу, а между «Играть» и нижним рядом зазор больше.
+   Свободная высота делится «пружинами» в пропорции: под описанием (0.35) / под каруселью (0.4) / под кнопками (1) -- на вытянутых экранах пустота уходит вниз, к подписи разработчика. */
+#menu-screen {
+    grid-template-rows: auto auto minmax(8px, .35fr) auto auto minmax(10px, .4fr) auto 0 auto clamp(16px, 3vh, 28px) auto minmax(8px, 1fr);
+}
+/* B2R17: файл checkers-logo-3d-pearl-v2-tight.webp (1345x907, поля обрезаны): видимая часть ~95% ширины, контейнер подобран так, чтобы шашки были крупнее на ~25-30% */
+.mm-head::before { top: calc(-2px * var(--mm-k)); width: calc(124px * var(--mm-k)); height: calc(84px * var(--mm-k)); }
+@media (max-height: 620px) {
+    .mm-head::before { top: calc(-3px * var(--mm-k)); width: calc(108px * var(--mm-k)); height: calc(73px * var(--mm-k)); }
+}
+@media (max-width: 340px) and (max-height: 600px) {
+    .mm-head::before { top: calc(-4px * var(--mm-k)); width: calc(97px * var(--mm-k)); height: calc(66px * var(--mm-k)); }
+}
+/* название опускается под увеличенный логотип; на высоких экранах чуть больше (в пределах 18px) */
+.mm-card-clip { margin-top: calc(34px * var(--mm-k) + clamp(0px, (100svh - 640px) * .06, 18px)); }

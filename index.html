@@ -30,7 +30,10 @@
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-check-compat.js"></script>
-    <link rel="stylesheet" href="style.css?v=84">
+    <link rel="stylesheet" href="style.css?v=85">
+    <link rel="stylesheet" href="italian-online.css?v=106">
+    <link rel="stylesheet" href="main-menu.css?v=36">
+    <link rel="stylesheet" href="theme-premium.css?v=15">
 </head>
 <body>
     <div id="startup-cover">
@@ -41,16 +44,211 @@
 
     <h1 data-i18n="h1_title">Русские Шашки 🎮</h1>
 
+    <!-- Декоративный фон главного меню (B2R1): тонкая золотая рамка и едва заметный рисунок клеток внизу (B2R2). Не настоящая доска, без нажатий, скрыт от читалок.
+         Лежит отдельно от #menu-screen (position:fixed): так он не увеличивает прокручиваемую высоту страницы; показывается только пока открыто главное меню (main-menu.css). -->
+
+    <div class="mm-bg" aria-hidden="true"><i class="mm-bg-board"></i></div>
+
+    <!-- Фон внутренних экранов (theme-premium.css), пока только для #mode-screen; без шашек, без нажатий. -->
+    <div class="pm-bg" aria-hidden="true"><i class="pm-bg-board"></i></div>
+
     <div id="menu-screen">
-        <button id="btn-play-online" class="menu-button" data-i18n="btn_play_online">👥 Кто играет?</button>
-        <button id="btn-play-friend" class="menu-button" data-i18n="btn_play_friend">👥 Играть с другом</button>
+        <!-- Главное меню: 3D-карусель флагов -> карточка выбранных правил -> «Играть» (открывает второе меню).
+             Логика карусели -- shared/main-menu-carousel.js, внешний вид -- main-menu.css. -->
+        <header class="mm-head">
+            <h2 id="mm-title" class="mm-title" data-i18n="mm_title">Выбери правила шашек</h2>
+            <!-- Переключатель языка (STEP D): в правом верхнем углу -- круглый флаг текущего языка + стрелка; по нажатию выпадает список.
+                 Кнопки .lang-btn[data-lang] -- те же три, на них висят прежние обработчики script.js (выбор, localStorage, aria-pressed);
+                 открытие/закрытие списка -- shared/language-bar.js. Флаги -- SVG (shared/flag-icons.js); английский -- флаг Великобритании (GB).
+                 Названия языков -- на самих языках (эндонимы), не переводятся. -->
+            <div class="lang-dd" id="lang-dd">
+                <button type="button" id="lang-toggle" class="lang-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="lang-menu"><span class="lang-flag" data-flag-icon="RU">RU</span><svg class="lang-caret" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <div id="lang-menu" class="lang-menu" hidden>
+                    <button class="lang-btn" data-lang="ru" aria-pressed="false"><span class="lang-flag" data-flag-icon="RU">RU</span><span class="lang-name">Русский</span></button>
+                    <button class="lang-btn" data-lang="it" aria-pressed="false"><span class="lang-flag" data-flag-icon="IT">IT</span><span class="lang-name">Italiano</span></button>
+                    <button class="lang-btn" data-lang="en" aria-pressed="false"><span class="lang-flag" data-flag-icon="GB">EN</span><span class="lang-name">English</span></button>
+                </div>
+            </div>
+        </header>
+        <div id="mm-carousel-root" class="mm-carousel"></div>
+        <div id="mm-dots" class="mm-dots" aria-hidden="true"></div>
+        <!-- «Правила»: в приложении пока нет экрана с правилами, поэтому кнопка скрыта (hidden) и ничего не открывает; появится вместе с настоящим содержимым. -->
+        <button id="mm-rules" class="mm-rules" type="button" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5z"/><path d="M4 5.5v16M8 7.5h8"/></svg><span data-i18n="mm_rules">Правила</span></button>
+        <section id="mm-card" class="mm-card">
+            <!-- STEP J: без рамки и фона -- только название, одна короткая строка и (для «Скоро») неброская пометка; сама секция остаётся областью свайпа -->
+            <div class="mm-card-clip">
+            <div id="mm-card-view" class="mm-card-view">
+                <h3 id="mm-card-title" class="mm-card-title"></h3>
+                <p id="mm-card-sub" class="mm-card-sub"></p>
+                <span id="mm-card-chip" class="mm-chip" hidden></span>
+            </div>
+            </div>
+            <span class="mm-swipe-zone" aria-hidden="true"></span>
+            <button id="mm-play" class="mm-play" type="button"><span data-i18n="mm_play">Играть</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg></button>
+        </section>
+        <!-- Кнопки выбора правил остаются в разметке скрытыми: на их id и обработчики опирается основной скрипт приложения
+             (переход на второе меню). «Играть» на карточке вызывает ровно этот переход. -->
+        <button id="btn-choose-russian" class="menu-button hidden" type="button" aria-hidden="true" tabindex="-1" data-i18n="btn_ruleset_russian">Русские шашки</button>
+        <button id="btn-choose-italian" class="menu-button hidden" type="button" aria-hidden="true" tabindex="-1" data-i18n="btn_ruleset_italian">Итальянские шашки</button>
+        <!-- Старая тестовая кнопка итальянского онлайна скрыта, но остаётся в разметке:
+             на её id опирается shared/italian-online-two-player-ui.js. Вход теперь идёт
+             через «Итальянские шашки» -> «Играть с другом» (программный click по этой кнопке). -->
+        <button id="btn-italian-online" class="menu-button hidden" type="button" aria-hidden="true" tabindex="-1" data-it86-i18n="ui.entry_test">Итальянские шашки — Онлайн (тест)</button>
+
+        <!-- Нижняя панель общая для всех правил. Число у «Кто играет?» скрыто, пока нет подтверждённых данных. -->
+        <nav class="mm-dock">
+            <button id="btn-play-online" class="mm-dock-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3 19c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><circle cx="17" cy="9" r="2.4"/><path d="M16.5 14c2.6.2 4.5 1.9 4.5 4.6"/></svg>
+                <span class="mm-dock-text" data-i18n="mm_who">Кто играет?</span>
+                <span id="mm-who-count" class="mm-badge" hidden></span>
+            </button>
+            <button id="btn-show-stats" class="mm-dock-btn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
+                <span class="mm-dock-text" data-i18n="mm_stats">Статистика</span>
+            </button>
+        </nav>
+    </div>
+
+    <div id="mode-screen" class="hidden">
+        <p id="mode-ruleset-title" class="section-title" role="status" aria-live="polite"></p>
+        <button id="btn-play-friend" class="menu-button" data-i18n="btn_play_friend">🤝 Играть с другом</button>
         <button id="btn-play-bot" class="menu-button" data-i18n="btn_play_bot">🤖 Играть с ботом</button>
-        <button id="btn-show-stats" class="menu-button" data-i18n="btn_show_stats">📊 Моя статистика</button>
-        
-        <div class="lang-switcher">
-            <button class="lang-btn" data-lang="ru" data-i18n-aria="aria_lang_ru">🇷🇺</button>
-            <button class="lang-btn" data-lang="it" data-i18n-aria="aria_lang_it">🇮🇹</button>
-            <button class="lang-btn" data-lang="en" data-i18n-aria="aria_lang_en">🇺🇸</button>
+        <button id="btn-back-from-mode" class="menu-button danger-button" type="button" data-i18n="btn_back_mode">⬅️ Назад</button>
+    </div>
+
+    <div id="it86-screen" class="hidden" aria-hidden="true">
+        <h2 data-it86-i18n="ui.title">Итальянские шашки</h2>
+        <p id="it86-status" role="status" aria-live="polite"></p>
+        <!-- Stage 6D: the invitation card is the Russian #waiting-screen, element by element and in the same order (prompt -> pieces -> status -> share -> copy -> back).
+             The pieces are the Russian classes (.waiting-visual / .waiting-piece-* / .waiting-bridge, .menu-button, .danger-button) as they are; the ids are its own (it86-*). -->
+        <div id="it86-waiting" hidden>
+            <p id="it86-waiting-prompt" data-it86-i18n="waiting.prompt">Приглашение готово</p>
+            <div class="waiting-visual" aria-hidden="true">
+                <span class="waiting-piece waiting-piece-light"></span>
+                <span class="waiting-bridge"></span>
+                <span class="waiting-piece waiting-piece-dark"></span>
+            </div>
+            <p id="it86-waiting-text" aria-live="polite" data-it86-i18n="waiting.text">Ожидание подключения друга...</p>
+            <button id="it86-share" class="menu-button" type="button" data-it86-i18n="waiting.share">📤 Отправить другу</button>
+            <button id="it86-copy" class="menu-button" type="button" data-it86-i18n="waiting.copy">📋 Скопировать ссылку</button>
+            <button id="it86-back" class="menu-button danger-button" type="button" data-it86-i18n="waiting.back">Назад</button>
+        </div>
+        <div id="it86-controls" class="it86-controls">
+            <button id="it86-create" class="menu-button" type="button" data-it86-i18n="ui.create">Создать комнату</button>
+            <input id="it86-code" maxlength="24" autocomplete="off"
+                   aria-label="Код комнаты" placeholder="Код из 24 символов"
+                   data-it86-i18n-aria="ui.code_aria" data-it86-i18n-ph="ui.code_ph">
+            <button id="it86-join" class="menu-button" type="button" data-it86-i18n="ui.join">Присоединиться</button>
+            <button id="it86-check" class="menu-button" type="button" data-it86-i18n="ui.check">Проверить комнату</button>
+        </div>
+        <p id="it86-players"></p>
+        <p id="it86-opponent" role="status" aria-live="polite"></p>
+        <p id="it86-spectators" role="status" aria-live="polite"></p>
+        <!-- A2: the layout of the Russian game screen (player panel / framed board with coordinates / player panel).
+             Only the CLASSES are shared with the Russian screen (style.css), every id is its own (it86-*). -->
+        <!-- STEP K3: the Russian #turn-timer (same place: over the player panel and the board), shown only in a game with a time limit -->
+        <div id="it86-timer" role="timer" hidden></div>
+        <div class="player-panel it86-panel" id="it86-panel-top" hidden>
+            <div class="player-name" id="it86-top-name"></div>
+            <div class="player-rating"></div>
+            <div class="player-status" id="it86-top-status"></div>
+            <div class="captured-icons" id="it86-top-captured"></div>
+        </div>
+        <div id="it86-board-wrapper">
+            <div class="labels labels-top" id="it86-labels-top" aria-hidden="true"></div>
+            <div class="labels labels-bottom" id="it86-labels-bottom" aria-hidden="true"></div>
+            <div class="labels labels-left" id="it86-labels-left" aria-hidden="true"></div>
+            <div class="labels labels-right" id="it86-labels-right" aria-hidden="true"></div>
+            <div id="it86-board" role="group" aria-label="Итальянская игровая доска" data-it86-i18n-aria="ui.board_aria"></div>
+        </div>
+        <div class="player-panel it86-panel" id="it86-panel-bottom" hidden>
+            <div class="player-name" id="it86-bottom-name"></div>
+            <div class="player-rating"></div>
+            <div class="player-status" id="it86-bottom-status"></div>
+            <div class="captured-icons" id="it86-bottom-captured"></div>
+        </div>
+        <!-- Stage F-A: the reactions / draw / resign controls of the Russian game screen (#reactions-row: same classes, same order, same texts) -->
+        <div id="it86-reactions-row" class="reactions-wrapper hidden">
+            <div class="action-row">
+                <button id="it86-react-laugh" class="reaction-btn" type="button" data-it86-i18n-aria="react.laugh">😂</button>
+                <button id="it86-offer-draw" class="menu-button" type="button" data-it86-i18n="draw.btn">🤝 Ничья</button>
+                <button id="it86-react-fire" class="reaction-btn" type="button" data-it86-i18n-aria="react.fire">🔥</button>
+            </div>
+            <div class="action-row">
+                <button id="it86-react-shock" class="reaction-btn" type="button" data-it86-i18n-aria="react.shock">😱</button>
+                <button id="it86-resign" class="menu-button danger-button" type="button" data-it86-i18n="resign.btn">🏳 Сдаться</button>
+                <button id="it86-react-angry" class="reaction-btn" type="button" data-it86-i18n-aria="react.angry">😡</button>
+            </div>
+        </div>
+        <p id="it86-link"></p>
+        <div class="it86-controls">
+            <button id="it86-exit" class="menu-button danger-button" type="button" data-it86-i18n="ui.exit">👈 Назад</button>
+        </div>
+        <div id="it86-credit" hidden>Разработчик: <a href="https://t.me/yliusha" target="_blank" rel="noopener noreferrer">Telegram @yliusha</a></div>
+    </div>
+
+    <!-- Stage F-A transitions: the loading cover of the Italian screen = the Russian #startup-cover (same spinner / text classes, same texts through data-i18n);
+         it is shown only while a screen is not ready yet (see coverFor in italian-online-two-player-ui.js). Own id: #startup-cover lies BELOW the Italian screen. -->
+    <div id="it86-cover" class="hidden" role="status" aria-live="polite" aria-hidden="true" data-kind="normal">
+        <div class="startup-cover-spinner" aria-hidden="true"></div>
+        <p class="startup-cover-text startup-cover-text-normal" data-i18n="startup_loading">Загрузка…</p>
+        <p class="startup-cover-text startup-cover-text-invite" data-i18n="startup_connecting">Подключение к столу…</p>
+    </div>
+
+    <!-- Stage 6E-3: the result window of the Russian game (#end-game-modal: same classes, same structure) with the rematch INSIDE it, and the exit confirmation
+         (#back-confirm-modal). Both are siblings of the screen (position: fixed overlays), every id is its own (it86-*). -->
+    <div id="it86-end" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="it86-end-text">
+        <div class="modal-box">
+            <p id="it86-end-text" class="end-game-text"></p>
+            <p id="it86-end-subtext" class="end-game-subtext"></p>
+            <div id="it86-rematch" hidden>
+                <p id="it86-rematch-text" class="rematch-wait-note" role="status" aria-live="polite"></p>
+                <div class="modal-buttons">
+                    <button id="it86-rematch-propose" class="menu-button" type="button" hidden data-it86-i18n="rematch.btn">Реванш</button>
+                    <button id="it86-rematch-accept" class="menu-button" type="button" hidden data-it86-i18n="rematch.accept">Принять</button>
+                    <button id="it86-rematch-decline" class="menu-button" type="button" hidden data-it86-i18n="rematch.decline">Отклонить</button>
+                    <button id="it86-rematch-cancel" class="menu-button" type="button" hidden data-it86-i18n="rematch.cancel">Отменить</button>
+                    <button id="it86-rematch-retry" class="menu-button" type="button" hidden data-it86-i18n="rematch.retry">Проверить новую партию</button>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <button id="it86-end-close" class="menu-button" type="button" data-it86-i18n="end.close">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Stage F-A: the emoji burst of the Russian game (#emoji-burst-container), the resign confirmation (#resign-confirm-modal) and the draw dialog
+         (#draw-offer-modal): same classes and structure, every id is its own (it86-*). -->
+    <div id="it86-emoji-burst" class="emoji-burst-container"></div>
+
+    <div id="it86-resign-confirm" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="it86-resign-confirm-label">
+        <div class="modal-box">
+            <p id="it86-resign-confirm-label" data-it86-i18n="confirm.resign">Вы уверены, что хотите сдаться?</p>
+            <div class="modal-buttons">
+                <button id="it86-resign-yes" class="menu-button danger-button" type="button" data-it86-i18n="confirm.yes">Да</button>
+                <button id="it86-resign-no" class="menu-button" type="button" data-it86-i18n="confirm.no">Нет</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="it86-draw-offer" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="it86-draw-offer-text">
+        <div class="modal-box">
+            <p id="it86-draw-offer-text" class="end-game-text"></p>
+            <div class="modal-buttons">
+                <button id="it86-draw-accept" class="menu-button" type="button" data-it86-i18n="draw.accept">✅ Принять</button>
+                <button id="it86-draw-decline" class="menu-button danger-button" type="button" data-it86-i18n="draw.decline">❌ Отклонить</button>
+                <button id="it86-draw-cancel" class="menu-button hidden" type="button" data-it86-i18n="draw.cancel">Отменить предложение</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="it86-back-confirm" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="it86-back-confirm-label">
+        <div class="modal-box">
+            <p id="it86-back-confirm-label" data-it86-i18n="confirm.back">Вы точно хотите выйти?</p>
+            <div class="modal-buttons">
+                <button id="it86-back-yes" class="menu-button danger-button" type="button" data-it86-i18n="confirm.yes">Да</button>
+                <button id="it86-back-no" class="menu-button" type="button" data-it86-i18n="confirm.no">Нет</button>
+            </div>
         </div>
     </div>
 
@@ -195,12 +393,22 @@
    <div id="stats-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="stats-title-online">
         <div class="modal-box stats-modal-box">
             <div class="stats-modal-header">
-                <div class="stats-tabs">
+                <div class="stats-tabs" id="stats-rules-switch" role="group">
+                    <button id="stats-rules-ru" class="stats-tab-btn stats-tab-active" data-i18n="stats_rules_ru">Русские</button>
+                    <button id="stats-rules-it" class="stats-tab-btn" data-i18n="stats_rules_it">Итальянские</button>
+                </div>
+                <div class="stats-tabs" id="stats-tabs-russian">
                     <button id="stats-tab-online" class="stats-tab-btn stats-tab-active" data-i18n="stats_tab_online">🌐 Онлайн</button>
                     <button id="stats-tab-bot" class="stats-tab-btn" data-i18n="stats_tab_bot">🤖 С ботом</button>
                 </div>
+                <div class="stats-tabs hidden" id="stats-tabs-italian">
+                    <button id="stats-it-tab-online" class="stats-tab-btn stats-tab-active" data-i18n="stats_tab_online">🌐 Онлайн</button>
+                    <button id="stats-it-tab-bot" class="stats-tab-btn" data-i18n="stats_tab_bot">🤖 С ботом</button>
+                </div>
                 <p class="stats-section-title" id="stats-title-online" data-i18n="stats_top_online">📊 Топ игроков (Онлайн)</p>
                 <p class="stats-section-title hidden" id="stats-title-bot" data-i18n="stats_top_bot">🤖 Топ игроков (Против бота)</p>
+                <p class="stats-section-title hidden" id="stats-title-italian-online" data-i18n="stats_top_italian_online">🌐 Итальянские шашки — топ (Онлайн)</p>
+                <p class="stats-section-title hidden" id="stats-title-italian" data-i18n="stats_top_italian_bot">🤖 Итальянские шашки — топ (Против бота)</p>
             </div>
 
             <div class="stats-modal-body">
@@ -211,6 +419,16 @@
 
                 <div id="stats-view-bot" class="hidden">
                     <div id="stats-leaderboard-bot" class="stats-leaderboard"></div>
+                </div>
+
+                <div id="stats-view-italian" class="hidden">
+                    <div id="stats-it-view-online">
+                        <p id="stats-italian-your-rank" class="stats-your-rank"></p>
+                        <div id="stats-leaderboard-italian-online" class="stats-leaderboard"></div>
+                    </div>
+                    <div id="stats-it-view-bot" class="hidden">
+                        <div id="stats-leaderboard-italian" class="stats-leaderboard"></div>
+                    </div>
                 </div>
             </div>
 
@@ -244,6 +462,16 @@
         </div>
     </div>
 
+    <div id="bot-ruleset-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bot-ruleset-modal-label">
+        <div class="modal-box">
+            <p id="bot-ruleset-modal-label" class="end-game-text" data-i18n="modal_bot_ruleset">Выберите правила</p>
+            <div class="modal-buttons">
+                <button id="btn-ruleset-russian" class="menu-button" data-i18n="btn_ruleset_russian">Русские шашки</button>
+                <button id="btn-ruleset-italian" class="menu-button" data-i18n="btn_ruleset_italian">Dama Italiana</button>
+                <button id="btn-ruleset-back" class="menu-button" data-i18n="btn_back" data-modal-initial-focus data-modal-escape>Назад</button>
+            </div>
+        </div>
+    </div>
     <div id="bot-difficulty-modal" class="hidden modal-overlay" role="dialog" aria-modal="true" aria-labelledby="bot-difficulty-modal-label">
         <div class="modal-box">
             <p id="bot-difficulty-modal-label" class="end-game-text" data-i18n="modal_bot_difficulty">Выберите сложность</p>
@@ -290,11 +518,66 @@
     <div id="credit-footer">Разработчик: <a href="https://t.me/yliusha" target="_blank" rel="noopener noreferrer">Telegram @yliusha</a></div>
 
     <script src="shared/game-engine.js?v=1"></script>
+    <script src="shared/italian-game-engine.js?v=1"></script>
+    <script src="shared/ruleset-registry.js?v=1"></script>
+    <script src="shared/local-ruleset-adapter.js?v=1"></script>
+    <script src="shared/draughts-search.js?v=1"></script>
+    <script src="shared/ruleset-modules.js?v=1"></script>
+    <script src="shared/italian-bot.js?v=1"></script>
+    <script src="shared/ruleset-modules-builtin.js?v=1"></script>
+    <script src="shared/italian-online-invite-contract.js?v=2"></script>
+    <script src="shared/italian-online-join-contract.js?v=83"></script>
+    <script src="shared/italian-online-join-transport.js?v=83"></script>
+    <script src="shared/italian-online-join-remote-confirmation.js?v=83"></script>
+    <script src="shared/italian-online-join-confirmation-gate.js?v=83"></script>
+    <script src="shared/italian-online-join-ui-orchestrator.js?v=83"></script>
+    <script src="shared/italian-online-access-preflight.js?v=86"></script>
+    <script src="shared/online-ruleset-state.js?v=1"></script>
+    <script src="shared/online-ruleset-move.js?v=1"></script>
+    <script src="shared/online-ruleset-room-move.js?v=1"></script>
+    <script src="shared/online-ruleset-room-presentation.js?v=1"></script>
+    <script src="shared/online-ruleset-room-snapshot.js?v=1"></script>
+    <script src="shared/online-ruleset-room-runtime.js?v=1"></script>
+    <script src="shared/online-ruleset-room-mutation.js?v=1"></script>
+    <script src="shared/online-ruleset-room-transaction-plan.js?v=1"></script>
+    <script src="shared/online-ruleset-room-transaction-callback.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-integration.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-entry.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-session.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-controller.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-execution.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-transaction-adapter.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-transaction-invoker.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-transaction-transport.js?v=1"></script>
+    <script src="shared/online-ruleset-runtime-dispatch.js?v=1"></script>
+    <script src="shared/online-ruleset-move-entry.js?v=1"></script>
+    <script src="shared/online-ruleset-move-preparation.js?v=1"></script>
+    <script src="shared/online-ruleset-retained-move-preparation.js?v=1"></script>
+    <script src="shared/online-ruleset-move-source.js?v=1"></script>
+    <script src="shared/online-ruleset-move-source-store.js?v=1"></script>
+    <script src="shared/online-ruleset-move-source-lifecycle.js?v=1"></script>
     <script src="shared/string-utils.js?v=1"></script>
     <script src="shared/audio-effects.js?v=6"></script>
     <script src="shared/format-utils.js?v=1"></script>
     <script src="shared/captured-stack-utils.js?v=1"></script>
     <script src="shared/startup-cover-utils.js?v=2"></script>
-    <script src="script.js?v=250"></script>
+    <script src="shared/main-menu-i18n.js?v=6"></script>
+    <script src="shared/main-menu-registry.js?v=1"></script>
+    <script src="shared/flag-icons.js?v=1"></script>
+    <script src="shared/main-menu-carousel.js?v=25"></script>
+    <script src="shared/language-bar.js?v=2"></script>
+    <script src="shared/italian-online-i18n.js?v=16"></script>
+    <script src="shared/italian-online-presence.js?v=5"></script>
+    <script src="shared/italian-online-rematch.js?v=3"></script>
+    <script src="shared/italian-online-actions.js?v=1"></script>
+    <script src="shared/italian-online-sweep.js?v=1"></script>
+    <script src="shared/player-display-name.js?v=1"></script>
+    <script src="shared/board-transition.js?v=1"></script>
+    <script src="shared/board-effects.js?v=1"></script>
+    <script src="shared/italian-online-sound.js?v=3"></script>
+    <script src="shared/italian-online-diag.js?v=2"></script>
+    <script src="shared/italian-online-timer.js?v=1"></script>
+    <script src="shared/italian-online-two-player-ui.js?v=118"></script>
+    <script src="script.js?v=260"></script>
 </body>
 </html>
