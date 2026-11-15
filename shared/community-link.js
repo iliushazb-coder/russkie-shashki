@@ -8,7 +8,7 @@
 (function (global) {
   "use strict";
 
-  const URL_COMMUNITY = "https://t.me/russian_checkers_online";
+  const URL_COMMUNITY = "https://t.me/checkers_dama_online";
   const LABELS = Object.freeze({
     ru: "Сообщество в Telegram",
     en: "Telegram Community",
