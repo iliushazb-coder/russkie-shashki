@@ -103,6 +103,9 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
 }
 #mode-screen .menu-button::before { left: 18px; }
 #mode-screen .menu-button::after { right: 18px; left: auto; transition: none; }
+/* B2R38: боковые завитки на «Играть с другом» / «Играть с ботом» убраны по решению владельца (слои остаются, рисунка нет) */
+#mode-screen .menu-button::before { display: none; }
+#mode-screen .menu-button::after { background: none; }
 #mode-screen .menu-button:active { transform: none; filter: brightness(1.08); }
 /* «Назад»: как «Кто играет?» / «Статистика» главного меню */
 #mode-screen .danger-button {

@@ -508,6 +508,10 @@ button.mm-play.button-press-flash::after {
 }
 .mm-play::before { left: 18px; }
 .mm-play::after { right: 18px; }
+/* B2R38: золотые завитки по бокам «Играть» убраны по решению владельца. Слои ::before/::after остаются на месте (раскладка и состояния кнопки не меняются), рисунка в них больше нет. */
+.mm-play::before { display: none; }
+.mm-play::after,
+button.mm-play.button-press-flash::after { background: none; }
 .mm-play:active:not(:disabled) { filter: brightness(1.08); }   /* без сдвига: золотая кнопка неподвижна по X/Y и при касании, и при свайпе, начатом на ней */
 .mm-play:focus-visible { outline: 2px solid #fff3d6; outline-offset: 7px; }
 /* «Скоро»: та же форма, приглушённая */
