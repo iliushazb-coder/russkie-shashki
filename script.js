@@ -323,6 +323,7 @@ const translations = {
         btn_back_mode: "⬅️ Назад",
         waiting_link_prompt: "Приглашение готово",
         btn_share_link: "📤 Отправить другу",
+        invite_share_text: "🎲 Приглашаю сыграть в шашки! 🏆 Присоединяйся к партии!",
         btn_copy_link: "📋 Скопировать ссылку",
         invite_link_copied: "✓ Ссылка скопирована",
         invite_link_copy_failed: "Не удалось скопировать",
@@ -492,6 +493,7 @@ const translations = {
         btn_back_mode: "⬅️ Back",
         waiting_link_prompt: "Invitation ready",
         btn_share_link: "📤 Send to friend",
+        invite_share_text: "🎲 Let's play checkers! 🏆 Join my game!",
         btn_copy_link: "📋 Copy link",
         invite_link_copied: "✓ Link copied",
         invite_link_copy_failed: "Could not copy link",
@@ -658,6 +660,7 @@ const translations = {
         btn_back_mode: "⬅️ Indietro",
         waiting_link_prompt: "Invito pronto",
         btn_share_link: "📤 Invia ad un amico",
+        invite_share_text: "🎲 Giochiamo a dama! 🏆 Unisciti alla partita!",
         btn_copy_link: "📋 Copia link",
         invite_link_copied: "✓ Link copiato",
         invite_link_copy_failed: "Impossibile copiare il link",
@@ -845,6 +848,8 @@ function applyTranslationsToDOM() {
     });
     updateModeScreenTitle();
     updateGameTitle();
+    // Ссылка на Telegram-сообщество (подпись внизу меню и на итальянском экране): язык берётся из <html lang>, который выставлен выше.
+    if (window.CommunityLink) window.CommunityLink.render(currentLang);
     if (window.MainMenuCarousel) window.MainMenuCarousel.refreshText();
     // C-1: итальянская онлайн-панель перерисовывает только ТЕКСТЫ (состояние партии, ходы и сеть не затрагиваются).
     if (window.ItalianOnlineI18n && typeof window.ItalianOnlineI18n.languageChanged === "function") {
@@ -1020,6 +1025,20 @@ const PRESENCE_STALE_WARNING_MS = 12000;
 // watchGroupRoomAsSpectator().
 let spectatorInterruptedModalShown = false;
 const BOT_USERNAME = "russkie_shashki_bot";
+
+// Приглашение другу: ссылка (startapp / код комнаты) НЕ меняется, к стандартному окну «Поделиться» Telegram добавляется
+// только локализованный текст (параметр text). Одна функция на оба пути: «Отправить другу» и «Пригласить друга» без сети.
+function buildFriendShareUrl(link) {
+    return "https://t.me/share/url?url=" + encodeURIComponent(link) + "&text=" + encodeURIComponent(t("invite_share_text"));
+}
+function shareFriendInviteLink(link) {
+    const shareUrl = buildFriendShareUrl(link);
+    if (window.Telegram && window.Telegram.WebApp) {
+        Telegram.WebApp.openTelegramLink(shareUrl);
+    } else {
+        window.open(shareUrl, "_blank");
+    }
+}
 
 let myPendingOnlineRoom = null; // код комнаты, которую я создал через "Играть онлайн" и ещё жду соперника
 let activeMatchRef = null;
@@ -8177,12 +8196,7 @@ function createRoomAndShowWaiting() {
 btnShareLink.addEventListener("click", function () {
     const link = getPendingFriendInviteLink();
     if (!link) return;
-    const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
-    if (window.Telegram && window.Telegram.WebApp) {
-        Telegram.WebApp.openTelegramLink(shareUrl);
-    } else {
-        window.open(shareUrl, "_blank");
-    }
+    shareFriendInviteLink(link);
 });
 
 if (btnCopyLink) {
@@ -9891,12 +9905,7 @@ btnOfflineInviteFriend.addEventListener("click", function () {
     createRoomAndShowWaiting();
     setTimeout(function() {
         const link = "https://t.me/" + BOT_USERNAME + "?startapp=" + myPendingFriendRoomCode;
-        const shareUrl = "https://t.me/share/url?url=" + encodeURIComponent(link);
-        if (window.Telegram && window.Telegram.WebApp) {
-            Telegram.WebApp.openTelegramLink(shareUrl);
-        } else {
-            window.open(shareUrl, "_blank");
-        }
+        shareFriendInviteLink(link);
     }, 500);
 });
 

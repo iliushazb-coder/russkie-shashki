@@ -202,7 +202,7 @@
       "msg.position_changed": "Позиция изменилась. Доска обновлена, повтори ход.",
       "msg.move_confirmed": "Сервер подтвердил ход. {status}",
       "msg.move_uncertain": "Ход НЕ подтверждён. Не повторяй — только «Проверить».",
-      "share.text": "Сыграем в итальянские шашки",
+      "share.text": "🎲 Приглашаю сыграть в шашки! 🏆 Присоединяйся к партии!",
       // Stage 6D: the invitation card; the words are the ones of the Russian screen (script.js: waiting_link_prompt, waiting_friend, btn_share_link, btn_copy_link, btn_back, invite_link_copied, invite_link_copy_failed)
       "waiting.prompt": "Приглашение готово",
       "waiting.text": "Ожидание подключения друга...",
@@ -390,7 +390,7 @@
       "msg.position_changed": "The position changed. The board was updated, repeat your move.",
       "msg.move_confirmed": "The server confirmed the move. {status}",
       "msg.move_uncertain": "The move is NOT confirmed. Do not repeat — only “Check room”.",
-      "share.text": "Let's play Italian draughts",
+      "share.text": "🎲 Let's play checkers! 🏆 Join my game!",
       // Stage 6D: the invitation card; the words are the ones of the Russian screen (script.js: waiting_link_prompt, waiting_friend, btn_share_link, btn_copy_link, btn_back, invite_link_copied, invite_link_copy_failed)
       "waiting.prompt": "Invitation ready",
       "waiting.text": "Waiting for friend to connect...",
@@ -578,7 +578,7 @@
       "msg.position_changed": "La posizione è cambiata. La scacchiera è stata aggiornata, ripeti la mossa.",
       "msg.move_confirmed": "Il server ha confermato la mossa. {status}",
       "msg.move_uncertain": "Mossa NON confermata. Non ripetere — solo «Controlla stanza».",
-      "share.text": "Giochiamo a dama italiana",
+      "share.text": "🎲 Giochiamo a dama! 🏆 Unisciti alla partita!",
       // Stage 6D: the invitation card; the words are the ones of the Russian screen (script.js: waiting_link_prompt, waiting_friend, btn_share_link, btn_copy_link, btn_back, invite_link_copied, invite_link_copy_failed)
       "waiting.prompt": "Invito pronto",
       "waiting.text": "In attesa che l'amico si connetta...",
