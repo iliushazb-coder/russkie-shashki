@@ -224,6 +224,10 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
     animation: none;
 }
 #stats-modal .stats-modal-box::before { display: none; }
+/* B2R35: без вспышки при открытии. Раньше оверлей плавно «проявлялся» (fadeInOverlay) поверх главного меню, а фон-картинка
+   подгружалась только в момент показа -- на телефоне это было видно как мигание. Теперь экран появляется сразу готовым
+   (картинки фона предзагружены в index.html); анимация закрытия не затронута. */
+#stats-modal.modal-overlay:not(.modal-closing) { animation: none; }
 /* шапка: вкладки + заголовок на тёмной стеклянной планке (читается поверх шахматных клеток) */
 #stats-modal .stats-modal-header {
     margin: 0;

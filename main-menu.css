@@ -466,7 +466,8 @@ body:has(#menu-screen:not(.hidden)) > .mm-bg { display: block; }
     grid-column: 1;
     position: relative;
     z-index: 1;
-    width: 100%;
+    width: calc(50% + 5px);     /* B2R35: от середины «Кто играет?» до середины «Статистика» (половина ряда + ползазора 10px), по центру */
+    justify-self: center;
     height: 56px;
     gap: 9px;
     touch-action: pan-y;          /* секция #mm-card без рамки (display:contents) -- touch-action у неё не действует, поэтому задан здесь: горизонтальный жест по «Играть» листает группы */
