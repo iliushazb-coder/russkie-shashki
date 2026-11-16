@@ -389,6 +389,7 @@ const translations = {
         err_resync_failed: "Потеряно соединение с сервером. Попробуйте перезайти в игру.",
         err_load_game: "Не удалось загрузить игру. Проверьте интернет-соединение.",
         err_no_active_game: "Нет активной игры",
+        err_italian_online_unavailable: "Онлайн-игра в итальянские шашки пока недоступна. Можно играть с ботом.",
         err_italian_online_unavailable: "Итальянские онлайн-шашки пока недоступны.",
         err_play_self: "Нельзя играть против самого себя",
         err_opponent_offline: "Соперник оффлайн\n\n",
@@ -557,6 +558,7 @@ const translations = {
         err_resync_failed: "Lost connection to server. Try rejoining the game.",
         err_load_game: "Failed to load game. Check your internet connection.",
         err_no_active_game: "No active game",
+        err_italian_online_unavailable: "Online play in Italian draughts is not available yet. You can play against the bot.",
         err_italian_online_unavailable: "Italian online checkers are not available yet.",
         err_play_self: "Cannot play against yourself",
         err_opponent_offline: "Opponent is offline\n\n",
@@ -724,6 +726,7 @@ const translations = {
         err_resync_failed: "Connessione al server persa. Prova a rientrare nella partita.",
         err_load_game: "Impossibile caricare la partita. Controlla la connessione.",
         err_no_active_game: "Nessuna partita attiva",
+        err_italian_online_unavailable: "Il gioco online a dama italiana non è ancora disponibile. Puoi giocare contro il bot.",
         err_italian_online_unavailable: "La dama italiana online non è ancora disponibile.",
         err_play_self: "Non puoi giocare contro te stesso",
         err_opponent_offline: "L'avversario è offline\n\n",
@@ -1678,6 +1681,8 @@ document.addEventListener("italian-online:exit", function (e) {
     showModeScreenAfterGame("italian");
     // Как в русском: ссылка / «Продолжить» на завершённую, брошенную или несуществующую партию -> второй экран + окно «Нет активной игры», доска не открывается.
     if (e && e.detail && e.detail.notice === "no_active_game") showInfoModal(t("err_no_active_game"), false, false);
+    // Серверный доступ к итальянскому онлайну закрыт (флаг/список тестеров): без тестовой панели, один понятный диалог и возврат на второй экран.
+    if (e && e.detail && e.detail.notice === "gate_closed") showInfoModal(t("err_italian_online_unavailable"), false, false);
 });
 
 

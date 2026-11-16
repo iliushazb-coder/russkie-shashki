@@ -755,7 +755,7 @@ function controlsFor(st){
   // it carries «Отправить другу», «Скопировать ссылку» and «Назад». The raw link text is no longer drawn (the Russian screen does not draw it either).
   const card=!spec&&has&&!!room&&(room.status==="waiting"||holdOn(st))&&!!st.view&&!st.view.spectator;
   return {
-    create:idle,join:idle,code:idle,
+    create:false,join:false,code:false,   // the old test controls (manual create / join / code) are not part of the real game: the invitation is created automatically, a guest comes by the link
     check:!spec&&!st.entering&&!st.autoJoin&&(!has||st.uncertain||!!st.pendingJoin||st.recover),
     card,share:card,copy:card,back:card,credit:card,
     link:false
@@ -1124,7 +1124,7 @@ function leave(notice){
   try{
     const doc=global.document,Ev=global.CustomEvent;
     if(doc&&typeof doc.dispatchEvent==="function"&&typeof Ev==="function")
-      doc.dispatchEvent(new Ev("italian-online:exit",{detail:notice==="no_active_game"?{ruleset:"italian",notice:"no_active_game"}:{ruleset:"italian"}}));
+      doc.dispatchEvent(new Ev("italian-online:exit",{detail:(notice==="no_active_game"||notice==="gate_closed")?{ruleset:"italian",notice}:{ruleset:"italian"}}));
   }catch(_){}
 }
 // Stage 6C: «Играть с другом» (the Russian flow: one tap, a NEW room is created for you; see friendEntryCore for what is read first).
@@ -1211,10 +1211,12 @@ function enterFriend(){
         if(createDoubt){s.recover=true;if($("code"))$("code").value=createDoubt.code;}
         say(M("msg.login_first"));
       }else{
+        s.gateClosed=false;
         const r=await friendEntryCore();
         if(r==="new"&&epoch===s.epoch&&s.visible&&!s.code&&!s.busy&&!s.spectator&&!s.uncertain&&
            !s.pendingJoin&&!s.recover&&!s.autoJoin&&!createDoubt)
           await createCore(null);
+        if(s.gateClosed&&!s.code&&epoch===s.epoch&&s.visible){s.gateClosed=false;leave("gate_closed");return;}   // closed by the server: no test panel, back to the second screen with one clear message
       }
     }catch(_){/* every step reports its own state; never an unhandled rejection */}
     finally{if(entryGen===gen){entryRun=null;s.entering=false;if(s.visible)render();}}   // only the CURRENT attempt may release the entry state
@@ -1324,6 +1326,7 @@ async function createCore(fixedCode,tcArg){
       {appCheck:global.firebase.appCheck()});
     if(epoch!==s.epoch)return "failed";   // an invalidated (late) attempt: no message, no write
     if(!gate||gate.allowed!==true||!same(u)){
+      s.gateClosed=!!(gate&&gate.reason==="server_gate_closed");   // the SERVER keeps Italian Online closed for this player: reported, never bypassed
       say(describeGate(gate));return "failed";
     }
     await ensureName(u);   // Stage 6E-2: the verified username is read from the sign-in token BEFORE the name is put into the room
