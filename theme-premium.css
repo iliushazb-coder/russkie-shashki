@@ -107,6 +107,16 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
 #mode-screen .menu-button::before { display: none; }
 #mode-screen .menu-button::after { background: none; }
 #mode-screen .menu-button:active { transform: none; filter: brightness(1.08); }
+/* Квадратик при нажатии: вспышка нажатия (button-press-flash::after) наследовала размер бывшего завитка 26x18 и рисовала маленькую рамку справа.
+   Вспышка снова на всю кнопку, как на остальных экранах. */
+#mode-screen .menu-button.button-press-flash::after {
+    inset: 0; width: auto; height: auto; margin-top: 0;
+    border-radius: inherit; opacity: 1;
+    background: linear-gradient(180deg, rgba(255,245,215,0.55), rgba(255,225,165,0.14) 45%, rgba(255,255,255,0) 72%);
+}
+#mode-screen .danger-button.button-press-flash::after {
+    background: linear-gradient(180deg, rgba(255,220,212,0.55), rgba(255,175,165,0.14) 45%, rgba(255,255,255,0) 72%);
+}
 /* «Назад»: как «Кто играет?» / «Статистика» главного меню */
 #mode-screen .danger-button {
     max-width: 200px;
