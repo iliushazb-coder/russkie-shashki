@@ -8216,7 +8216,8 @@ function launchBotForSelectedRuleset(ruleset) {
 
 btnPlayBot.addEventListener("click", function () {
     isBotGame = true;
-    showScreen(gameScreen);
+    // Игровой экран НЕ показываем до выбора сложности: раньше он въезжал (screenEnter) под окно выбора и пропадал при «Назад» --
+    // это и было мигание. Окно открывается поверх текущего экрана, игровой экран покажет запуск партии после выбора.
     // Правила уже выбраны на первом экране -- окно выбора правил не нужно.
     const chosen = normalizeSelectableRuleset(selectedRuleset);
     if (chosen) { launchBotForSelectedRuleset(chosen); return; }
