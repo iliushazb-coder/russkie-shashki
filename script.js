@@ -342,6 +342,12 @@ const translations = {
         status_connecting: "Подключение…",
         status_game_interrupted: "Игра прервана",
         status_confirming_result: "Подтверждение…",
+        status_no_link: "Нет связи",
+        game_finished_title: "Партия завершена",
+        win_reason_disconnect_win: "Соперник отключился и не вернулся в течение 60 секунд.",
+        win_reason_disconnect_loss: "Вы отключились и не вернулись в течение 60 секунд.",
+        link_lost_text: "Связь с соперником потеряна. Результат партии пока не определён: победа и поражение не засчитаны. Можно подождать или выйти в меню без результата.",
+        btn_wait: "Подождать",
         sync_sending_move: "Отправляю ход…",
         sync_no_connection: "Нет связи. Подождите восстановления соединения",
         sync_checking: "Проверяю соединение…",
@@ -512,6 +518,12 @@ const translations = {
         status_connecting: "Connecting…",
         status_game_interrupted: "Game interrupted",
         status_confirming_result: "Confirming…",
+        status_no_link: "No link",
+        game_finished_title: "Game over",
+        win_reason_disconnect_win: "Your opponent disconnected and did not return within 60 seconds.",
+        win_reason_disconnect_loss: "You disconnected and did not return within 60 seconds.",
+        link_lost_text: "The connection with your opponent is lost. The result is not decided yet: no win or loss is counted. You can wait or leave to the menu without a result.",
+        btn_wait: "Wait",
         sync_sending_move: "Sending your move…",
         sync_no_connection: "No connection. Please wait until it is restored",
         sync_checking: "Checking the connection…",
@@ -679,6 +691,12 @@ const translations = {
         status_connecting: "Connessione…",
         status_game_interrupted: "Partita interrotta",
         status_confirming_result: "Conferma…",
+        status_no_link: "Nessun segnale",
+        game_finished_title: "Partita terminata",
+        win_reason_disconnect_win: "L'avversario si è disconnesso e non è tornato entro 60 secondi.",
+        win_reason_disconnect_loss: "Ti sei disconnesso e non sei tornato entro 60 secondi.",
+        link_lost_text: "Il collegamento con l'avversario è perso. Il risultato non è ancora deciso: nessuna vittoria o sconfitta è registrata. Puoi aspettare o uscire dal menu senza risultato.",
+        btn_wait: "Aspetta",
         sync_sending_move: "Invio la mossa…",
         sync_no_connection: "Nessuna connessione. Attendi il ripristino",
         sync_checking: "Controllo la connessione…",
@@ -2314,6 +2332,19 @@ function statusForColor(color) {
     // lastSeen (последний heartbeat), пока он писался.
     const isStale = presence.online === false || lastSeenElapsed > PRESENCE_STALE_WARNING_MS;
 
+    // F1: ONE honest classification for every variant (shared/online-presence-status.js). The old branch below stays only as the
+    // fallback when the module is absent (tests that load script.js alone). It turned every silent minute into «Подтверждение…» for ever.
+    const PS = globalThis.OnlinePresenceStatus;
+    if (PS) {
+        const markedAway = authoritativeAbsence !== null ? authoritativeAbsence : (presence.online === false ? lastSeenElapsed : null);
+        if (color === myColor && !isSpectator) {
+            // my own seat: never a countdown or a verdict about MYSELF (a server mark right after a short network break is not "I left")
+            const own = PS.classifyOwnSeat({ ready: true, connected: true, known: true, awayMs: markedAway });
+            return own.state === "present" ? { text: t("status_in_game"), cls: "status-online" } : { text: t("status_connecting"), cls: "status-neutral" };
+        }
+        return presenceStatusToPanel(PS.classifySeat({ ready: true, connected: true, known: true, awayMs: markedAway, silentMs: lastSeenElapsed, claim: presenceClaimStageNow() }));
+    }
+
     if (elapsed > RECONNECT_GRACE_MS) {
         // v181: ИЗМЕНЁН ТОЛЬКО ТЕКСТ. Условие, момент его появления и cls —
         // прежние. Для ИГРОКА эти секунды не поломка партии: минута истекла,
@@ -2335,6 +2366,17 @@ function statusForColor(color) {
         return { text: t("status_offline") + " " + remaining + t("sec"), cls: "status-countdown" };
     }
     return { text: t("status_in_game"), cls: "status-online" };
+}
+
+function presenceStatusToPanel(st) {
+    switch (st && st.state) {
+        case "present": return { text: t("status_in_game"), cls: "status-online" };
+        case "countdown": return { text: t("status_offline") + " " + Math.ceil(st.remainingMs / 1000) + t("sec"), cls: "status-countdown" };
+        case "confirming": return { text: t(isSpectator ? "status_game_interrupted" : "status_confirming_result"), cls: "status-left" };
+        case "no_link":
+        case "away_unresolved": return { text: t(isSpectator ? "status_game_interrupted" : "status_no_link"), cls: "status-left" };
+        default: return { text: t("status_connecting"), cls: "status-neutral" };
+    }
 }
 
 function applyStatusToElement(el, panelEl, statusInfo) {
@@ -2687,6 +2729,19 @@ function getOnlineSessionMs(presence) {
 // Технический результат уже отправлен и ждёт ответа сервера.
 let technicalResultInFlight = false;
 
+// F1: what THIS client knows about its request for the technical result. Used only to tell the panel the truth
+// («Подтверждение…» only while a verdict is really awaited) and by the STAGING diagnostic. Never decides anything.
+const PRESENCE_CLAIM_REFUSED_MS = 30000;
+let presenceClaim = { room: null, stage: "idle", refusedAt: 0, route: "", err: "" };
+function presenceClaimNote(stage, route, err) {
+    presenceClaim = { room: roomCode, stage: stage, refusedAt: stage === "refused" ? Date.now() : (presenceClaim.room === roomCode ? presenceClaim.refusedAt : 0), route: route || "", err: String(err || "").slice(0, 60) };
+}
+function presenceClaimStageNow() {
+    if (presenceClaim.room !== roomCode) return "idle";
+    if (presenceClaim.refusedAt && Date.now() - presenceClaim.refusedAt < PRESENCE_CLAIM_REFUSED_MS) return "refused";
+    return presenceClaim.stage === "sending" ? "sending" : "idle";
+}
+
 // ЗАПИСЬ ТЕХНИЧЕСКОГО РЕЗУЛЬТАТА — ОДНОЙ АТОМАРНОЙ ОПЕРАЦИЕЙ.
 //
 // update() на конкретные дочерние пути rooms/<код>/{result,winner,winReason,
@@ -2755,6 +2810,7 @@ function writeTechnicalResult(absentColor) {
 
     const targetRoom = roomCode;
     technicalResultInFlight = true;
+    typeof presenceClaimNote === "function" && presenceClaimNote("sending", "direct");
     database.ref("rooms/" + targetRoom).update({
         result: {
             winnerColor: winnerColor,
@@ -2777,6 +2833,8 @@ function writeTechnicalResult(absentColor) {
         // было принято заново на актуальных данных, а не потеряно молча.
         technicalResultInFlight = false;
         opponentAbsenceHandled = false;
+        const refusedByRules = !!(error && /permission|denied/i.test(String(error.code || "") + " " + String(error.message || "")));
+        typeof presenceClaimNote === "function" && presenceClaimNote(refusedByRules ? "refused" : "idle", "direct", (error && (error.code || error.message)) || "error");
         console.log("Technical result not applied:", error && error.message);
     });
     return true;
@@ -2789,6 +2847,7 @@ function writeTechnicalResult(absentColor) {
 // повторный вызов после сетевого сбоя был идемпотентным retry, а не новой
 // попыткой.
 function submitRatedTechnicalClaim(matchId, loserColorHint, reason) {
+    if (reason === "disconnect") typeof presenceClaimNote === "function" && presenceClaimNote("sending", "rated");
     const requestId = generateNonTurnRequestId(myColor, "technical_" + reason, currentState ? currentState.moveCount : 0, matchId);
     return callWorker("/rated/claim-technical", {
         roomCode: roomCode, matchId: matchId, requestId: requestId, reason: reason
@@ -2799,6 +2858,7 @@ function submitRatedTechnicalClaim(matchId, loserColorHint, reason) {
         // ошибке requestId сохраняется; для disconnect также снимаем локальный
         // latch, чтобы следующий обычный absence tick мог повторить тот же id.
         const definitive = isDefinitiveRatedActionOutcome(error);
+        if (reason === "disconnect") typeof presenceClaimNote === "function" && presenceClaimNote(definitive ? "refused" : "idle", "rated", workerErrorCode(error));
 
         if (definitive) {
             clearPendingRatedActionId(matchId, "technical_" + reason);
@@ -4223,7 +4283,18 @@ function renderEndGameModal() {
             // Без него исход выглядел бы необъяснимо для обеих сторон.
             if (endGameSubtext) {
                 if (currentState.winReason === TECHNICAL_WIN_REASON) {
-                    endGameSubtext.textContent = t("win_reason_disconnect");
+                    // F1: one clear finish screen. A player sees «Партия завершена» + the reason from HIS side; a spectator keeps the old wording.
+                    const techWinnerUid = currentState.players && currentState.players[winnerColor] && currentState.players[winnerColor].id;
+                    const techLoserUid = currentState.players && currentState.players[loserColor] && currentState.players[loserColor].id;
+                    if (!isSpectator && myTelegramId && myTelegramId === techWinnerUid) {
+                        endGameText.textContent = t("game_finished_title");
+                        endGameSubtext.textContent = t("win_reason_disconnect_win");
+                    } else if (!isSpectator && myTelegramId && myTelegramId === techLoserUid) {
+                        endGameText.textContent = t("game_finished_title");
+                        endGameSubtext.textContent = t("win_reason_disconnect_loss");
+                    } else {
+                        endGameSubtext.textContent = t("win_reason_disconnect");
+                    }
                 } else if (currentState.winReason === "resign") {
                     // UID из currentState.players, НЕ сырой myColor: цвета
                     // могут смениться местами при реванше, а сравнение по
@@ -4286,7 +4357,12 @@ function renderEndGameModal() {
                 btnCloseGame.classList.remove("hidden");
                 btnCloseGame.textContent = t("btn_to_menu");
             } else {
-                btnNewGame.classList.remove("hidden");
+                // after a technical result (the opponent never came back) a rematch cannot start: ONE button «Закрыть» -> menu
+                const technicalEnd = globalThis.OnlinePresenceStatus
+                    ? globalThis.OnlinePresenceStatus.isTechnicalEnd(currentState.winReason)
+                    : (currentState.winReason === TECHNICAL_WIN_REASON || currentState.winReason === "timeout");
+                if (technicalEnd && !isBotGame) btnNewGame.classList.add("hidden");
+                else btnNewGame.classList.remove("hidden");
                 btnCloseGame.classList.remove("hidden");
                 // Для игры с ботом кнопка ведёт в меню (не закрывает Mini App) —
                 // текст должен соответствовать реальному поведению.
@@ -9280,6 +9356,10 @@ function absenceDiagCompute() {
     if (typeof me.onlineSince !== "number") return { code: "my_onlineSince_missing" };
     const mineS = Math.round((now - me.onlineSince) / 1000);
     if (mineS * 1000 < RECONNECT_GRACE_MS) return { code: "my_online_session_under_60s", mineS: mineS };
+    if (presenceClaim.room === roomCode && presenceClaimStageNow() === "refused") {
+        // the exit IS marked (absentS >= 60) but the server/Rules refused the request: this is the "Worker rejects" answer
+        return { code: "claim_refused", route: presenceClaim.route, err: String(presenceClaim.err).replace(/\s+/g, "_"), absentS: absentS };
+    }
     if (currentState.ratedMatchId) {
         return { code: opponentAbsenceHandled ? "rated_claim_sent_waiting" : "rated_claim_ready", absentS: absentS };
     }
@@ -9370,8 +9450,44 @@ function updatePresenceOnly() {
     if (!italianOnlinePresentation) {
         checkOpponentAbsence();
         absenceDiagTick();
+        presenceExitOfferTick();
     }
     if (isSpectator && !italianOnlinePresentation) checkSpectatorGameInterrupted();
+}
+
+// F1: «Нет связи» always has a way out. One prompt per episode; leaving writes NO result (the player is marked away exactly as on minimise).
+let presenceExitOfferedKey = null;
+function leaveUnresolvedOnlineGameToMenu() {
+    if (!isOnlineGame || isBotGame || isSpectator || !roomCode) return;
+    detachRoomListener();
+    markMyselfLeftExplicitly();
+    isOnlineGame = false;
+    roomCode = null;
+    currentState = null;
+    showModeScreenAfterGame("russian");
+    loadActiveRooms();
+}
+function presenceExitOfferTick() {
+    const PS = globalThis.OnlinePresenceStatus;
+    if (!PS || !isOnlineGame || isBotGame || isSpectator || !currentState || !roomCode || currentState.winner || currentState.result) {
+        if (presenceExitOfferedKey !== null) { presenceExitOfferedKey = null; if (PS) PS.closeLinkLost(document); }
+        return;
+    }
+    const oppColor = myColor === "light" ? "dark" : "light";
+    const opp = currentState.presence && currentState.presence[oppColor];
+    if (!opp || !isFirebaseConnected || !serverTimeOffsetReady || !roomSnapshotSeenSinceConnect) return;
+    const lastSeenElapsed = getEstimatedServerNow() - (opp.lastSeen || getEstimatedServerNow());
+    const abs = getAuthoritativeAbsenceMs(opp);
+    const st = PS.classifySeat({ ready: true, connected: true, known: true, awayMs: abs !== null ? abs : (opp.online === false ? lastSeenElapsed : null), silentMs: lastSeenElapsed, claim: presenceClaimStageNow() });
+    const key = roomCode + ":" + currentState.matchNumber;
+    if (!PS.needsExit(st)) {
+        // the opponent is back (or the verdict is coming): the prompt goes away by itself
+        if (presenceExitOfferedKey !== null && st.state !== "no_link" && st.state !== "away_unresolved") { presenceExitOfferedKey = null; PS.closeLinkLost(document); }
+        return;
+    }
+    if (presenceExitOfferedKey === key) return;
+    presenceExitOfferedKey = key;
+    PS.promptLinkLost({ doc: document, text: t("link_lost_text"), waitLabel: t("btn_wait"), leaveLabel: t("btn_to_menu"), onLeave: leaveUnresolvedOnlineGameToMenu });
 }
 
 function checkTimeout() {
@@ -12144,29 +12260,54 @@ function stopItalianLobbyListening() {
     }
 }
 
-// Один слушатель presence на карточку (только пока партия в списке). Ошибка чтения -- это «неизвестно», не «брошена».
+// Presence карточки лобби: НАБОР УЗКИХ слушателей, только пока партия в списке. Для скрытия брошенных партий нужны ТОЛЬКО cur.sid и метки ухода
+// off/<sid> каждого цвета (ItalianOnlinePresence.isAbandoned: onlineSince/lastSeen в решении не участвуют). Подписка на весь узел присылала каждому
+// зрителю лобби heartbeat (lastSeen, раз в 4 с на игрока) КАЖДОЙ комнаты; узкие пути приходят только при смене сессии или метке ухода.
+// Пока не ответили все четыре пути, presence комнаты «неизвестно» (строка не объявляется). Ошибка чтения = «неизвестно», не «брошена».
+const ITALIAN_LOBBY_PRESENCE_PARTS = ["light/cur/sid", "light/off", "dark/cur/sid", "dark/off"];
 function attachItalianPresenceWatch(code, session) {
     if (lobbyItalianPresenceWatch[code]) return;
-    const ref = database.ref("roomsItalianPresence/" + code);
-    const listener = function (snapshot) {
-        if (session !== lobbyItalianSession) return;
-        lobbyItalianPresenceByCode[code] = snapshot.val();
-        recomputeItalianAbandoned();
+    const parts = {};
+    let answered = 0;
+    const watch = { listeners: [] };
+    lobbyItalianPresenceWatch[code] = watch;
+    const assemble = function () {
+        // Форма как у полного узла presence; onlineSince/lastSeen — заглушки (лобби их не использует и не читает).
+        const out = {};
+        ["light", "dark"].forEach(function (color) {
+            const sid = parts[color + "/cur/sid"], off = parts[color + "/off"];
+            const cell = {};
+            if (typeof sid === "string") cell.cur = { sid: sid, onlineSince: 0, lastSeen: 0 };
+            if (off && typeof off === "object") cell.off = off;
+            if (cell.cur || cell.off) out[color] = cell;
+        });
+        return out.light || out.dark ? out : null;
     };
-    lobbyItalianPresenceWatch[code] = { ref: ref, listener: listener };
-    // Ошибка чтения presence = «неизвестно», не «брошена»: строка показывается (как при ответе null), ожидание не бесконечно.
-    ref.on("value", listener, function () {
-        if (session !== lobbyItalianSession || !lobbyItalianPresenceWatch[code] || (code in lobbyItalianPresenceByCode)) return;
-        lobbyItalianPresenceByCode[code] = null;
-        recomputeItalianAbandoned();
-        scheduleLobbyRender();
+    watch.listeners = ITALIAN_LOBBY_PRESENCE_PARTS.map(function (part) {
+        const ref = database.ref("roomsItalianPresence/" + code + "/" + part);
+        const listener = function (snapshot) {
+            if (session !== lobbyItalianSession) return;
+            if (!(part in parts)) answered++;
+            parts[part] = snapshot.val();
+            if (answered < ITALIAN_LOBBY_PRESENCE_PARTS.length) return;
+            lobbyItalianPresenceByCode[code] = assemble();
+            recomputeItalianAbandoned();
+        };
+        // Ошибка чтения presence = «неизвестно», не «брошена»: строка показывается (как при ответе null), ожидание не бесконечно.
+        ref.on("value", listener, function () {
+            if (session !== lobbyItalianSession || !lobbyItalianPresenceWatch[code] || (code in lobbyItalianPresenceByCode)) return;
+            lobbyItalianPresenceByCode[code] = null;
+            recomputeItalianAbandoned();
+            scheduleLobbyRender();
+        });
+        return { ref: ref, listener: listener };
     });
 }
 
 function detachItalianPresenceWatch(code) {
     const w = lobbyItalianPresenceWatch[code];
     if (!w) return;
-    try { w.ref.off("value", w.listener); } catch (_) {}
+    w.listeners.forEach(function (l) { try { l.ref.off("value", l.listener); } catch (_) {} });
     delete lobbyItalianPresenceWatch[code];
     delete lobbyItalianPresenceByCode[code];
     delete lobbyItalianAbandonedByCode[code];

@@ -30,7 +30,7 @@ const s={epoch:0,visible:false,code:null,room:null,view:null,pendingJoin:null,
   selected:null,busy:false,token:null,uncertain:false,ref:null,listener:null,
   readPending:false,readAgain:false,poll:null,
   gen:0,applied:0,acc:null,
-  pc:null,presRef:null,presListener:null,pres:null,absTick:null,claiming:false,lastClaim:0,superseded:null,
+  pc:null,presRef:null,presListener:null,pres:null,absTick:null,claiming:false,lastClaim:0,claimStage:"idle",claimRefusedAt:0,exitKey:null,seatDiagKey:null,superseded:null,
   spectator:false,spRef:null,spListener:null,mySp:null,msg:null,opp:null,spn:0,autoJoin:null,rm:null,rmView:null,
   entering:false,recover:false,fx:null,chain:null,nm:null,loc:null,holdUntil:0,paintSig:null,paintPos:null,paintCells:null,pend:null,
   tmr:null,claimingTm:null,tmAt:0,   // K3: the 1-second timer tick, a running "time is up" request, the time of the last one
@@ -441,15 +441,30 @@ function presenceTick(){
   setOpp(st.state==="countdown"?M("presence.countdown",{sec:Math.ceil(st.remainingMs/1000)}):
     st.state==="expired"?M("presence.expired"):null);
   paintPanelStatus();
+  exitPromptTick(v);
   // The Worker re-verifies everything (participant, 60 s, both clocks); "unknown" never claims.
   if(st.state==="expired"&&st.canClaim)claimAbsence();
+}
+// F1: «Нет связи» always has a way out (shared prompt, once per episode). Leaving writes NO result: leave() marks my session away like a minimise.
+function exitPromptTick(v){
+  const PS=global.OnlinePresenceStatus;if(!PS||!global.document)return;
+  const room=s.room;
+  if(!v||v.spectator||!room||room.status!=="active"||room.winner){if(s.exitKey!==null){s.exitKey=null;PS.closeLinkLost(global.document);}return;}
+  const n=srv(),opp=v.color==="light"?"dark":"light";
+  if(!n.connected||!n.ready||!Presence)return;
+  const q=PS.classifySeat(seatFacts(opp,n));
+  {const dk=q.state+"|"+claimStageNow()+"|"+Math.floor(((q.awayMs!==undefined?q.awayMs:q.silentMs)||0)/10000);   // one diagnostic line per change / per 10 s, not per second
+   if(dk!==s.seatDiagKey){s.seatDiagKey=dk;dg("seat",()=>({opp:q.state,marked:q.marked,away:q.awayMs!==undefined?Math.round(q.awayMs/1000):null,silent:q.silentMs!==undefined?Math.round(q.silentMs/1000):null,claim:claimStageNow()}));}}
+  if(!PS.needsExit(q)){if(s.exitKey!==null){s.exitKey=null;PS.closeLinkLost(global.document);}return;}
+  const key=s.code+":"+(room.matchNumber||0);if(s.exitKey===key)return;s.exitKey=key;
+  PS.promptLinkLost({doc:global.document,text:I18N.render(M("link.lost")),waitLabel:I18N.render(M("link.wait")),leaveLabel:I18N.render(M("end.to_menu")),onLeave:()=>leave()});
 }
 async function claimAbsence(){
   const t0=Date.now();
   if(s.claiming||t0-s.lastClaim<ABSENCE_RETRY_MS)return;
   const u=currentUser(),epoch=s.epoch,code=s.code;
   if(!u||!code||!s.visible)return;
-  s.claiming=true;s.lastClaim=t0;
+  s.claiming=true;s.lastClaim=t0;s.claimStage="sending";dg("claim.send",{});
   try{
     const reply=await deadline(MOVE_DEADLINE_MS,async signal=>{
       const t=await tokens(u);
@@ -460,11 +475,14 @@ async function claimAbsence(){
       return {ok:response.ok===true,status:response.status,result};
     });
     if(epoch!==s.epoch)return;
+    const errCode=reply.result&&reply.result.error?String(reply.result.error):null;
+    dg("claim.reply",()=>({status:reply.status,ok:reply.ok,error:errCode}));
+    if(!(reply.ok&&reply.status===200)&&reply.status>=400&&reply.status<500&&errCode!=="italian_stale_revision"){s.claimStage="refused";s.claimRefusedAt=Date.now();}
     if(reply.ok&&reply.status===200&&reply.result&&reply.result.ok===true){
       const raw=await readRoom(code,u),nv=project(raw,u.uid);
       if(epoch===s.epoch&&admit(code,raw)){adopt(raw,nv);say(statusFor(raw,nv));render();}
     }else if(reply.result&&reply.result.error==="italian_stale_revision"){refresh();}
-  }catch(_){/* outcome unknown: the request is idempotent, the next tick may repeat it after the spacing */}
+  }catch(_){s.claimStage="idle";dg("claim.error",{});/* outcome unknown: the request is idempotent, the next tick may repeat it after the spacing */}
   finally{s.claiming=false;}
 }
 function stopWatch(){
@@ -626,15 +644,39 @@ function turnCue(room,turn,seats,top,bottom){
 //   own panel: «В игре» (green) - «Подключение…» (grey) while the server state is unknown;
 //   the opponent: «Подключение…» until his presence is known, «В игре», «Оффлайн 45с» (the minute he has to come back), «Подтверждение…» (the server confirms the result).
 // Presentation only: it reads the presence the screen already watches; it never writes anything and never decides anything.
+// F1: a technical end (disconnect / timeout) has no rematch: ONE button «Закрыть» (same rule as the Russian screen, shared predicate).
+function isTechEnd(w){const PS=global.OnlinePresenceStatus;return PS&&typeof PS.isTechnicalEnd==="function"?PS.isTechnicalEnd(w):(w==="disconnect"||w==="timeout");}
+function claimStageNow(){return s.claimRefusedAt&&Date.now()-s.claimRefusedAt<30000?"refused":(s.claimStage==="sending"?"sending":"idle");}
+// The facts about ONE seat for the shared classifier (server time basis, both numbers from the SAME aggregated record).
+function seatFacts(color,n){
+  let a=null;try{a=Presence.aggregate(s.pres);}catch(_){a=null;}
+  const c=a&&a[color];
+  const num=x=>typeof x==="number"&&isFinite(x);
+  return {ready:!!n.ready,connected:!!n.connected,known:!!c,
+    awayMs:c&&c.online===false&&num(c.absentSince)?n.ms-c.absentSince:null,
+    silentMs:c&&num(c.lastSeen)?n.ms-c.lastSeen:null,claim:claimStageNow()};
+}
 function panelStatusFor(pos){
   const v=s.view,room=s.room;
   if(!v||!room||room.status!=="active")return null;
   const mine=v.color==="dark"?"dark":"light",other=mine==="light"?"dark":"light";
   const color=pos==="top"?other:mine;
-  if(!v.spectator&&pos==="bottom")return s.uncertain?{m:M("panel.connecting"),cls:"status-neutral"}:{m:M("panel.in_game"),cls:"status-online"};
+  if(!v.spectator&&pos==="bottom"){   // my own seat: never a countdown/verdict about MYSELF; no link of my own = «Подключение…»
+    const own=srv();return s.uncertain||!own.connected?{m:M("panel.connecting"),cls:"status-neutral"}:{m:M("panel.in_game"),cls:"status-online"};
+  }
   if(!Presence||(!v.spectator&&!s.pc))return {m:M("panel.connecting"),cls:"status-neutral"};
   const n=srv();
   if(!n.connected)return {m:M("panel.connecting"),cls:"status-neutral"};   // no link of my own: the other seat cannot be judged (Russian: «Соединение…»)
+  const PS=global.OnlinePresenceStatus;
+  if(PS){   // F1: the same classification as the Russian panel (shared/online-presence-status.js)
+    const cs=seatFacts(color,n);
+    const q=PS.classifySeat(cs);
+    if(q.state==="present")return {m:M("panel.in_game"),cls:"status-online"};
+    if(q.state==="countdown")return {m:M("panel.offline",{sec:Math.ceil(q.remainingMs/1000)}),cls:"status-countdown"};
+    if(q.state==="confirming")return {m:M(v.spectator?"panel.interrupted":"panel.confirming"),cls:"status-left"};
+    if(q.state==="no_link"||q.state==="away_unresolved")return {m:M(v.spectator?"panel.interrupted":"panel.no_link"),cls:"status-left"};
+    return {m:M("panel.connecting"),cls:"status-neutral"};
+  }
   let st;try{st=Presence.seatState(s.pres,color,n.ms,n.ready);}catch(_){st={state:"unknown"};}
   if(st.state==="present")return {m:M("panel.in_game"),cls:"status-online"};
   if(st.state==="countdown")return {m:M("panel.offline",{sec:Math.ceil(st.remainingMs/1000)}),cls:"status-countdown"};
@@ -671,7 +713,11 @@ function endInfo(v,room){
   }else{
     const w=wc,l=w==="light"?"dark":"light";
     head="✅ "+nm(w)+"\n❌ "+nm(l);
-    if(room.winReason==="disconnect")sub=I18N.render(M("end.reason_disconnect"));
+    if(room.winReason==="disconnect"){
+      // F1: the same finish screen as the Russian one: «Партия завершена» + the reason from MY side; a spectator keeps the old wording
+      if(v.spectator)sub=I18N.render(M("end.reason_disconnect"));
+      else{head=I18N.render(M("end.head_finished"));sub=I18N.render(M(w===v.color?"end.reason_disconnect_win":"end.reason_disconnect_loss"));}
+    }
     else if(room.winReason==="timeout")sub=v.spectator?I18N.render(M("end.timeout_label"))+": "+nm(l)+". "+I18N.render(M("end.winner_label"))+": "+nm(w)+".":
       I18N.render(M(w===v.color?"end.reason_timeout_win":"end.reason_timeout_loss"));
     else if(room.winReason==="resign")sub=v.spectator?I18N.render(M("end.resign_label"))+": "+nm(l)+". "+I18N.render(M("end.winner_label"))+": "+nm(w)+".":
@@ -1764,7 +1810,7 @@ function rmSync(){
   const r=s.room,v=s.view;
   // A game that ended by the opponent's ABSENCE («Соперник не вернулся в игру») offers NO rematch: the other player is gone, a proposal would only wait for nobody.
   // Only «Закрыть» stays (leave -> the second screen of Italian draughts). A normal win, loss, draw or resignation keeps the rematch.
-  const on=!!Rematch&&s.visible&&!!s.code&&!!r&&r.status==="finished"&&r.winReason!=="disconnect"&&!!v&&!v.spectator&&!!r.players&&
+  const on=!!Rematch&&s.visible&&!!s.code&&!!r&&r.status==="finished"&&!isTechEnd(r.winReason)&&!!v&&!v.spectator&&!!r.players&&
     !!r.players.light&&!!r.players.dark&&UID.test(r.players.light.id)&&UID.test(r.players.dark.id);
   if(!on){if(s.rm)rmStop();return;}
   if(s.rm&&s.rm.oldCode===s.code)return;
