@@ -12197,9 +12197,15 @@ function startItalianLobbyListening() {
         lobbyItalianLoadGaveUp = true;
         scheduleLobbyRender();
     }, ITALIAN_LOBBY_LOAD_MAX_MS);
-    database.ref("italianOnlineControl/testers/" + myTelegramId).once("value").then(function (snapshot) {
+    // Доступ: тестер ИЛИ серверный флаг italianOnlineControl/openToAll === true (открыт для всех). Ошибка чтения openToAll = «не открыт».
+    database.ref("italianOnlineControl/testers/" + myTelegramId).once("value").then(function (testerSnapshot) {
+        if (testerSnapshot.val() === true) return true;
+        return database.ref("italianOnlineControl/openToAll").once("value").then(function (openSnapshot) {
+            return openSnapshot.val() === true;
+        }, function () { return false; });
+    }).then(function (allowed) {
         if (session !== lobbyItalianSession || !canUseFirebase()) return;
-        if (snapshot.val() !== true) {
+        if (allowed !== true) {
             lobbyItalianStatus = "off";
             scheduleLobbyRender();
             return;

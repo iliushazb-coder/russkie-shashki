@@ -127,8 +127,13 @@
           const flag=operation==="create"?"creationEnabled":"joinEnabled";
           const f=await readExactTrue("italianOnlineControl/"+flag);
           if(!f.ok)return denied(f.reason,op);
-          const t=await readExactTrue("italianOnlineControl/testers/"+uid);
-          if(!t.ok)return denied(t.reason,op);
+          // Access = open to everyone (server flag italianOnlineControl/openToAll === true) OR a listed tester.
+          // A failed/closed openToAll read only means "not open to all": the tester check then decides (and reports its own reason).
+          const o=await readExactTrue("italianOnlineControl/openToAll");
+          if(!o.ok){
+            const t=await readExactTrue("italianOnlineControl/testers/"+uid);
+            if(!t.ok)return denied(t.reason,op);
+          }
           if(!sameUser(auth,user,uid)||!dependenciesOK()||timedOut)
             return denied("auth_or_transport_changed",op);
           if(!configurationStillPinned(database,auth,base))
