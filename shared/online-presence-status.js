@@ -18,7 +18,7 @@
   else root.OnlinePresenceStatus = api;
 })(typeof window !== "undefined" ? window : globalThis, function () {
   "use strict";
-  const GRACE_MS = 60000, STALE_MS = 12000, CONFIRM_MAX_MS = 15000;
+  const GRACE_MS = 60000, STALE_MS = 12000, CONFIRM_MAX_MS = 15000, SILENT_EXTRA_MS = 15000;   // SILENT_EXTRA_MS = PresenceEvidence.SILENT_EXTRA_MS (a test keeps them equal)
   const isNum = (v) => typeof v === "number" && isFinite(v);
 
   // in: { ready, connected, known, awayMs, silentMs, claim }
@@ -33,11 +33,19 @@
     if (!i.ready || !i.connected || !i.known) return { state: "unknown" };
     const marked = isNum(i.awayMs);
     const silent = isNum(i.silentMs) ? Math.max(0, i.silentMs) : 0;
-    const elapsed = marked ? Math.max(0, i.awayMs) : silent;
-    if (elapsed > GRACE_MS) {
+    // F1 (final rule): a seat leaves by a server MARK (>= 60 s) or by SILENCE (the server counts 60 s after a 15 s margin: PresenceEvidence).
+    // The silent seat therefore goes through the same minute and the same «Подтверждение…» window, never straight to «Нет связи».
+    // i.legacySilent === true: the Russian PRODUCTION client keeps the published (pre-final-rule) reading of silence (owner decision В1).
+    const legacy = i.legacySilent === true;
+    const elapsed = legacy ? (marked ? Math.max(0, i.awayMs) : silent) : Math.max(marked ? Math.max(0, i.awayMs) : 0, silent - SILENT_EXTRA_MS);
+    if (elapsed > GRACE_MS && legacy) {
       if (!marked) return { state: "no_link", marked: false, silentMs: silent };
       if (i.claim === "refused" || elapsed - GRACE_MS > CONFIRM_MAX_MS) return { state: "away_unresolved", marked: true, awayMs: elapsed };
       return { state: "confirming", marked: true, awayMs: elapsed };
+    }
+    if (elapsed > GRACE_MS) {
+      if (i.claim === "refused" || elapsed - GRACE_MS > CONFIRM_MAX_MS) return marked ? { state: "away_unresolved", marked: true, awayMs: elapsed } : { state: "no_link", marked: false, silentMs: silent };
+      return { state: "confirming", marked: marked, awayMs: elapsed };
     }
     if (marked || silent > STALE_MS) return { state: "countdown", remainingMs: Math.max(0, GRACE_MS - elapsed), marked: marked };
     return { state: "present" };
