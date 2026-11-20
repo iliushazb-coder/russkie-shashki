@@ -3077,3 +3077,11 @@ html.invite-launch-hint .startup-cover-text-normal {
 html.invite-launch-hint .startup-cover-text-invite {
     display: block;
 }
+/* OWN link lost / suspected: shared by the Russian and the Italian online screen: only the existing status line under MY name changes (red blinking dot + short words, same size as «Подтверждение…»); no extra element, nothing moves */
+.player-status.status-own-lost{color:#ff9a8f;font-size:8.5px;gap:2px;letter-spacing:-.2px}
+.player-status.status-own-lost::before{width:6px;height:6px;background:#e5483d;box-shadow:0 0 6px #e5483d;animation:statusPulse 1s ease-in-out infinite}
+/* RUSSIAN game screen only: the smaller words of «Подключение…» / «Нет связи» used to make the panel row a few pixels LOWER than with «В игре» (the row height follows the text line),
+   so the panels, the board and the buttons jumped when the status changed. A zero-width invisible mark in the NORMAL font size keeps the line exactly as high as «В игре»
+   (the margin takes back the flex gap). Italian screen (#it86-screen) is not touched. */
+#game-screen .player-status.status-neutral::after { content: "\200b"; flex: 0 0 0; width: 0; overflow: hidden; font-size: clamp(11px, 2.9vw, 13.5px); margin-left: -3px; }
+#game-screen .player-status.status-own-lost::after { content: "\200b"; flex: 0 0 0; width: 0; overflow: hidden; font-size: clamp(11px, 2.9vw, 13.5px); margin-left: -2px; }
