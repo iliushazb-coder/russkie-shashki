@@ -7,9 +7,6 @@ if (window.Telegram && window.Telegram.WebApp) {
 // (tools/build-staging-frontend.js) подменяет ровно одно вхождение на "staging". От него зависит единственное:
 // STAGING-диагностика (см. absenceDiag* ниже). Игровая логика этот признак не читает.
 const BUILD_ENVIRONMENT = "production";
-// F1 final presence rule for the RUSSIAN game (silence proof, winner without 60 s online, bothGone): outside production only. In production the Russian game
-// behaves exactly like the published public main 592ce4d (owner decision В1, 19.11.2026); the Italian code is not affected by this flag.
-const F1_RUSSIAN_CLIENT = BUILD_ENVIRONMENT !== "production";
 
 // ===== FIREBASE =====
 
@@ -1100,10 +1097,7 @@ let lobbyItalianPresenceByCode = {};
 let lobbyItalianPresenceWatch = {};
 let lobbyItalianAbandonedByCode = {};
 let lobbyItalianSweepTimer = null;
-let lobbyItalianSilentTimer = null;   // F1: редкая проверка «молчащих» партий (оба места без heartbeat >= 75 с, меток нет)
-let lobbyItalianSilentDead = {};      // code -> true; липкий признак: место, исчерпавшее свою минуту, вернуться не может (Rules), поэтому вердикт не отзывается
 const ITALIAN_LOBBY_SWEEP_MS = 5000;
-const ITALIAN_LOBBY_SILENT_PROBE_MS = 45000;
 // Начальная загрузка итальянской части списка: пока тестер не проверен, список комнат не прочитан и не пришло presence каждой комнаты, пустой
 // список не объявляем (нейтральное «Загрузка…»). Предел ожидания, чтобы при сетевой ошибке загрузка не была бесконечной.
 const ITALIAN_LOBBY_LOAD_MAX_MS = 8000;
@@ -1602,7 +1596,6 @@ function hideScreenImmediately(screen) {
 // STEP K3: the Russian #time-control-screen is also the first step of «Играть с другом» in the Italian rules. The flag says that the screen was opened
 // from the Italian entry (set by the Italian branch of btnPlayFriend, cleared by every way out of the screen); the Russian flow never sets it.
 let italianTimeChoicePending = false;
-let italianInviteFromTimeChoice = false;   // set when the Italian invitation was created from the time-choice screen: «Назад» on its card returns there (like the Russian flow)
 
 function showScreen(screen) {
     hideStartupCover();
@@ -1700,13 +1693,6 @@ if (window.MainMenuCarousel) {
 // здесь явно и не зависит от того, какой экран оказался под панелью (меню, приглашение it_..., resume).
 // Русские обработчики завершения комнаты не используются; Firebase и Worker не затрагиваются.
 document.addEventListener("italian-online:exit", function (e) {
-    const backToTimeChoice = italianInviteFromTimeChoice && !!(e && e.detail && e.detail.inviteBack === true);
-    italianInviteFromTimeChoice = false;   // one-shot: every other exit (game, link, «Кто играет?», no_active_game, gate_closed) keeps the old route
-    if (backToTimeChoice) {
-        showScreen(timeControlScreen);
-        italianTimeChoicePending = true;   // after showScreen (it clears the flag for other screens): a new choice creates a new invitation
-        return;
-    }
     showModeScreenAfterGame("italian");
     // Как в русском: ссылка / «Продолжить» на завершённую, брошенную или несуществующую партию -> второй экран + окно «Нет активной игры», доска не открывается.
     if (e && e.detail && e.detail.notice === "no_active_game") showInfoModal(t("err_no_active_game"), false, false);
@@ -2356,7 +2342,7 @@ function statusForColor(color) {
             const own = PS.classifyOwnSeat({ ready: true, connected: true, known: true, awayMs: markedAway });
             return own.state === "present" ? { text: t("status_in_game"), cls: "status-online" } : { text: t("status_connecting"), cls: "status-neutral" };
         }
-        return presenceStatusToPanel(PS.classifySeat({ ready: true, connected: true, known: true, awayMs: markedAway, silentMs: lastSeenElapsed, claim: presenceClaimStageNow(), legacySilent: !F1_RUSSIAN_CLIENT }));
+        return presenceStatusToPanel(PS.classifySeat({ ready: true, connected: true, known: true, awayMs: markedAway, silentMs: lastSeenElapsed, claim: presenceClaimStageNow() }));
     }
 
     if (elapsed > RECONNECT_GRACE_MS) {
@@ -2728,19 +2714,6 @@ function getAuthoritativeAbsenceMs(presence) {
     return getEstimatedServerNow() - presence.absentSince;
 }
 
-// Возраст серверной МЕТКИ ухода (absentSince), только она; null, если метки нет.
-function getAuthoritativeMarkAgeMs(presence) {
-    if (!presence || presence.online !== false || typeof presence.absentSince !== "number") return null;
-    return getEstimatedServerNow() - presence.absentSince;
-}
-// F1: эффективный возраст отсутствия: метка ИЛИ молчание heartbeat (см. shared/presence-evidence.js); null — судить нельзя.
-function getEffectiveAbsenceMs(presence) {
-    if (!presence) return null;
-    const PE = globalThis.PresenceEvidence;
-    if (!PE) return getAuthoritativeMarkAgeMs(presence);
-    return PE.absenceAge(presence, getEstimatedServerNow());
-}
-
 // Длительность ТЕКУЩЕЙ непрерывной online-сессии игрока.
 // Нужна победителю: присудить победу за отсутствие вправе только тот, кто
 // сам непрерывно присутствует уже целую минуту. Пока я сам отсутствовал, я
@@ -2815,12 +2788,10 @@ function writeTechnicalResult(absentColor) {
 
     // --- обе временные границы, обе по серверному времени ---
     const presence = currentState.presence || {};
-    const loserAbsenceMs = F1_RUSSIAN_CLIENT && typeof getEffectiveAbsenceMs === "function" ? getEffectiveAbsenceMs(presence[absentColor]) : getAuthoritativeAbsenceMs(presence[absentColor]);
+    const loserAbsenceMs = getAuthoritativeAbsenceMs(presence[absentColor]);
     if (loserAbsenceMs === null || loserAbsenceMs < RECONNECT_GRACE_MS) return false;
-    // F1 (final rule): «я онлайн непрерывно минуту» больше не требуется от победителя -- место, пропустившее свою минуту, закрыто Rules/Worker
-    // (общий модуль presence-evidence). Нужно только, чтобы моя сессия была онлайн; живость и сроки перепроверяют Worker и Rules по серверным часам.
     const myOnlineMs = getOnlineSessionMs(presence[winnerColor]);
-    if (myOnlineMs === null || (!F1_RUSSIAN_CLIENT && myOnlineMs < RECONNECT_GRACE_MS)) return false;
+    if (myOnlineMs === null || myOnlineMs < RECONNECT_GRACE_MS) return false;
 
     // №23: рейтинговая партия -- Elo-authoritative исход обязан идти через
     // Worker (claimTechnicalOutcome), не через прямую участническую запись
@@ -2836,11 +2807,6 @@ function writeTechnicalResult(absentColor) {
     }
     const genKey = typeof currentRatedGenerationKey === "function" ? currentRatedGenerationKey() : null;
     if (genKey && ratedJoinState[genKey]) return false;
-    // F1: прямая запись нерейтинговой комнаты проверяется Production Rules и там нужна серверная МЕТКА; доказательство «молчанием» идёт только через Worker.
-    if (F1_RUSSIAN_CLIENT) {
-        const markAge = typeof getAuthoritativeMarkAgeMs === "function" ? getAuthoritativeMarkAgeMs(presence[absentColor]) : getAuthoritativeAbsenceMs(presence[absentColor]);
-        if (markAge === null || markAge < RECONNECT_GRACE_MS) return false;
-    }
 
     const targetRoom = roomCode;
     technicalResultInFlight = true;
@@ -2927,19 +2893,9 @@ function getOpponentAbsenceMs(oppColor) {
     // отсчёт одинаковым для всех причин отсутствия и не зависящим от того,
     // как долго молчал heartbeat.
     if (!presence) return null;
-    // F1 (final rule): уход доказывается ЛИБО меткой absentSince (>= 60 с), ЛИБО молчанием heartbeat (серверное время lastSeen старше 60 с + 15 с запас).
-    // Одно общее определение для Worker, Rules и обоих клиентов: shared/presence-evidence.js. Это закрывает «интернет выключен целиком»:
-    // onDisconnect тогда не ставит метку, а раньше партия вечно «ждала».
-    const PE = F1_RUSSIAN_CLIENT ? globalThis.PresenceEvidence : null;
-    if (PE && presence.online !== false) {
-        const eff = PE.absenceAge(presence, getEstimatedServerNow());
-        return eff === null ? null : eff;
-    }
     if (presence.online !== false) return null; // игрок в игре — отсутствия нет
     if (typeof presence.absentSince === "number") {
-        const PE2 = F1_RUSSIAN_CLIENT ? globalThis.PresenceEvidence : null;
-        const eff2 = PE2 ? PE2.absenceAge(presence, getEstimatedServerNow()) : null;
-        return eff2 === null ? getEstimatedServerNow() - presence.absentSince : eff2;
+        return getEstimatedServerNow() - presence.absentSince;
     }
     // Запасной путь для клиентов старых версий и bot-зеркала, где absentSince
     // не пишется: прежнее поведение по возрасту последнего heartbeat.
@@ -8016,7 +7972,6 @@ btnPlayFriend.addEventListener("click", async function () {
         const italianScreen = document.getElementById("it86-screen");
         if (italianScreen && !italianScreen.classList.contains("hidden")) return;   // the Italian screen is already open: repeated presses change nothing (as before K3)
         if (btnItalianOnlineEntry && italianUi && typeof italianUi.setTimeControl === "function") {
-            italianInviteFromTimeChoice = false;
             showScreen(timeControlScreen);
             italianTimeChoicePending = true;   // after showScreen: showScreen clears the flag for every other screen
         } else if (btnItalianOnlineEntry) {
@@ -8037,8 +7992,7 @@ timeOptionButtons.forEach(function (btn) {
             // STEP K3: Italian rules. The choice goes to the Italian online screen, which creates the room (its own gates and server protocol).
             italianTimeChoicePending = false;
             window.ItalianOnlineTwoPlayerUI.setTimeControl(parseInt(btn.dataset.seconds));
-            showModeScreenAfterGame("italian");   // the screen under the Italian overlay is the mode screen again (as before K3): other exits never land on the time screen
-            italianInviteFromTimeChoice = true;
+            showModeScreenAfterGame("italian");   // the screen under the Italian overlay is the mode screen again (as before K3): leaving the Italian screen never lands on the time screen
             if (btnItalianOnlineEntry) btnItalianOnlineEntry.click();
             return;
         }
@@ -9524,7 +9478,7 @@ function presenceExitOfferTick() {
     if (!opp || !isFirebaseConnected || !serverTimeOffsetReady || !roomSnapshotSeenSinceConnect) return;
     const lastSeenElapsed = getEstimatedServerNow() - (opp.lastSeen || getEstimatedServerNow());
     const abs = getAuthoritativeAbsenceMs(opp);
-    const st = PS.classifySeat({ ready: true, connected: true, known: true, awayMs: abs !== null ? abs : (opp.online === false ? lastSeenElapsed : null), silentMs: lastSeenElapsed, claim: presenceClaimStageNow(), legacySilent: !F1_RUSSIAN_CLIENT });
+    const st = PS.classifySeat({ ready: true, connected: true, known: true, awayMs: abs !== null ? abs : (opp.online === false ? lastSeenElapsed : null), silentMs: lastSeenElapsed, claim: presenceClaimStageNow() });
     const key = roomCode + ":" + currentState.matchNumber;
     if (!PS.needsExit(st)) {
         // the opponent is back (or the verdict is coming): the prompt goes away by itself
@@ -11565,9 +11519,6 @@ function isRoomAbandonedNow(room) {
 
     const p = room.presence;
     if (!p || !p.light || !p.dark) return false;
-    // F1: оба места исчерпали СВОЮ минуту -- меткой (60 с) или молчанием heartbeat (75 с). Так партия, где у обоих пропал весь интернет и меток нет,
-    // не висит «живой» в лобби вечно. Те же функции, что у сервера (shared/presence-evidence.js); нет данных -- не «брошена».
-    if (F1_RUSSIAN_CLIENT && typeof PresenceEvidence !== "undefined" && PresenceEvidence.bothGoneVerdict(p.light, p.dark, getEstimatedServerNow()) === null) return true;
     if (p.light.online !== false || p.dark.online !== false) return false;
 
     const lightAbsent = p.light.absentSince;
@@ -11859,7 +11810,7 @@ function isItalianLobbyRoomAbandoned(code) {
     const P = window.ItalianOnlinePresence;
     if (!P || typeof P.isAbandoned !== "function") return false;
     if (!(code in lobbyItalianPresenceByCode)) { typeof itDiag === "function" && itDiag("lobby.verdict", function () { return { code: window.ItalianOnlineDiag.maskCode(code), hidden: true, why: "presence not read yet (row hidden until the first answer)" }; }, code, "unread"); return true; }
-    const abandoned = lobbyItalianSilentDead[code] === true || P.isAbandoned(lobbyItalianRoomsByCode[code], lobbyItalianPresenceByCode[code], getEstimatedServerNow(), serverTimeOffsetReady);
+    const abandoned = P.isAbandoned(lobbyItalianRoomsByCode[code], lobbyItalianPresenceByCode[code], getEstimatedServerNow(), serverTimeOffsetReady);
     typeof itDiag === "function" && itDiag("lobby.verdict", function () { const D = window.ItalianOnlineDiag; return Object.assign({ code: D.maskCode(code), hidden: abandoned }, D.explainPresence(lobbyItalianRoomsByCode[code], lobbyItalianPresenceByCode[code], getEstimatedServerNow(), serverTimeOffsetReady)); }, code, abandoned);
     return abandoned;
 }
@@ -12292,8 +12243,6 @@ function stopItalianLobbyListening() {
         lobbyItalianQuery = null;
     }
     for (const code in lobbyItalianPresenceWatch) detachItalianPresenceWatch(code);
-    if (lobbyItalianSilentTimer !== null) { clearInterval(lobbyItalianSilentTimer); lobbyItalianSilentTimer = null; }
-    lobbyItalianSilentDead = {};
     if (lobbyItalianSweepTimer !== null) {
         clearInterval(lobbyItalianSweepTimer);
         lobbyItalianSweepTimer = null;
@@ -12362,32 +12311,6 @@ function detachItalianPresenceWatch(code) {
     delete lobbyItalianPresenceWatch[code];
     delete lobbyItalianPresenceByCode[code];
     delete lobbyItalianAbandonedByCode[code];
-    delete lobbyItalianSilentDead[code];
-}
-
-// F1: партия, у которой у ОБОИХ пропал весь интернет, меток ухода не имеет (onDisconnect не сработал), и узкие слушатели лобби heartbeat не видят.
-// Раз в 45 с читаем ОДИН РАЗ lastSeen обоих мест только у видимых партий (2 маленьких чтения на карточку, без постоянной подписки).
-// Вердикт -- общий PresenceEvidence.bothGoneVerdict на момент чтения; он липкий: место, исчерпавшее свою минуту, назад не войдёт (Rules).
-function probeItalianSilentRooms(session) {
-    const P = window.ItalianOnlinePresence;
-    if (!P || typeof P.bothForfeited !== "function" || !canUseFirebase() || !serverTimeOffsetReady) return;
-    Object.keys(lobbyItalianRoomsByCode).forEach(function (code) {
-        const pres = lobbyItalianPresenceByCode[code];
-        if (!pres || lobbyItalianSilentDead[code] === true || !isItalianLobbyRoom(lobbyItalianRoomsByCode[code])) return;
-        const read = function (color) {
-            return database.ref("roomsItalianPresence/" + code + "/" + color + "/cur/lastSeen").once("value").then(function (snap) { const v = snap.val(); return typeof v === "number" ? v : null; }, function () { return null; });
-        };
-        Promise.all([read("light"), read("dark")]).then(function (seen) {
-            if (session !== lobbyItalianSession || lobbyItalianSilentDead[code] === true || !lobbyItalianRoomsByCode[code]) return;
-            if (seen[0] === null || seen[1] === null) return;   // нет данных = не «брошена»
-            const live = JSON.parse(JSON.stringify(lobbyItalianPresenceByCode[code] || {}));
-            ["light", "dark"].forEach(function (color, i) { if (live[color] && live[color].cur) live[color].cur.lastSeen = seen[i]; });
-            if (P.bothForfeited(lobbyItalianRoomsByCode[code], live, getEstimatedServerNow(), serverTimeOffsetReady)) {
-                lobbyItalianSilentDead[code] = true;
-                recomputeItalianAbandoned();
-            }
-        });
-    });
 }
 
 // Перерисовка нужна, только если у какой-то карточки изменился признак «брошена» (в том числе просто от времени).
@@ -12432,7 +12355,6 @@ function startItalianLobbyListening() {
         lobbyItalianQuery = query;
         lobbyItalianStatus = "live";
         lobbyItalianSweepTimer = setInterval(recomputeItalianAbandoned, ITALIAN_LOBBY_SWEEP_MS);
-        lobbyItalianSilentTimer = setInterval(function () { probeItalianSilentRooms(session); }, ITALIAN_LOBBY_SILENT_PROBE_MS);
         const failed = function (error) {
             if (session !== lobbyItalianSession) return;
             // Нет доступа (например, Rules ещё не обновлены) или сбой: итальянская часть отключается,

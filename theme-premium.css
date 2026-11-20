@@ -30,9 +30,9 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
     position: absolute;
     inset: 0;
     /* готовая графика GPT-6: рамка и шахматные края внутри картинки, пропорции сохранены (cover), без шашек */
-    background: var(--pm-wood-dark) url("assets/bg-menu-noframe-390x844.webp?v=1") 50% 50% / cover no-repeat;   /* 19.11.2026: без большой внешней золотой рамки (та же графика без рамки, что у главного меню) */
+    background: var(--pm-wood-dark) url("assets/bg-wood-plain-390x844.webp?v=1") 50% 50% / cover no-repeat;
 }
-@media (min-aspect-ratio: 52/100) { .pm-bg-board { background-image: url("assets/bg-menu-noframe-320x568.webp?v=1"); } }
+@media (min-aspect-ratio: 52/100) { .pm-bg-board { background-image: url("assets/bg-wood-plain-320x568.webp?v=1"); } }
 body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-screen):not(.hidden)) > h1 { display: none; }
 
 /* ---- сам экран ---- */
@@ -217,9 +217,9 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
     justify-content: stretch;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    background: #2a1208 url("assets/bg-menu-noframe-390x844.webp?v=1") 50% 50% / cover no-repeat;
+    background: #2a1208 url("assets/bg-wood-plain-390x844.webp?v=1") 50% 50% / cover no-repeat;
 }
-@media (min-aspect-ratio: 52/100) { #stats-modal.modal-overlay { background-image: url("assets/bg-menu-noframe-320x568.webp?v=1"); } }
+@media (min-aspect-ratio: 52/100) { #stats-modal.modal-overlay { background-image: url("assets/bg-wood-plain-320x568.webp?v=1"); } }
 #stats-modal .stats-modal-box {
     box-sizing: border-box;
     width: 100%;
@@ -289,7 +289,7 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
 }
 
 /* ================= ЭТАП 3: время партии, ожидание соперника, лобби «Кто играет?» ================= */
-:is(#time-control-screen, #group-lobby-screen) {
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) {
     box-sizing: border-box;
     max-width: 340px;
     margin-left: auto;
@@ -299,7 +299,7 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
     min-height: calc(100svh - 80px);
     justify-content: center;
 }
-:is(#time-control-screen, #group-lobby-screen) .menu-button {
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) .menu-button {
     max-width: 300px;
     height: 48px;
     padding: 0 14px;
@@ -315,15 +315,17 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
     background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
     box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
 }
-:is(#time-control-screen, #group-lobby-screen) .menu-button::after { display: none; }
-:is(#time-control-screen, #group-lobby-screen) .danger-button {
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) .menu-button::after { display: none; }
+:is(#time-control-screen, #group-lobby-screen, #waiting-screen) .danger-button {
     background: linear-gradient(180deg, #5a2a24 0%, #3a1712 60%, #250d09 100%);
     color: #ecd196;
     margin-top: 6px !important;
 }
 /* заголовки: золотой шрифт с тенью на тёмной планке */
 #time-control-screen > p,
-#group-lobby-screen > h2 {
+#group-lobby-screen > h2,
+#waiting-invite-prompt,
+#waiting-text {
     width: 100%;
     box-sizing: border-box;
     margin: 0 0 4px;
@@ -340,27 +342,13 @@ body:has(:is(#mode-screen, #time-control-screen, #group-lobby-screen, #waiting-s
     color: var(--pm-gold);
     text-shadow: 0 2px 3px rgba(0, 0, 0, .7);
 }
-/* 19.11.2026: экран «Приглашение готово» RU = утверждённый итальянский образец: общая карточка (правила style.css #waiting-screen) на приглушённом игровом фоне; плашки и премиум-кнопки отсюда убраны. Тексты как у итальянского экрана. */
-/* 19.11.2026 (2): заголовок над карточкой = итальянский <h2> «Итальянские шашки» (те же значения), тот же отступ до карточки; показывается только вместе с экраном ожидания */
-#waiting-title { display: none; }
-body:has(#waiting-screen:not(.hidden)) #waiting-title {
-    display: block;
-    font-family: var(--pm-serif);
-    font-size: clamp(24px, 6vw, 34px);
-    font-weight: 800;
-    letter-spacing: -0.16px;
-    text-align: center;
-    margin: 6px 0 14px;
-    color: #fff3d6;
-    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6), 0 0 26px rgba(255, 195, 100, 0.35);
+#waiting-text, #waiting-invite-prompt { font-size: 17px; }
+/* «Ожидание»: панель-обёртка без стекла -- блоки сами на тёмных планках */
+#waiting-screen {
+    border: 0;
+    background: none;
+    box-shadow: none;
 }
-#waiting-screen { margin-top: 40px; } /* как у итальянского: от заголовка до карточки 14 + 40 */
-/* строка «Сообщество в Telegram»: на экране приглашения (RU и IT) одна и та же общая строка, у нижнего края экрана, поверх затемнения; ссылка остаётся нажимаемой */
-body:has(:is(#waiting-screen, #it86-screen[data-it86-wait="1"]):not(.hidden)) #credit-footer {
-    position: fixed; left: 0; right: 0; bottom: 12px; margin: 0; z-index: 5;
-}
-body:has(#it86-screen[data-it86-wait="1"]:not(.hidden)) #credit-footer { z-index: 100000; } /* выше итальянской панели (z 100000, подвал в DOM позже), ниже её окон (100001+) */
-#waiting-invite-prompt, #waiting-text { color: #f1dcae; text-shadow: 0 1px 3px rgba(0, 0, 0, .8); }
 /* «Кто играет?»: список и карточки комнат на тёмных планках */
 #group-rooms-list { margin-bottom: 8px; }
 #group-lobby-screen .group-room-card {
@@ -368,8 +356,8 @@ body:has(#it86-screen[data-it86-wait="1"]:not(.hidden)) #credit-footer { z-index
     border: 1px solid rgba(232, 189, 114, .5);
 }
 @media (max-height: 640px) {
-    :is(#time-control-screen, #group-lobby-screen) { gap: 9px; padding-top: 10px; padding-bottom: 10px; }
-    :is(#time-control-screen, #group-lobby-screen) .menu-button { height: 42px; }
+    :is(#time-control-screen, #group-lobby-screen, #waiting-screen) { gap: 9px; padding-top: 10px; padding-bottom: 10px; }
+    :is(#time-control-screen, #group-lobby-screen, #waiting-screen) .menu-button { height: 42px; }
     #time-control-screen > p, #group-lobby-screen > h2 { font-size: 17px; padding: 8px 10px; }
 }
 
@@ -459,7 +447,7 @@ body:has(#game-screen:not(.hidden)) > h1 {
     background: linear-gradient(180deg, rgba(60, 20, 12, .82), rgba(24, 8, 3, .82));
     border-color: rgba(232, 189, 114, .55);
 }
-#it86-screen .menu-button, #waiting-screen .menu-button {
+#it86-screen .menu-button {
     border: 1.5px solid rgba(224, 176, 112, .9);
     color: #fff3d6;
     text-shadow: none;
@@ -468,7 +456,7 @@ body:has(#game-screen:not(.hidden)) > h1 {
     background: linear-gradient(180deg, #85322a 0%, #53190f 58%, #35100b 100%);
     box-shadow: inset 0 1px 0 rgba(255, 222, 170, .35), inset 0 -3px 6px rgba(0, 0, 0, .35), 0 6px 14px rgba(0, 0, 0, .5);
 }
-#it86-screen .danger-button, #waiting-screen .danger-button {
+#it86-screen .danger-button {
     background: linear-gradient(180deg, #5a2a24 0%, #3a1712 60%, #250d09 100%);
     color: #ecd196;
 }
@@ -492,8 +480,8 @@ body:has(#it86-screen:not(.hidden)) > :is(h1, #menu-screen, #mode-screen, #time-
    Утверждённый графический эталон checkers-game-background-chestnut-glass-approved.webp (711x1536): каштановое дерево, приглушённые шахматные края, глянец и золотая рамка уже ВНУТРИ картинки,
    поэтому второй рамки и фоновых слоёв нет. Картинка растягивается ровно на экран (100% 100%), чтобы рамка не обрезалась на любых пропорциях.
    Правила действуют ТОЛЬКО при видимом #game-screen / #it86-screen; остальные экраны и статистика не затронуты. Слой .pm-bg без нажатий (pointer-events: none). */
-body:has(:is(#game-screen, #it86-screen, #waiting-screen):not(.hidden)) > .pm-bg > .pm-bg-board {
-    background: #0b0503 url("assets/checkers-game-background-chestnut-glass-noframe.webp?v=1") 0 0 / 100% 100% no-repeat;   /* 19.11.2026: тот же эталон, обрезан по краям на ширину внешней рамки */
+body:has(:is(#game-screen, #it86-screen):not(.hidden)) > .pm-bg > .pm-bg-board {
+    background: #0b0503 url("assets/checkers-game-background-chestnut-glass-approved.webp?v=1") 0 0 / 100% 100% no-repeat;
 }
 /* на экране итальянского приглашения строка «Разработчик» показывается один раз (общая внизу экрана) */
 body:has(#it86-screen[data-it86-wait="1"]:not(.hidden)) #it86-credit { display: none; }

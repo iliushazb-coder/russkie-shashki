@@ -28,8 +28,6 @@
   "use strict";
   const GRACE_MS = 60000, BEAT_MS = 4000, ALIVE_MS = 30000, REARM_MIN_MS = 3000, CODE = /^[A-F0-9]{24}$/;
   const num = v => typeof v === "number" && isFinite(v);
-  // F1: the ONE definition of "a seat has left" (server mark >= 60 s OR 75 s of silent heartbeat) shared with the Worker and the Rules.
-  const PE = global.PresenceEvidence || (typeof require === "function" ? require("./presence-evidence") : null);
 
   // ---- pure helpers (shared semantics with the Russian predicates) ----
   // One colour's stored { cur, off } -> the Russian-shaped view { online, onlineSince, absentSince?, lastSeen, sid }.
@@ -56,28 +54,9 @@
     if (p.light.online !== false || p.dark.online !== false) return false;
     return (serverNow - Math.max(p.light.absentSince, p.dark.absentSince)) >= GRACE_MS;
   }
-  // F1 (silence-aware, REAL presence only: the lobby's narrow subscriptions feed lastSeen stubs, so isAbandoned above stays mark-only).
-  // bothForfeited: BOTH seats ran out of their own 60 s (mark or silence) -> the game did not take place (void). ownForfeited: MY seat did: it cannot come back.
-  function bothForfeited(room, presence, serverNow, ready) {
-    if (!room || !ready || room.status !== "active" || room.winner || room.result) return false;
-    const p = aggregate(presence);
-    if (!p || !p.light || !p.dark) return false;
-    return PE.bothGoneVerdict(p.light, p.dark, serverNow) === null;
-  }
-  function ownForfeited(presence, color, serverNow, ready) {
-    if (!ready) return false;
-    const p = aggregate(presence), me = p && p[color];
-    return !!me && PE.isAbsent(me, serverNow);
-  }
-  function absenceMs(p, serverNow) { // getAuthoritativeAbsenceMs, p = aggregated colour: age of the server MARK only (null when not marked)
+  function absenceMs(p, serverNow) { // getAuthoritativeAbsenceMs, p = aggregated colour
     if (!p || p.online !== false || !num(p.absentSince)) return null;
     return serverNow - p.absentSince;
-  }
-  // F1: how long a seat has been gone: the larger of the mark age and (heartbeat silence - 15 s margin), never negative. null = no record.
-  function goneMs(c, serverNow) {
-    if (!c) return null;
-    const mk = absenceMs(c, serverNow), silent = num(c.lastSeen) ? Math.max(0, serverNow - c.lastSeen) : 0;
-    return Math.max(mk === null ? 0 : mk, silent - (PE ? PE.SILENT_EXTRA_MS : 15000), 0);
   }
   function onlineMs(p, serverNow) { // getOnlineSessionMs, p = aggregated colour
     if (!p || p.online !== true || !num(p.onlineSince)) return null;
@@ -88,16 +67,13 @@
     if (!ready) return { state: "unknown" };
     const presence = aggregate(presenceRaw);
     const opp = myColor === "light" ? "dark" : "light";
-    const o = presence && presence[opp];
-    if (!o) return { state: "unknown" };
-    const silent = num(o.lastSeen) ? Math.max(0, serverNow - o.lastSeen) : 0;
-    if (absenceMs(o, serverNow) === null && silent <= STALE_MS) return { state: o.online === true ? "present" : "unknown" };
-    const a = goneMs(o, serverNow);
+    const a = absenceMs(presence && presence[opp], serverNow);
+    if (a === null) return { state: presence && presence[opp] && presence[opp].online === true ? "present" : "unknown" };
     if (a < GRACE_MS) return { state: "countdown", remainingMs: GRACE_MS - a };
     const me = presence && presence[myColor];
-    // the same conditions the Worker and the Rules re-check: I am unmarked and alive (recent heartbeat). No "online for 60 s" any more: a seat that
-    // missed its own minute cannot be back at all (the Rules refuse its arrival).
-    return { state: "expired", canClaim: !!me && me.online === true && num(me.lastSeen) && serverNow - me.lastSeen <= ALIVE_MS };
+    const mine = onlineMs(me, serverNow);
+    // the same three conditions the Worker and the Rules re-check: online for >= 60 s, and alive (recent heartbeat)
+    return { state: "expired", canClaim: mine !== null && mine >= GRACE_MS && serverNow - me.lastSeen <= ALIVE_MS };
   }
 
   // Stage F-A: one SEAT as the Russian statusForColor shows it (a spectator sees both seats, a player sees the opponent).
@@ -113,7 +89,7 @@
     if (!c) return { state: "unknown" };
     const age = num(c.lastSeen) ? Math.max(0, serverNow - c.lastSeen) : 0;
     const away = absenceMs(c, serverNow);
-    const elapsed = goneMs(c, serverNow);
+    const elapsed = away !== null ? away : age;
     if (elapsed > GRACE_MS) return { state: "expired", marked: away !== null };
     if (away !== null || age > STALE_MS) return { state: "countdown", remainingMs: Math.max(0, GRACE_MS - elapsed), marked: away !== null };
     return { state: "present" };
@@ -245,9 +221,7 @@
         if (stale()) return;
         const room = rs && rs.val ? rs.val() : null, pres = ps && ps.val ? ps.val() : null;
         if (!room || room.status === "finished" || room.winner) { finishLocal(s, "finished"); return; }
-        if (isAbandoned(room, pres, serverNow(), offsetReady) || bothForfeited(room, pres, serverNow(), offsetReady)) { finishLocal(s, "abandoned"); return; }
-        // F1: MY own minute ran out (mark or silence): the seat is lost for good, the Rules refuse the arrival. The opponent (if he is online) is awarded the result by the server.
-        if (ownForfeited(pres, s.color, serverNow(), offsetReady)) { finishLocal(s, "forfeited"); return; }
+        if (isAbandoned(room, pres, serverNow(), offsetReady)) { finishLocal(s, "abandoned"); return; }
         // The session this arrival REPLACES, exactly as the database showed it a moment ago. If another tab publishes in
         // between, the database refuses this arrival (it no longer matches) -- a stale arrival cannot displace it.
         const seat0 = (pres || {})[s.color] || {};
@@ -318,10 +292,8 @@
           emit({ type: "superseded" });
           return;
         }
-        // F1: a session that stayed SILENT for 75 s is dead like a marked one (the Rules refuse its heartbeat): it must arrive again, not "carry on".
-        const silentDead = !!agg && agg.online === true && num(agg.lastSeen) && serverNow() - agg.lastSeen >= PE.SILENT_MS;
-        if (agg && agg.online === true && !silentDead && s.confirmed && agg.sid === s.confirmed) { resumeConfirmed(s); return; } // an arrival was refused; the seat is still ours and alive
-        if (agg && agg.sid === s.sid && agg.online === true && !silentDead) return; // the error was about an older arrival; the seat is ours and alive
+        if (agg && agg.online === true && s.confirmed && agg.sid === s.confirmed) { resumeConfirmed(s); return; } // an arrival was refused; the seat is still ours and alive
+        if (agg && agg.sid === s.sid && agg.online === true) return; // the error was about an older arrival; the seat is ours and alive
         // The seat is empty, belongs to an away session, or ours was marked away (e.g. by the server's onDisconnect):
         // arrive again with a NEW sid and a fresh onlineSince -- never reuse the old session. Throttled.
         const t = wall();
@@ -382,7 +354,7 @@
       sid: () => (cur ? cur.sid : null), active: () => !!cur && !cur.dead, armed: () => !!cur && cur.armed, generation: () => gen };
   }
 
-  const api = Object.freeze({ GRACE_MS, BEAT_MS, ALIVE_MS, STALE_MS, create, randomSid, aggregate, aggregateColor, isAbandoned, bothForfeited, ownForfeited, goneMs, absenceMs, onlineMs, opponentState, seatState });
+  const api = Object.freeze({ GRACE_MS, BEAT_MS, ALIVE_MS, STALE_MS, create, randomSid, aggregate, aggregateColor, isAbandoned, absenceMs, onlineMs, opponentState, seatState });
   global.ItalianOnlinePresence = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof window !== "undefined" ? window : globalThis);
