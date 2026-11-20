@@ -30,6 +30,7 @@ const s={epoch:0,visible:false,code:null,room:null,view:null,pendingJoin:null,
   selected:null,busy:false,token:null,uncertain:false,ref:null,listener:null,
   readPending:false,readAgain:false,poll:null,
   gen:0,applied:0,acc:null,
+  lk:{state:"na",was:false,badSince:null,recoverAt:null,expired:false,offAt:null,off:null,on:null},presSeenAt:0,soft:false,failAt:null,   // OWN-link presentation state (see ownLinkTick)
   pc:null,presRef:null,presListener:null,pres:null,absTick:null,claiming:false,lastClaim:0,claimStage:"idle",claimRefusedAt:0,exitKey:null,seatDiagKey:null,superseded:null,
   spectator:false,spRef:null,spListener:null,mySp:null,msg:null,opp:null,spn:0,autoJoin:null,rm:null,rmView:null,
   entering:false,recover:false,fx:null,chain:null,nm:null,loc:null,holdUntil:0,paintSig:null,paintPos:null,paintCells:null,pend:null,
@@ -384,7 +385,7 @@ function presenceEvent(e){
   else if(e.type==="forfeited"){   // F1: my own minute ran out: the seat is lost, the server decides for the opponent; I only show the way out and re-read the room
     stopPresence(false);
     const PS=global.OnlinePresenceStatus;
-    if(PS&&global.document&&s.room&&s.room.status==="active")PS.promptLinkLost({doc:global.document,text:I18N.render(M("link.lost")),waitLabel:I18N.render(M("link.wait")),leaveLabel:I18N.render(M("end.to_menu")),onLeave:()=>leave()});
+    if(PS&&global.document&&s.room&&s.room.status==="active")PS.promptLinkLost({doc:global.document,text:I18N.render(M("link.own_forfeited")),waitLabel:I18N.render(M("link.wait")),leaveLabel:I18N.render(M("end.to_menu")),onLeave:()=>leave()});
     refresh();
   }
   else if(e.type==="superseded"){s.superseded=s.code;stopPresence(false);
@@ -402,16 +403,18 @@ function syncPresence(){
 function watchPresence(){
   unwatchPresence();
   const code=s.code,ref=db().ref("roomsItalianPresence/"+code);
-  const listener=snap=>{if(s.code===code){s.pres=snap.val();presenceTick();}};
+  const listener=snap=>{if(s.code===code){s.pres=snap.val();s.presSeenAt=monoNow();presenceTick();}};
   s.presRef=ref;s.presListener=listener;s.pres=null;
   ref.on("value",listener,()=>{});
   s.absTick=global.setInterval(presenceTick,1000);
+  ownLinkWatch();
   if(s.view&&s.view.spectator)clockStart();
 }
 function unwatchPresence(){
   if(s.presRef&&s.presListener)try{s.presRef.off("value",s.presListener);}catch(_){}
   if(s.absTick!==null){global.clearInterval(s.absTick);s.absTick=null;}
   s.presRef=null;s.presListener=null;s.pres=null;
+  ownLinkUnwatch();
   clockStop();
 }
 function stopPresence(explicit){
@@ -434,6 +437,73 @@ function srv(){
   if(s.view&&!s.view.spectator&&ctl)return {ms:ctl.serverNow(),ready:ctl.serverReady(),connected:ctl.isConnected()};
   return c?{ms:Date.now()+c.offset,ready:c.ready,connected:true}:{ms:Date.now(),ready:false,connected:true};
 }
+// ---- OWN link (presentation only) --------------------------------------------------------------------------------------------------------
+// The database client notices a dead link only after its own transport timeout (~30-45 s). Until then the OTHER seat's clock keeps running here (its heartbeat is frozen,
+// because nothing arrives), which used to read as «соперник оффлайн NN с» while MY panel said «В игре». The facts below come from what the database CONFIRMED (the
+// ack of my own heartbeat, shared/italian-online-presence.js: ackAgeMs) and from the browser's online/offline signal; nothing is written, nobody is reconnected
+// (a forced goOffline/goOnline would be taken by the server for MY leaving and start my minute), no result is ever decided here (the server does that).
+function monoNow(){
+  try{const c=s.pc;if(c&&typeof c.mono==="function")return c.mono();}catch(_){}
+  return global.performance&&typeof global.performance.now==="function"?global.performance.now():Date.now();
+}
+function ownLinkReset(){
+  const L=s.lk;
+  L.state="na";L.was=false;L.badSince=null;L.recoverAt=null;L.expired=false;
+}
+function ownLinkWatch(){
+  const g=global,L=s.lk;
+  if(typeof g.addEventListener!=="function"||L.off)return;
+  L.off=()=>{L.offAt=monoNow();presenceTick();};
+  L.on=()=>{L.offAt=null;presenceTick();};
+  g.addEventListener("offline",L.off);g.addEventListener("online",L.on);
+}
+function ownLinkUnwatch(){
+  const g=global,L=s.lk;
+  if(L.off&&typeof g.removeEventListener==="function"){g.removeEventListener("offline",L.off);g.removeEventListener("online",L.on);}
+  L.off=null;L.on=null;L.offAt=null;
+  ownLinkReset();
+}
+// After the link came BACK the presence of the opponent that I still hold is the old one: it is not judged until a fresh copy arrived (at most LINK_RECOVER_HOLD_MS).
+function linkHold(){
+  const L=s.lk,PS=global.OnlinePresenceStatus;
+  if(L.recoverAt===null)return false;
+  const hold=PS&&PS.LINK_RECOVER_HOLD_MS||6000;
+  if(s.presSeenAt>L.recoverAt||monoNow()-L.recoverAt>=hold){L.recoverAt=null;return false;}
+  return true;
+}
+const linkBad=()=>s.lk.state==="suspect"||s.lk.state==="lost";
+const linkDoubt=()=>linkBad()||linkHold();
+// A failed read of the room WHILE MY OWN link is in doubt (cut internet, the first seconds after it came back) is the expected consequence of that cut, not a server problem:
+// the board stays locked (s.uncertain, as before) and the status lines say «Нет связи» / «Подключение…»; no long text and no «Проверить комнату» under the board. The poll (5 s) reads again.
+// If the read still fails once my link is believed fine, or for a spectator / a non-active room, the full message and the button come back exactly as before.
+const SOFT_READ_MS=20000;   // a read that fails in the first 20 s of a failure streak is still «a hiccup» even before my own-link detector (10 s) has spoken
+const softRead=()=>{
+  if(!(s.view&&!s.view.spectator&&s.room&&s.room.status==="active"))return false;
+  const now=monoNow();if(s.failAt===null)s.failAt=now;
+  return linkDoubt()||now-s.failAt<SOFT_READ_MS;
+};
+// «The server state is unknown» in a RUNNING game, with my link fine (a real read problem): the way out is NOT a long text + a big button under the board (they push the screen).
+// It lives in MY existing status line: red dot + «Нажми: проверить»; a tap on my panel does the same as «Проверить комнату» (checkRoom, unchanged).
+// Everything else (a move whose fate is unknown, a join / create in doubt, a lost game restore) keeps the text and the button exactly as before.
+const PANEL_CHECK_KEYS=new Set(["msg.server_unknown","msg.listener_down"]);
+const panelCheck=st=>!!(st&&st.uncertain&&!st.soft&&!st.pendingJoin&&!st.recover&&!st.spectator&&st.view&&!st.view.spectator&&st.room&&st.room.status==="active"&&st.msg&&typeof st.msg==="object"&&PANEL_CHECK_KEYS.has(st.msg.k));
+function ownLinkTick(){
+  const L=s.lk,PS=global.OnlinePresenceStatus,ctl=s.pc,v=s.view;
+  if(!PS||typeof PS.classifyOwnLink!=="function"||!ctl||typeof ctl.ackAgeMs!=="function"||!v||v.spectator||!s.room||s.room.status!=="active"){ownLinkReset();return "na";}
+  const now=monoNow(),doc=global.document,nav=global.navigator;
+  const connected=ctl.isConnected()===true;
+  if(connected)L.was=true;
+  const age=ctl.ackAgeMs();
+  const r=PS.classifyOwnLink({connected,wasConnected:L.was,onLine:nav&&typeof nav.onLine==="boolean"?nav.onLine:null,
+    offlineForMs:L.offAt===null?null:now-L.offAt,ackAgeMs:age,visible:!(doc&&doc.hidden)});
+  const bad=r.state==="suspect"||r.state==="lost";
+  if(bad){if(L.badSince===null)L.badSince=now-(typeof age==="number"?age:0);L.recoverAt=null;}
+  else if(L.state==="suspect"||L.state==="lost"){L.badSince=null;L.recoverAt=now;}
+  if(L.state!==r.state)dg("ownlink",{from:L.state,to:r.state,reason:r.reason||null,ackAgeMs:typeof age==="number"?Math.round(age):null});
+  L.state=r.state;
+  L.expired=bad&&L.badSince!==null&&now-L.badSince>=PS.GRACE_MS;   // a minute without a link: the time to come back MAY have run out (the server decides; only the words under MY name change)
+  return r.state;
+}
 function presenceTick(){
   const ctl=s.pc,v=s.view;
   if(v&&v.spectator&&s.room&&s.room.status==="active"){
@@ -442,9 +512,11 @@ function presenceTick(){
     if(Presence&&(Presence.isAbandoned(s.room,s.pres,n.ms,n.ready)||Presence.bothForfeited(s.room,s.pres,n.ms,n.ready)))voidFlow();   // a dead game seen by a spectator is cleaned up the same way (the Worker decides)
     return;
   }
-  if(!ctl||!v||v.spectator||!s.room||s.room.status!=="active"){setOpp(null);return;}
+  if(!ctl||!v||v.spectator||!s.room||s.room.status!=="active"){ownLinkReset();setOpp(null);return;}
+  ownLinkTick();
   const st=Presence.opponentState(s.pres,v.color,ctl.serverNow(),ctl.serverReady());
-  setOpp(st.state==="countdown"?M("presence.countdown",{sec:Math.ceil(st.remainingMs/1000)}):
+  if(linkDoubt())setOpp(null);   // my own link is under suspicion: whatever I hold about the opponent is OLD, no «Оффлайн NN с» about him
+  else setOpp(st.state==="countdown"?M("presence.countdown",{sec:Math.ceil(st.remainingMs/1000)}):
     st.state==="expired"?M("presence.expired"):null);
   paintPanelStatus();
   exitPromptTick(v);
@@ -502,7 +574,7 @@ function stopWatch(){
 function resetRoom(){
   stopHold();rmStop();actionsStop();stopPresence(false);s.superseded=null;leaveSpectating();
   stopWatch();fxStop();s.loc=null;s.pend=null;s.holdUntil=0;s.paintSig=null;s.paintPos=null;s.paintCells=null;s.epoch++;s.code=null;s.room=null;s.view=null;s.claimingTm=null;s.tmAt=0;   // K3: a time-is-up request belongs to ONE room visit (epoch): the next room never inherits it
-  s.pendingJoin=null;s.selected=null;s.uncertain=false;s.spectator=false;s.recover=false;s.tp=null;
+  s.pendingJoin=null;s.selected=null;s.uncertain=false;s.soft=false;s.failAt=null;s.spectator=false;s.recover=false;s.tp=null;
   if(copyTimer){global.clearTimeout(copyTimer);copyTimer=null;}const cb=$("copy");if(cb)cb.textContent=I18N.render(M("waiting.copy"));
 }
 function setBusy(v){
@@ -660,7 +732,7 @@ function seatFacts(color,n){
   const num=x=>typeof x==="number"&&isFinite(x);
   return {ready:!!n.ready,connected:!!n.connected,known:!!c,
     awayMs:c&&c.online===false&&num(c.absentSince)?n.ms-c.absentSince:null,
-    silentMs:c&&num(c.lastSeen)?n.ms-c.lastSeen:null,claim:claimStageNow()};
+    silentMs:c&&num(c.lastSeen)?n.ms-c.lastSeen:null,claim:claimStageNow(),linkSuspect:linkDoubt()};
 }
 function panelStatusFor(pos){
   const v=s.view,room=s.room;
@@ -668,11 +740,16 @@ function panelStatusFor(pos){
   const mine=v.color==="dark"?"dark":"light",other=mine==="light"?"dark":"light";
   const color=pos==="top"?other:mine;
   if(!v.spectator&&pos==="bottom"){   // my own seat: never a countdown/verdict about MYSELF; no link of my own = «Подключение…»
-    const own=srv();return s.uncertain||!own.connected?{m:M("panel.connecting"),cls:"status-neutral"}:{m:M("panel.in_game"),cls:"status-online"};
+    const own=srv();
+    // MY link is dead / suspected: red blinking dot + short words in MY existing status line (no new element, nothing moves)
+    if(!v.spectator&&linkBad())return {m:M(s.lk.expired?"panel.own_wait":s.lk.state==="lost"?"panel.own_reconnect":"panel.own_lost"),cls:"status-own-lost"};
+    if(panelCheck(s))return {m:M("panel.own_check"),cls:"status-own-lost"};
+    return s.uncertain||!own.connected?{m:M("panel.connecting"),cls:"status-neutral"}:{m:M("panel.in_game"),cls:"status-online"};
   }
   if(!Presence||(!v.spectator&&!s.pc))return {m:M("panel.connecting"),cls:"status-neutral"};
   const n=srv();
   if(!n.connected)return {m:M("panel.connecting"),cls:"status-neutral"};   // no link of my own: the other seat cannot be judged (Russian: «Соединение…»)
+  if(!v.spectator&&linkDoubt())return {m:M("panel.connecting"),cls:"status-neutral"};   // my link is probably dead (or has just come back): the opponent's state is UNKNOWN, never a countdown
   const PS=global.OnlinePresenceStatus;
   if(PS){   // F1: the same classification as the Russian panel (shared/online-presence-status.js)
     const cs=seatFacts(color,n);
@@ -808,7 +885,7 @@ function controlsFor(st){
   const card=!spec&&has&&!!room&&(room.status==="waiting"||holdOn(st))&&!!st.view&&!st.view.spectator;
   return {
     create:false,join:false,code:false,   // the old test controls (manual create / join / code) are not part of the real game: the invitation is created automatically, a guest comes by the link
-    check:!spec&&!st.entering&&!st.autoJoin&&(!has||st.uncertain||!!st.pendingJoin||st.recover),
+    check:!spec&&!st.entering&&!st.autoJoin&&(!has||(st.uncertain&&!st.soft&&!panelCheck(st))||!!st.pendingJoin||st.recover),
     card,share:card,copy:card,back:card,credit:card,
     link:false
   };
@@ -875,7 +952,7 @@ function paintStatus(c){
   const st=$("status");if(!st)return;
   const k=c||controlsFor(s);
   st.hidden=!!(k.card&&(holdOn(s)||!s.msg||typeof s.msg!=="object"||QUIET_WITH_CARD.has(s.msg.k)));
-  if(s.room&&s.room.status==="active"&&s.msg&&typeof s.msg==="object"&&QUIET_IN_GAME.has(s.msg.k))st.setAttribute("data-it86-quiet","1");else st.removeAttribute("data-it86-quiet");
+  if(s.room&&s.room.status==="active"&&s.msg&&typeof s.msg==="object"&&(QUIET_IN_GAME.has(s.msg.k)||panelCheck(s)))st.setAttribute("data-it86-quiet","1");else st.removeAttribute("data-it86-quiet");
 }
 // A player's running, confirmed game: «Назад» is not drawn (the Russian screen has none; the player leaves with Telegram's own controls and returns through «Кто играет?»).
 // It is drawn again in the states where the way out is needed: the invitation card (own «Назад»), a spectator, a finished game, loading with no active room, and when no room is open (B2R33: NOT during an active game, even unconfirmed). The handler (exitPressed -> confirmation -> leave) is untouched.
@@ -1007,7 +1084,7 @@ function adopt(raw,v){
   // Our own move was already shown (sound + animation played): the room that confirms it is compared with THAT picture, so nothing is played twice.
   // Any other room wins over the temporary picture: it is dropped and the server position is drawn (not while the sent request is still open).
   if(L){if(confirms(L,raw,v)){s.loc=null;before=L.view;}else if(!open)dropLocal();}
-  s.room=raw;s.view=v;s.uncertain=open&&P.unknown===true;
+  s.room=raw;s.view=v;s.uncertain=open&&P.unknown===true;s.soft=false;s.failAt=null;
   if(wasCard&&s.visible&&raw.status==="active"&&!v.spectator&&!s.spectator&&!(s.rmJoin&&s.rmJoin===s.code))startHold();
   if(SND){try{SND.observe(before,v);}catch(_){}}
   try{noteTransition(before,v);}catch(_){s.fx=null;s.chain=null;}
@@ -1032,8 +1109,11 @@ async function refresh(){
     adopt(raw,v);say(s.pend&&s.uncertain?M("msg.move_uncertain"):statusFor(raw,v));   // a sent move whose fate is still open keeps its warning
     render();return true;
   }catch(_){
-    if(epoch===s.epoch){s.uncertain=true;render();
-      say(M("msg.server_unknown"));}
+    if(epoch===s.epoch){
+      s.uncertain=true;
+      if(softRead()){s.soft=true;render();}
+      else{s.soft=false;say(M("msg.server_unknown"));render();}
+    }
     return false;
   }finally{
     if(epoch===s.epoch){
@@ -1059,7 +1139,8 @@ function watchRoom(code){
   s.ref=db().ref("roomsItalian/"+code);
   s.listener=()=>{if(epoch===s.epoch)refresh();};
   s.ref.on("value",s.listener,()=>{if(epoch===s.epoch){
-    s.uncertain=true;render();say(M("msg.listener_down"));}});
+    s.uncertain=true;
+    if(softRead()){s.soft=true;render();}else{s.soft=false;say(M("msg.listener_down"));render();}}});
   // Read-only polling fallback: a silent SDK listener must not freeze the game.
   s.poll=setInterval(()=>{
     if(epoch===s.epoch&&s.visible&&!s.busy&&!s.readPending)refresh();
@@ -1937,7 +2018,8 @@ function attach(){
   const on=(id,fn)=>{const n=$(id);if(n)n.addEventListener("click",fn);};
   const start=global.document.getElementById("btn-italian-online");
   if(start)start.addEventListener("click",()=>{entryTc=pendingTc;pendingTc=0;show();enterFriend();});
-  on("create",create);on("join",joinRoom);on("check",checkRoom);on("exit",exitPressed);
+  on("create",create);on("join",joinRoom);on("check",checkRoom);on("panel-bottom",()=>{if(panelCheck(s))checkRoom();});   // the small way out in MY status line (see panelCheck)
+  on("exit",exitPressed);
   on("end-close",leave);on("back-yes",()=>{backAsk(false);leave();});on("back-no",()=>backAsk(false));
   // Stage F-A: the Russian reaction / draw / resign controls
   on("offer-draw",()=>{if(s.ac)s.ac.ctl.offerDraw();});

@@ -370,3 +370,10 @@ body:has(:where(#it86-screen[data-it86-wait="1"])) {
 #it86-timer.timer-low{color:#ff3f3f;background:rgba(115,0,0,0.28);border-radius:7px;
   box-shadow:inset 0 0 0 1px rgba(255,85,85,0.24),0 0 18px rgba(255,35,35,0.24);
   text-shadow:0 0 12px rgba(255,64,64,1),0 0 30px rgba(255,35,35,0.48);animation:timerLowTick 1s steps(1,end) infinite}
+
+/* OWN link lost / suspected: only the existing status line under MY name changes (red blinking dot + short words, same size as «Подтверждение…»); no extra element, nothing moves */
+.player-status.status-own-lost{color:#ff9a8f;font-size:8.5px;gap:2px;letter-spacing:-.2px}
+.player-status.status-own-lost::before{width:6px;height:6px;background:#e5483d;box-shadow:0 0 6px #e5483d;animation:statusPulse 1s ease-in-out infinite}
+/* A visible service line (e.g. «Серверное состояние неизвестно. Нажми «Проверить»») must not run into the community line of the page footer that lies under the bottom of the screen:
+   while such a line is shown the scrolled screen keeps room for it. Routine (quiet) lines add nothing, so a normal game screen does not get longer. */
+#it86-screen[data-it86-playing="1"]:has(>#it86-status:not([data-it86-quiet]))::after{min-height:34px}
