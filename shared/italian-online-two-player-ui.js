@@ -381,6 +381,12 @@ function presenceCtl(){
 function presenceEvent(e){
   if(!e)return;
   if(e.type==="abandoned")voidFlow();
+  else if(e.type==="forfeited"){   // F1: my own minute ran out: the seat is lost, the server decides for the opponent; I only show the way out and re-read the room
+    stopPresence(false);
+    const PS=global.OnlinePresenceStatus;
+    if(PS&&global.document&&s.room&&s.room.status==="active")PS.promptLinkLost({doc:global.document,text:I18N.render(M("link.lost")),waitLabel:I18N.render(M("link.wait")),leaveLabel:I18N.render(M("end.to_menu")),onLeave:()=>leave()});
+    refresh();
+  }
   else if(e.type==="superseded"){s.superseded=s.code;stopPresence(false);
     say(M("presence.superseded"));}
 }
@@ -433,7 +439,7 @@ function presenceTick(){
   if(v&&v.spectator&&s.room&&s.room.status==="active"){
     setOpp(null);paintPanelStatus();
     const n=srv();
-    if(Presence&&Presence.isAbandoned(s.room,s.pres,n.ms,n.ready))voidFlow();   // a dead game seen by a spectator is cleaned up the same way (the Worker decides)
+    if(Presence&&(Presence.isAbandoned(s.room,s.pres,n.ms,n.ready)||Presence.bothForfeited(s.room,s.pres,n.ms,n.ready)))voidFlow();   // a dead game seen by a spectator is cleaned up the same way (the Worker decides)
     return;
   }
   if(!ctl||!v||v.spectator||!s.room||s.room.status!=="active"){setOpp(null);return;}
@@ -1163,14 +1169,15 @@ function close(){
 // «Вернуться в меню»: закрывает итальянскую панель и ЯВНО сообщает приложению, что игрок вышел
 // из итальянской онлайн-партии. Экран под панелью (первый, второй, лобби) не угадывается:
 // приложение само открывает итальянский второй экран. Ни Firebase, ни Worker здесь не трогаются.
-function leave(notice){
+// inviteBack=true ONLY when «Назад» was pressed on the creator's invitation card of a room still waiting (the app then returns to the time-choice screen like the Russian flow); every other exit is unchanged.
+function leave(notice,inviteBack){
   dg("leave",{notice:notice||"menu"});
   stopPresence(true);
   close();
   try{
     const doc=global.document,Ev=global.CustomEvent;
     if(doc&&typeof doc.dispatchEvent==="function"&&typeof Ev==="function")
-      doc.dispatchEvent(new Ev("italian-online:exit",{detail:(notice==="no_active_game"||notice==="gate_closed")?{ruleset:"italian",notice}:{ruleset:"italian"}}));
+      doc.dispatchEvent(new Ev("italian-online:exit",{detail:(notice==="no_active_game"||notice==="gate_closed")?{ruleset:"italian",notice}:(inviteBack===true?{ruleset:"italian",inviteBack:true}:{ruleset:"italian"})}));
   }catch(_){}
 }
 // Stage 6C: «Играть с другом» (the Russian flow: one tap, a NEW room is created for you; see friendEntryCore for what is read first).
@@ -1957,7 +1964,7 @@ function attach(){
         "&text="+encodeURIComponent(I18N.render(M("share.text"))));
     else copyLink();   // outside Telegram: the link is copied (the result is shown on the «Скопировать ссылку» button)
   });
-  on("copy",copyLink);on("back",ev=>{if(holdOn(s)){exitPressed();return;}leave(ev);});   // K1A: while the friend-connected picture runs the game is already live: «Назад» asks like the game exit does
+  on("copy",copyLink);on("back",ev=>{if(holdOn(s)){exitPressed();return;}leave(ev,!!(controlsFor(s).card&&s.view&&s.view.room&&s.view.room.status==="waiting"));});   // K1A: while the friend-connected picture runs the game is already live: «Назад» asks like the game exit does
   // Telegram WebView may suspend the audio context again (background): every tap on this screen resumes it (idempotent, no sound).
   const scr=$("screen");
   if(scr&&SND&&typeof scr.addEventListener==="function")for(const ev of ["click","touchend"])scr.addEventListener(ev,()=>SND.unlock(),{passive:true});
