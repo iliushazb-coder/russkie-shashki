@@ -113,6 +113,7 @@ function noteServerAck(connGen, listenerGen) {
     if (listenerGen !== listenerGeneration) return;    // ответ, относящийся к прошлой комнате
     if (!isFirebaseConnected) return;
     serverAckSinceConnect = true;
+    lastAckMono = getMonotonicNow();
 }
 // Получил ли room-listener хотя бы один настоящий снапшот комнаты ПОСЛЕ
 // последнего восстановления связи. Само по себе "соединение живо 15 секунд"
@@ -127,6 +128,46 @@ let roomSnapshotSeenSinceConnect = false;
 // обязан был бы дать о себе знать хотя бы трижды.
 const CONNECTION_SETTLE_MS = 15000;
 
+// ---- СОБСТВЕННАЯ связь (только отображение; тот же механизм, что в итальянском онлайне, shared/online-presence-status.js: createOwnLinkTracker) ----
+// Клиент базы замечает обрыв по своему транспортному таймауту (~30-45 с), а до тех пор часы «молчания соперника» идут на замёрзших данных и дают ложное
+// «Оффлайн NN с» у соперника при «В игре» у меня. Здесь же по тому, что база ПОДТВЕРДИЛА (ack моей записи heartbeat), и по сигналу браузера offline/online
+// определяется, что МОЯ связь, скорее всего, мертва: в моей панели красный статус, у соперника нейтральное «Подключение…». Ничего не пишется,
+// никто не переподключается, результат не решается (решает сервер). Heartbeat, ack-логика и правила ухода (F1_RUSSIAN_CLIENT) не затронуты.
+let lastAckMono = 0;          // последний ПОДТВЕРЖДЁННЫЙ базой write presence (noteServerAck)
+let ownLinkBaseMono = 0;      // отсчёт «нет подтверждений»: сброс при подключении, настройке presence и возвращении на экран
+let roomSnapshotMono = 0;     // последний снапшот комнаты (для «свежих данных» после возврата связи)
+let ownLinkTracker = null;
+function ownLinkMarkBase() { ownLinkBaseMono = getMonotonicNow(); }
+function getOwnLinkTracker() {
+    const PS = globalThis.OnlinePresenceStatus;
+    if (ownLinkTracker || !PS || typeof PS.createOwnLinkTracker !== "function") return ownLinkTracker;
+    ownLinkTracker = PS.createOwnLinkTracker({
+        mono: getMonotonicNow,
+        connected: function () { return isFirebaseConnected === true && connectedSinceMono !== null; },
+        ackAgeMs: function () {
+            if (!presenceHeartbeatInterval || !isFirebaseConnected || document.hidden) return null;   // нет heartbeat / нет связи / скрыто: молчание ничего не доказывает
+            return getMonotonicNow() - Math.max(lastAckMono, ownLinkBaseMono, connectedSinceMono || 0);
+        },
+        onLine: function () { return typeof navigator !== "undefined" && typeof navigator.onLine === "boolean" ? navigator.onLine : null; },
+        visible: function () { return !document.hidden; },
+        freshAt: function () { return Math.min(lastAckMono, roomSnapshotMono); }
+    });
+    if (typeof window !== "undefined" && window.addEventListener) {
+        window.addEventListener("offline", function () { ownLinkTracker.offline(); updatePresenceOnly(); });
+        window.addEventListener("online", function () { ownLinkTracker.online(); updatePresenceOnly(); });
+    }
+    return ownLinkTracker;
+}
+// Идёт ли сейчас онлайн-партия ИГРОКА (не зритель, не бот, не завершена, heartbeat работает)
+function ownLinkActive() {
+    return !!(isOnlineGame && !isSpectator && currentState && !currentState.winner && myPresenceRef && presenceHeartbeatInterval
+        && !isItalianOnlineAuthoritativeState(currentState)
+        && currentState.presence && currentState.presence.light && currentState.presence.dark);
+}
+function ownLinkTick() { const T = getOwnLinkTracker(); return T ? T.tick(ownLinkActive()) : "na"; }
+function ownLinkBad() { const T = ownLinkTracker; return !!T && T.bad(); }
+function ownLinkDoubt() { const T = ownLinkTracker; return !!T && T.doubt(); }
+
 const connectedRef = database.ref(".info/connected");
 connectedRef.on("value", function(snap) {
     const wasConnected = isFirebaseConnected;
@@ -137,6 +178,7 @@ connectedRef.on("value", function(snap) {
         // считаются доказательством свежести, нужны новые.
         connectionGeneration++;
         connectedSinceMono = getMonotonicNow();
+        ownLinkMarkBase();
         serverAckSinceConnect = false;
         roomSnapshotSeenSinceConnect = false;
     } else if (!isFirebaseConnected) {
@@ -346,6 +388,8 @@ const translations = {
         status_game_interrupted: "Игра прервана",
         status_confirming_result: "Подтверждение…",
         status_no_link: "Нет связи",
+        status_reconnecting: "Переподключение…",
+        status_awaiting_server: "Ждём сервер",
         game_finished_title: "Партия завершена",
         win_reason_disconnect_win: "Соперник отключился и не вернулся в течение 60 секунд.",
         win_reason_disconnect_loss: "Вы отключились и не вернулись в течение 60 секунд.",
@@ -522,6 +566,8 @@ const translations = {
         status_game_interrupted: "Game interrupted",
         status_confirming_result: "Confirming…",
         status_no_link: "No link",
+        status_reconnecting: "Reconnecting…",
+        status_awaiting_server: "Awaiting server",
         game_finished_title: "Game over",
         win_reason_disconnect_win: "Your opponent disconnected and did not return within 60 seconds.",
         win_reason_disconnect_loss: "You disconnected and did not return within 60 seconds.",
@@ -695,6 +741,8 @@ const translations = {
         status_game_interrupted: "Partita interrotta",
         status_confirming_result: "Conferma…",
         status_no_link: "Nessun segnale",
+        status_reconnecting: "Riconnessione…",
+        status_awaiting_server: "Attesa server",
         game_finished_title: "Partita terminata",
         win_reason_disconnect_win: "L'avversario si è disconnesso e non è tornato entro 60 secondi.",
         win_reason_disconnect_loss: "Ti sei disconnesso e non sei tornato entro 60 secondi.",
@@ -2282,6 +2330,16 @@ function statusForColor(color) {
     // Рейтинг рисует
     // отдельный сегмент, поэтому здесь префикса больше нет вовсе.
 
+    // МОЯ связь под подозрением (см. getOwnLinkTracker): в моей панели красный статус, у соперника нейтральное «Подключение…», никогда «Оффлайн».
+    // Только слова под именами; размеры и положение элементов не меняются.
+    if (typeof ownLinkActive === "function" && ownLinkActive()) {
+        if (color === myColor && ownLinkBad()) {
+            const T = ownLinkTracker;
+            return { text: t(T.expired() ? "status_awaiting_server" : T.state() === "lost" ? "status_reconnecting" : "status_no_link"), cls: "status-own-lost" };
+        }
+        if (color !== myColor && ownLinkDoubt()) return { text: t("status_connecting"), cls: "status-neutral" };
+    }
+
     const presence = (currentState.presence && currentState.presence[color]) || null;
     if (!presence) {
         return { text: t("status_connecting"), cls: "status-neutral" };
@@ -3019,6 +3077,7 @@ function handleVisibilityChange() {
             lastSeen: firebase.database.ServerValue.TIMESTAMP
         });
     } else {
+        ownLinkMarkBase();   // вернулся на экран: heartbeat снова пойдёт, отсчёт «нет подтверждений» начинается заново
         // v184: без связи не пишем — иначе online:true и absentSince:null
         // уйдут в очередь и воскресят партию после реконнекта. Возвращение
         // в игру доведёт до конца обработчик .info/connected.
@@ -3052,6 +3111,8 @@ function setupPresence() {
     }
 
     stopPresenceHeartbeat();
+    ownLinkMarkBase();
+    if (ownLinkTracker) ownLinkTracker.reset();   // новая настройка presence = новая партия / новая сессия: прежнее состояние связи не переносится
 
     const presenceRef = database.ref("rooms/" + roomCode + "/presence/" + myColor);
     myPresenceRef = presenceRef;
@@ -6270,6 +6331,7 @@ function startOnlineGame() {
         if (serverAckSinceConnect && myListenerGen === listenerGeneration) {
             roomSnapshotSeenSinceConnect = true;
         }
+        roomSnapshotMono = getMonotonicNow();   // только отображение собственной связи (ownLinkTracker)
 
         // Проверка реакции: если пришёл новый ts — запускаем анимацию
         if (room.reaction && room.reaction.ts && room.reaction.ts !== lastReactionTs) {
@@ -9485,6 +9547,7 @@ function absenceDiagShowBadge(text) {
 
 function updatePresenceOnly() {
     if (!isOnlineGame || !currentState) return;
+    if (typeof ownLinkTick === "function") ownLinkTick();   // только отображение собственной связи (см. getOwnLinkTracker)
     // Italian-online presence mutation/lifecycle is not wired yet. The retained
     // authoritative snapshot may still drive presentation, but the periodic
     // legacy presence path must not enter opponent-absence room side effects.

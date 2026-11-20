@@ -70,6 +70,41 @@
     if (i.visible !== false && isNum(i.ackAgeMs) && i.ackAgeMs > LINK_SUSPECT_MS) return { state: "suspect", reason: "no_ack" };
     return { state: "ok" };
   }
+  // The state machine around classifyOwnLink (presentation only), for screens that do not have their own: the RUSSIAN screen (script.js) uses it; the Italian screen keeps its
+  // own, already published copy of the same rules (italian-online-two-player-ui.js ownLinkTick) - one behaviour, same words, no change to the published Italian code.
+  //   env: mono() monotonic ms | connected() the database client's own flag (true/false/null) | ackAgeMs() ms since the database last CONFIRMED a write of mine (null = not measurable)
+  //        onLine() navigator.onLine (true/false/null) | visible() | freshAt() monotonic time by which BOTH a confirmed write and a room snapshot arrived (0 = none yet)
+  // It never writes, never reconnects, never decides a result.
+  function createOwnLinkTracker(env) {
+    const L = { state: "na", was: false, badSince: null, recoverAt: null, expired: false, offAt: null };
+    const mono = () => { try { return env.mono(); } catch (_) { return Date.now(); } };
+    const bad = () => L.state === "suspect" || L.state === "lost";
+    function hold() {   // after the link came BACK what I hold about the opponent is OLD: not judged until a fresh copy arrived (at most LINK_RECOVER_HOLD_MS)
+      if (L.recoverAt === null) return false;
+      let fresh = 0; try { fresh = env.freshAt() || 0; } catch (_) {}
+      if (fresh > L.recoverAt || mono() - L.recoverAt >= LINK_RECOVER_HOLD_MS) { L.recoverAt = null; return false; }
+      return true;
+    }
+    function reset() { L.state = "na"; L.was = false; L.badSince = null; L.recoverAt = null; L.expired = false; }
+    // active = a running online game of a PLAYER (not a spectator, not finished, heartbeat running); anything else clears the state
+    function tick(active) {
+      if (!active) { reset(); return "na"; }
+      const now = mono(), connected = env.connected() === true;
+      if (connected) L.was = true;
+      let age = null; try { age = env.ackAgeMs(); } catch (_) {}
+      let onLine = null; try { const o = env.onLine(); onLine = typeof o === "boolean" ? o : null; } catch (_) {}
+      let visible = true; try { visible = env.visible() !== false; } catch (_) {}
+      const r = classifyOwnLink({ connected, wasConnected: L.was, onLine, offlineForMs: L.offAt === null ? null : now - L.offAt, ackAgeMs: age, visible });
+      const isBad = r.state === "suspect" || r.state === "lost";
+      if (isBad) { if (L.badSince === null) L.badSince = now - (isNum(age) ? age : 0); L.recoverAt = null; }
+      else if (bad()) { L.badSince = null; L.recoverAt = now; }
+      L.state = r.state;
+      L.expired = isBad && L.badSince !== null && now - L.badSince >= GRACE_MS;   // a minute without a link: the time to come back MAY have run out (the server decides; only the words under MY name change)
+      return r.state;
+    }
+    return { tick, reset, bad, hold, doubt: () => bad() || hold(), state: () => L.state, expired: () => L.expired,
+      offline: () => { L.offAt = mono(); }, online: () => { L.offAt = null; } };
+  }
   // Own seat: never a countdown or a verdict about MYSELF (a server mark on my own record right after a short network break is not "I left").
   function classifyOwnSeat(i) {
     i = i || {};
@@ -107,5 +142,5 @@
     row.appendChild(wait); row.appendChild(leave); box.appendChild(msg); box.appendChild(row); ov.appendChild(box); doc.body.appendChild(ov);
     return true;
   }
-  return Object.freeze({ GRACE_MS, STALE_MS, CONFIRM_MAX_MS, LINK_SUSPECT_MS, LINK_RECOVER_HOLD_MS, classifySeat, classifyOwnSeat, classifyOwnLink, needsExit, keyFor, isTechnicalEnd, TECHNICAL_END_REASONS, promptLinkLost, closeLinkLost });
+  return Object.freeze({ GRACE_MS, STALE_MS, CONFIRM_MAX_MS, LINK_SUSPECT_MS, LINK_RECOVER_HOLD_MS, classifySeat, classifyOwnSeat, classifyOwnLink, createOwnLinkTracker, needsExit, keyFor, isTechnicalEnd, TECHNICAL_END_REASONS, promptLinkLost, closeLinkLost });
 });
