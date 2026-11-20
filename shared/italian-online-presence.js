@@ -136,13 +136,19 @@
     const emit = ev => { try { env.onEvent && env.onEvent(ev); } catch (_) {} };
     let offset = 0, offsetReady = false, connected = null, infoOff = [];
     let cur = null, gen = 0, beat = null, visHandler = null;
+    // OWN-LINK evidence (presentation only, never read by any presence logic): the monotonic time of the last write the DATABASE confirmed (heartbeat /
+    // arrival ack), and the base from which silence is counted (a connect, an arrival, a restart of the beat). A write promise resolves only on the
+    // server's ack, so "no ack for > 10 s although we think we are connected" = my own link is dead (Firebase itself notices only after ~30-45 s).
+    const mono = env.mono || (() => (global.performance && typeof global.performance.now === "function" ? global.performance.now() : Date.now()));
+    let lastAckAt = null, linkBase = null;
+    const noteAck = () => { lastAckAt = mono(); };
 
     const serverNow = () => wall() + offset;
     function attachInfo() {
       if (infoOff.length) return;
       const o = db.ref(".info/serverTimeOffset"), c = db.ref(".info/connected");
       const ol = s => { const v = s.val(); if (num(v)) { offset = v; offsetReady = true; } };
-      const cl = s => { const was = connected; connected = s.val() === true; if (cur && connected && was !== true) bring(cur); };
+      const cl = s => { const was = connected; connected = s.val() === true; if (connected && was !== true) linkBase = mono(); if (cur && connected && was !== true) bring(cur); };
       o.on("value", ol); c.on("value", cl);
       infoOff = [() => o.off("value", ol), () => c.off("value", cl)];
     }
@@ -239,6 +245,7 @@
     function bring(s) {
       if (!live(s) || !connected) return;
       if (doc.hidden) return; // a hidden tab is absent: the visible handler brings it back
+      linkBase = mono();
       const myGen = ++s.bringGen;
       const stale = () => !live(s) || myGen !== s.bringGen || !connected || doc.hidden;
       Promise.all([rd(db.ref("roomsItalian/" + s.code)), rd(db.ref("roomsItalianPresence/" + s.code))]).then(([rs, ps]) => {
@@ -260,6 +267,7 @@
         const sid = env.makeSid(), od = offRef(s, sid);
         s.registered.add(sid); s.mine.add(sid);
         return od.onDisconnect().set(TS).then(() => {
+          noteAck();
           // A delayed ACK may arrive after hide / stop / a newer arrival: then nothing is announced for this sid and
           // ITS registration is withdrawn (it could only ever create off/<this sid>, which is harmless anyway).
           if (stale()) { s.registered.delete(sid); cancelOd(s, sid); return; }
@@ -270,6 +278,7 @@
           const cell = { sid, onlineSince: TS, lastSeen: TS };
           if (prev) cell.prev = prev;
           return curRef(s).set(cell).then(() => {
+            noteAck();
             // CONFIRMED: the database accepted `sid`; attempts OLDER than this one are replaced. Newer attempts (issued
             // while this ACK was on its way) keep their state and their guard -- see confirmAttempt.
             confirmAttempt(s, sid, n);
@@ -297,11 +306,12 @@
     }
     function startBeat(s) {
       stopBeat();
+      linkBase = mono();
       beat = setI(() => {
         if (!live(s) || !connected || !s.armed) return;
         if (doc.hidden) return;
         const sid = s.sid;
-        curRef(s).update({ sid, lastSeen: TS }).catch(err => { if (s.sid === sid) onWriteError(s, err); }); // a late error of an OLD sid says nothing
+        curRef(s).update({ sid, lastSeen: TS }).then(noteAck).catch(err => { if (s.sid === sid) onWriteError(s, err); }); // a late error of an OLD sid says nothing
       }, BEAT_MS);
     }
     function onWriteError(s, err) {
@@ -340,6 +350,7 @@
         stopBeat();
         markAway(s);           // every session the server may hold for this tab, also one whose replacement is still in flight
       } else {
+        linkBase = mono(); // presentation only: silence is counted from NOW, not across the hidden period
         bring(s); // same fresh path as a reconnect: never trusts a cache, always a new sid
       }
     }
@@ -378,7 +389,15 @@
       detachInfo();
       return true;
     }
-    return { start, stop, serverNow, serverReady: () => offsetReady, isConnected: () => connected === true,
+    // Presentation only: how long (ms, monotonic) the database has NOT confirmed a write of this player; null = not applicable (no live session, no
+    // connection, hidden tab: no heartbeat is sent then, or nothing measured yet).
+    function ackAgeMs() {
+      const s = cur;
+      if (!s || s.dead || connected !== true || doc.hidden) return null;
+      const b = Math.max(lastAckAt === null ? -Infinity : lastAckAt, linkBase === null ? -Infinity : linkBase);
+      return b === -Infinity ? null : Math.max(0, mono() - b);
+    }
+    return { start, stop, serverNow, serverReady: () => offsetReady, isConnected: () => connected === true, ackAgeMs, mono,
       sid: () => (cur ? cur.sid : null), active: () => !!cur && !cur.dead, armed: () => !!cur && cur.armed, generation: () => gen };
   }
 

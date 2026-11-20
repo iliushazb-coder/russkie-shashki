@@ -18,7 +18,7 @@
   else root.OnlinePresenceStatus = api;
 })(typeof window !== "undefined" ? window : globalThis, function () {
   "use strict";
-  const GRACE_MS = 60000, STALE_MS = 12000, CONFIRM_MAX_MS = 15000, SILENT_EXTRA_MS = 15000;   // SILENT_EXTRA_MS = PresenceEvidence.SILENT_EXTRA_MS (a test keeps them equal)
+  const GRACE_MS = 60000, STALE_MS = 12000, CONFIRM_MAX_MS = 15000, SILENT_EXTRA_MS = 15000, LINK_SUSPECT_MS = 10000, LINK_RECOVER_HOLD_MS = 6000;   // SILENT_EXTRA_MS = PresenceEvidence.SILENT_EXTRA_MS (a test keeps them equal)
   const isNum = (v) => typeof v === "number" && isFinite(v);
 
   // in: { ready, connected, known, awayMs, silentMs, claim }
@@ -31,6 +31,9 @@
   function classifySeat(i) {
     i = i || {};
     if (!i.ready || !i.connected || !i.known) return { state: "unknown" };
+    // OWN link under suspicion (see classifyOwnLink): what I hold about this seat is only what arrived BEFORE my link broke, so it says nothing
+    // about the seat now. Optional input: absent / false = exactly the behaviour before this input existed (the Russian production panels never pass it).
+    if (i.linkSuspect === true) return { state: "unknown", linkSuspect: true };
     const marked = isNum(i.awayMs);
     const silent = isNum(i.silentMs) ? Math.max(0, i.silentMs) : 0;
     // F1 (final rule): a seat leaves by a server MARK (>= 60 s) or by SILENCE (the server counts 60 s after a 15 s margin: PresenceEvidence).
@@ -49,6 +52,23 @@
     }
     if (marked || silent > STALE_MS) return { state: "countdown", remainingMs: Math.max(0, GRACE_MS - elapsed), marked: marked };
     return { state: "present" };
+  }
+  // OWN link (presentation only; never writes, never decides a result, never reconnects anything).
+  //   in: { connected: true|false|null, wasConnected, onLine: navigator.onLine|null, offlineForMs, ackAgeMs, visible }
+  //   connected     the database client's own flag (.info/connected): it flips only after the transport timeout, ~30-45 s without internet
+  //   wasConnected  the link has been up at least once in this screen (before that «Подключение…» is the normal start-up, not an outage)
+  //   onLine        the browser's own signal (instant when the system reports it); offlineForMs = how long it has said "offline" (monotonic)
+  //   ackAgeMs      how long the DATABASE has not confirmed a write of mine (the heartbeat is sent every 4 s); null = not measurable
+  //   visible       false = hidden page: no heartbeat is sent, so silence proves nothing
+  // -> "ok" | "suspect" (the link is probably dead, the client does not know yet) | "lost" (the client knows) | "na" (not up yet / nothing to judge)
+  function classifyOwnLink(i) {
+    i = i || {};
+    if (i.connected === false) return { state: i.wasConnected ? "lost" : "na" };
+    if (i.connected !== true) return { state: "na" };
+    // The browser says "offline" - believed only while NO write was confirmed since it said so (a false "offline" with a working link is healed by the first ack).
+    if (i.onLine === false && (!isNum(i.ackAgeMs) || !isNum(i.offlineForMs) || i.ackAgeMs >= i.offlineForMs)) return { state: "suspect", reason: "offline" };
+    if (i.visible !== false && isNum(i.ackAgeMs) && i.ackAgeMs > LINK_SUSPECT_MS) return { state: "suspect", reason: "no_ack" };
+    return { state: "ok" };
   }
   // Own seat: never a countdown or a verdict about MYSELF (a server mark on my own record right after a short network break is not "I left").
   function classifyOwnSeat(i) {
@@ -87,5 +107,5 @@
     row.appendChild(wait); row.appendChild(leave); box.appendChild(msg); box.appendChild(row); ov.appendChild(box); doc.body.appendChild(ov);
     return true;
   }
-  return Object.freeze({ GRACE_MS, STALE_MS, CONFIRM_MAX_MS, classifySeat, classifyOwnSeat, needsExit, keyFor, isTechnicalEnd, TECHNICAL_END_REASONS, promptLinkLost, closeLinkLost });
+  return Object.freeze({ GRACE_MS, STALE_MS, CONFIRM_MAX_MS, LINK_SUSPECT_MS, LINK_RECOVER_HOLD_MS, classifySeat, classifyOwnSeat, classifyOwnLink, needsExit, keyFor, isTechnicalEnd, TECHNICAL_END_REASONS, promptLinkLost, closeLinkLost });
 });
